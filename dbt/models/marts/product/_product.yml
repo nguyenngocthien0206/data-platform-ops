@@ -1,0 +1,41 @@
+version: 2
+
+models:
+  - name: product_dim_products
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+
+  - name: product_fct_product_sales_daily
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [product_id, sale_date]
+
+  - name: product_fct_sessions_engagement
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [session_date, device]
+
+  - name: product_fct_conversion_funnel
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [activity_date, device]
+
+  - name: product_fct_support_tickets
+    columns:
+      - name: ticket_id
+        data_tests: [unique, not_null]
+      - name: priority
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [low, normal, high, urgent]
+
+  - name: product_fct_ticket_sla
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [ticket_month, category, priority]

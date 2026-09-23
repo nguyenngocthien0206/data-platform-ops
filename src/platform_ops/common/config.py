@@ -11,10 +11,10 @@ import os
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DEFAULT_CONFIG_PATH = Path("config/settings.yaml")
 CONFIG_PATH_ENV_VAR = "PLATFORM_OPS_CONFIG"
@@ -31,12 +31,20 @@ class Paths(_Strict):
     reports: Path
     iceberg_warehouse: Path
     dbt_project: Path
+    dbt_target: Path
 
 
 class SimulationWindow(_Strict):
+    history_start: datetime
     start: datetime
     weeks: Annotated[int, Field(ge=1)]
     daily_run_hour: Annotated[int, Field(ge=0, le=23)]
+
+    @model_validator(mode="after")
+    def _history_precedes_window(self) -> SimulationWindow:
+        if self.history_start >= self.start:
+            raise ValueError("simulation.history_start must be before simulation.start")
+        return self
 
     @property
     def duration(self) -> timedelta:
@@ -67,6 +75,24 @@ class Recommendations(_Strict):
     unused_lookback_days: list[Annotated[int, Field(gt=0)]]
 
 
+Tier = Literal["critical", "important", "best_effort"]
+TIERS: tuple[Tier, ...] = ("critical", "important", "best_effort")
+
+
+class TierWeights(_Strict):
+    critical: Annotated[int, Field(ge=0)]
+    important: Annotated[int, Field(ge=0)]
+    best_effort: Annotated[int, Field(ge=0)]
+
+    def weight(self, tier: Tier) -> int:
+        value: int = getattr(self, tier)
+        return value
+
+
+class MetadataSettings(_Strict):
+    tier_weights: TierWeights
+
+
 class Settings(_Strict):
     seed: int
     scale_factor: Annotated[float, Field(gt=0)]
@@ -74,6 +100,7 @@ class Settings(_Strict):
     simulation: SimulationWindow
     pricing: PricingRates
     recommendations: Recommendations
+    metadata: MetadataSettings
 
     # Directory the config file was found in, used to resolve relative paths.
     root: Path = Field(default=Path("."), exclude=True)

@@ -1,0 +1,58 @@
+version: 2
+
+models:
+  - name: int_customer_id_map
+    description: Every account id mapped to the canonical account for that person.
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+      - name: canonical_customer_id
+        data_tests: [not_null]
+
+  - name: int_customers_deduplicated
+    description: One row per person, after folding duplicate registrations.
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+      - name: email
+        data_tests: [unique]
+
+  - name: int_orders_enriched
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: net_amount
+        data_tests: [non_negative]
+
+  - name: int_order_payment_status
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: payment_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [not_due, paid, refunded, missing, underpaid]
+
+  - name: int_campaign_attribution
+    description: Last-touch attribution, one row per attributed order.
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+
+  - name: int_campaign_performance_daily
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [campaign_id, activity_date]
+
+  - name: int_ticket_resolution
+    columns:
+      - name: ticket_id
+        data_tests: [unique, not_null]
+
+  - name: int_product_sales_daily
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [product_id, sale_date]

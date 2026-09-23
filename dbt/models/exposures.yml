@@ -1,0 +1,176 @@
+version: 2
+
+# The dashboards the business actually looks at. Exposures are how lineage
+# reaches consumers: a model with no path to one of these is a model nobody
+# reads. Every owner here must match the ownership registry, and
+# `platform-ops metadata check` fails if they disagree.
+
+exposures:
+  # --- sales -----------------------------------------------------------------
+  - name: sales_executive_dashboard
+    label: Sales Executive Dashboard
+    type: dashboard
+    maturity: high
+    description: Monthly revenue, orders and channel mix for the leadership team.
+    owner: {name: sam, email: sam@company.test}
+    depends_on:
+      - ref('sales_fct_daily_sales')
+      - ref('sales_channel_performance')
+      - ref('sales_rpt_orders_monthly_by_channel')
+      - ref('sales_rpt_orders_monthly_by_country')
+      - ref('sales_rpt_orders_monthly_by_status')
+      - ref('sales_rpt_orders_monthly_by_discount_code')
+
+  - name: sales_customer_insights
+    label: Customer Insights
+    type: dashboard
+    maturity: medium
+    description: Cohort retention, customer value segments and category mix.
+    owner: {name: diego, email: diego@company.test}
+    depends_on:
+      - ref('sales_dim_customers')
+      - ref('sales_customer_cohorts')
+      - ref('sales_rpt_items_weekly_by_category')
+      - ref('sales_rpt_items_monthly_by_category')
+
+  - name: sales_operations_monitor
+    label: Sales Operations Monitor
+    type: dashboard
+    maturity: high
+    description: Daily and weekly order flow, watched by the sales ops desk.
+    owner: {name: sam, email: sam@company.test}
+    depends_on:
+      - ref('sales_rpt_orders_daily_by_channel')
+      - ref('sales_rpt_orders_daily_by_country')
+      - ref('sales_rpt_orders_daily_by_status')
+      - ref('sales_rpt_orders_daily_by_discount_code')
+      - ref('sales_rpt_orders_weekly_by_channel')
+      - ref('sales_rpt_orders_weekly_by_country')
+      - ref('sales_rpt_orders_weekly_by_status')
+      - ref('sales_rpt_orders_weekly_by_discount_code')
+
+  # --- marketing -------------------------------------------------------------
+  - name: marketing_campaign_roi
+    label: Campaign ROI
+    type: dashboard
+    maturity: high
+    description: Spend and last-touch attributed revenue per campaign and channel.
+    owner: {name: maya, email: maya@company.test}
+    depends_on:
+      - ref('marketing_fct_campaign_performance')
+      - ref('marketing_dim_campaigns')
+      - ref('marketing_rpt_attributed_orders_daily_by_attributed_channel')
+      - ref('marketing_rpt_attributed_orders_weekly_by_attributed_channel')
+      - ref('marketing_rpt_attributed_orders_monthly_by_attributed_channel')
+      - ref('marketing_rpt_spend_weekly_by_channel')
+      - ref('marketing_rpt_spend_monthly_by_channel')
+
+  - name: marketing_traffic_sources
+    label: Traffic Sources
+    type: dashboard
+    maturity: medium
+    description: Sessions by traffic source and landing page.
+    owner: {name: tom, email: tom@company.test}
+    depends_on:
+      - ref('marketing_rpt_sessions_daily_by_traffic_source')
+      - ref('marketing_rpt_sessions_weekly_by_traffic_source')
+      - ref('marketing_rpt_sessions_monthly_by_traffic_source')
+      - ref('marketing_rpt_sessions_daily_by_landing_page')
+      - ref('marketing_rpt_sessions_weekly_by_landing_page')
+      - ref('marketing_rpt_sessions_monthly_by_landing_page')
+
+  - name: marketing_acquisition_overview
+    label: Acquisition Overview
+    type: dashboard
+    maturity: medium
+    description: Signups and first orders by referral source, sessions by device.
+    owner: {name: maya, email: maya@company.test}
+    depends_on:
+      - ref('marketing_acquisition_funnel')
+      - ref('marketing_rpt_sessions_daily_by_device')
+      - ref('marketing_rpt_sessions_weekly_by_device')
+      - ref('marketing_rpt_sessions_monthly_by_device')
+
+  # --- finance ---------------------------------------------------------------
+  - name: finance_revenue_dashboard
+    label: Revenue Dashboard
+    type: dashboard
+    maturity: high
+    description: Recognized revenue, the number reported to the board.
+    owner: {name: alice, email: alice@company.test}
+    depends_on:
+      - ref('finance_fct_revenue_monthly')
+      - ref('finance_rpt_revenue_daily_by_channel')
+      - ref('finance_rpt_revenue_daily_by_country')
+      - ref('finance_rpt_revenue_daily_by_status')
+      - ref('finance_rpt_revenue_weekly_by_channel')
+      - ref('finance_rpt_revenue_weekly_by_country')
+      - ref('finance_rpt_revenue_weekly_by_status')
+      - ref('finance_rpt_revenue_monthly_by_channel')
+      - ref('finance_rpt_revenue_monthly_by_country')
+      - ref('finance_rpt_revenue_monthly_by_status')
+
+  - name: finance_margin_report
+    label: Margin Report
+    type: dashboard
+    maturity: medium
+    description: Gross margin by channel and country, with marketing cost.
+    owner: {name: bruno, email: bruno@company.test}
+    depends_on:
+      - ref('finance_rpt_margin_weekly_by_channel')
+      - ref('finance_rpt_margin_weekly_by_country')
+      - ref('finance_rpt_margin_monthly_by_channel')
+      - ref('finance_rpt_margin_monthly_by_country')
+      - ref('finance_fct_marketing_spend')
+
+  - name: finance_cash_reconciliation
+    label: Cash Reconciliation
+    type: dashboard
+    maturity: high
+    description: Orders without matching payments, and refunds, for month-end close.
+    owner: {name: bruno, email: bruno@company.test}
+    depends_on:
+      - ref('finance_fct_payments_reconciliation')
+      - ref('finance_rpt_refunds_monthly_by_channel')
+
+  # --- product ---------------------------------------------------------------
+  - name: product_catalog_performance
+    label: Catalog Performance
+    type: dashboard
+    maturity: medium
+    description: Units and revenue by product and category.
+    owner: {name: kenji, email: kenji@company.test}
+    depends_on:
+      - ref('product_dim_products')
+      - ref('product_rpt_product_sales_weekly_by_category')
+      - ref('product_rpt_product_sales_monthly_by_category')
+
+  - name: product_engagement_dashboard
+    label: Engagement Dashboard
+    type: dashboard
+    maturity: medium
+    description: Sessions, engagement and conversion by device.
+    owner: {name: olivia, email: olivia@company.test}
+    depends_on:
+      - ref('product_rpt_engagement_weekly_by_device')
+      - ref('product_rpt_engagement_monthly_by_device')
+      - ref('product_rpt_funnel_weekly_by_device')
+      - ref('product_rpt_funnel_monthly_by_device')
+
+  - name: product_support_quality
+    label: Support Quality
+    type: dashboard
+    maturity: high
+    description: Ticket volume, SLA breaches and satisfaction.
+    owner: {name: olivia, email: olivia@company.test}
+    depends_on:
+      - ref('product_fct_ticket_sla')
+      - ref('product_rpt_tickets_daily_by_category')
+      - ref('product_rpt_tickets_daily_by_priority')
+      - ref('product_rpt_tickets_daily_by_ticket_status')
+      - ref('product_rpt_tickets_weekly_by_category')
+      - ref('product_rpt_tickets_weekly_by_priority')
+      - ref('product_rpt_tickets_weekly_by_ticket_status')
+      - ref('product_rpt_tickets_monthly_by_category')
+      - ref('product_rpt_tickets_monthly_by_priority')
+      - ref('product_rpt_tickets_monthly_by_ticket_status')

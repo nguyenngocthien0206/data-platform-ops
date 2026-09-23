@@ -1,0 +1,40 @@
+# Lint, test and ownership check on every push and pull request.
+#
+# It calls the same make targets people run locally, so CI and a laptop cannot
+# drift apart. No Docker services are needed: the integration tests seed a tiny
+# DuckDB warehouse and run real dbt against it.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: make setup
+
+      - name: Lint and type check
+        run: make lint
+
+      - name: Tests
+        run: make test
+
+      # CODEOWNERS for data: every model, source and exposure must have exactly
+      # one valid owner. --parse builds the manifest without any data.
+      - name: Ownership check
+        run: uv run platform-ops metadata check --parse

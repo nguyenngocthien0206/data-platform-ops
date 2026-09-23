@@ -1,0 +1,43 @@
+# The simulated company. Every model is a full-refresh table so that each node
+# has a real storage size and a real build cost for the cost module to price.
+name: company
+version: "1.0.0"
+config-version: 2
+profile: company
+
+model-paths: [models]
+macro-paths: [macros]
+test-paths: [tests]
+target-path: target
+clean-targets: [target, logs]
+
+flags:
+  # The toolkit runs offline after setup, so dbt must not phone home.
+  send_anonymous_usage_stats: false
+
+# Every query dbt issues carries the node it belongs to, appended as a JSON
+# comment, so the cost module can join query history back to models and owners.
+query-comment:
+  comment: "{{ tojson({'app': 'platform-ops', 'unique_id': (node.unique_id if node is not none else none)}) }}"
+  append: true
+
+vars:
+  # Supplied by platform-ops from config/settings.yaml. Used by the row count
+  # tests. `simulated_now` is deliberately not defaulted: freshness must never
+  # silently fall back to the wall clock (see macros/collect_freshness.sql).
+  scale_factor: 1.0
+
+models:
+  company:
+    +materialized: table
+    staging:
+      +schema: staging
+    intermediate:
+      +schema: intermediate
+    marts:
+      +schema: marts
+    # Abandoned models live alongside the real marts on purpose. Nothing marks
+    # them as dead except that nobody reads them, which is exactly how waste
+    # hides in a real warehouse.
+    abandoned:
+      +schema: marts

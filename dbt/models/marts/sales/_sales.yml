@@ -1,0 +1,54 @@
+version: 2
+
+models:
+  - name: sales_fct_orders
+    description: One row per order, attributed to the canonical customer.
+    data_tests:
+      - row_count_in_range:
+          arguments:
+            min_rows_at_scale_1: 350000
+            max_rows_at_scale_1: 460000
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: customer_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('sales_dim_customers')
+                field: customer_id
+      - name: net_amount
+        data_tests: [non_negative]
+
+  - name: sales_dim_customers
+    description: One row per person, with lifetime value and segment.
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+      - name: value_segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [vip, regular, occasional, prospect]
+
+  - name: sales_fct_order_items
+    columns:
+      - name: order_item_id
+        data_tests: [unique, not_null]
+
+  - name: sales_fct_daily_sales
+    columns:
+      - name: order_date
+        data_tests: [unique, not_null]
+
+  - name: sales_customer_cohorts
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [cohort_month, months_since_signup]
+
+  - name: sales_channel_performance
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [order_month, channel]

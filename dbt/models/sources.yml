@@ -1,0 +1,41 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Raw landing tables for the simulated e-commerce company, written by
+      platform-ops seed. Owned by the data platform team.
+    schema: raw
+    config:
+      loaded_at_field: _loaded_at
+      # Measured on simulated time, not the wall clock. See ADR 0003.
+      freshness:
+        warn_after: {count: 24, period: hour}
+        error_after: {count: 48, period: hour}
+    tables:
+      - name: customers
+        description: Customer accounts, including some that registered twice.
+      - name: products
+        description: >
+          Product catalogue. Loaded as a snapshot and rarely changes, so a
+          daily freshness rule would only produce noise.
+        config:
+          freshness: null
+      - name: orders
+        description: One row per order.
+      - name: order_items
+        description: One row per order line.
+      - name: payments
+        description: Payment events. Some arrive days after the payment happened.
+      - name: web_sessions
+        description: Clickstream sessions, mostly anonymous.
+      - name: marketing_campaigns
+        description: >
+          Campaign setup records, created a few days before launch. Weeks can
+          pass without a new campaign, so a daily freshness rule does not apply.
+        config:
+          freshness: null
+      - name: marketing_spend
+        description: Daily ad spend per campaign, delivered in a morning batch.
+      - name: support_tickets
+        description: Support tickets, exported when opened or when closed.

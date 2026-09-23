@@ -15,8 +15,13 @@ paths:
   reports: reports
   iceberg_warehouse: warehouse
   dbt_project: dbt
+  # Where dbt writes manifest.json and run results. Logs go next to it.
+  dbt_target: dbt/target
 
 simulation:
+  # Raw history begins here, so marts show about a year of behaviour before the
+  # simulated window opens.
+  history_start: 2025-01-01T00:00:00
   # All simulated time is anchored here. Weeks of simulated activity are
   # generated in minutes of real time by common.clock.
   start: 2026-01-05T00:00:00
@@ -47,3 +52,12 @@ pricing:
 # Windows used by the Phase 2 unused-table recommendation.
 recommendations:
   unused_lookback_days: [30, 90]
+
+metadata:
+  # How much a downstream consumer counts, by its ownership tier. Used by the
+  # lineage helpers and, in Phase 3, by incident severity: breaking one critical
+  # dashboard should outweigh breaking several best-effort tables.
+  tier_weights:
+    critical: 3
+    important: 2
+    best_effort: 1

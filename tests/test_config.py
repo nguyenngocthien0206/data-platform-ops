@@ -22,6 +22,11 @@ def test_repo_settings_load_and_validate(repo_settings: Settings) -> None:
     assert repo_settings.pricing.compute.minimum_billed_seconds == 60
 
 
+def test_tier_weights_rank_critical_highest(repo_settings: Settings) -> None:
+    weights = repo_settings.metadata.tier_weights
+    assert weights.weight("critical") > weights.weight("important") > weights.weight("best_effort")
+
+
 def test_simulation_window_derives_duration_and_end(settings: Settings) -> None:
     assert settings.simulation.duration == timedelta(weeks=2)
     assert settings.simulation.end == datetime(2026, 1, 19)
