@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
@@ -22,7 +23,9 @@ SETTINGS_YAML = textwrap.dedent(
       reports: reports
       iceberg_warehouse: warehouse
       dbt_project: dbt
+      dbt_target: dbt/target
     simulation:
+      history_start: 2025-12-01T00:00:00
       start: 2026-01-05T00:00:00
       weeks: 2
       daily_run_hour: 2
@@ -36,6 +39,11 @@ SETTINGS_YAML = textwrap.dedent(
         idle_timeout_seconds: 300
     recommendations:
       unused_lookback_days: [30, 90]
+    metadata:
+      tier_weights:
+        critical: 3
+        important: 2
+        best_effort: 1
     """
 ).strip()
 
@@ -76,3 +84,36 @@ def settings(settings_file: Path) -> Settings:
 def repo_settings() -> Settings:
     """The real config/settings.yaml that ships with the repo."""
     return load_settings(REPO_ROOT / "config" / "settings.yaml")
+
+
+def make_isolated_config(root: Path, scale_factor: float) -> Path:
+    """A throwaway copy of the repo config whose outputs all land under ``root``.
+
+    The real settings, teams and ownership files are used, with the warehouse,
+    dbt target and reports redirected into ``root`` and the dbt project pointing
+    at the repo's real one. Integration tests drive the actual CLI against this,
+    so they exercise exactly what a user runs without touching the real
+    warehouse or ``dbt/target``.
+    """
+    config_dir = root / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    raw = yaml.safe_load((REPO_ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
+    raw["scale_factor"] = scale_factor
+    raw["paths"] = {
+        "duckdb": str(root / "warehouse.duckdb"),
+        "reports": str(root / "reports"),
+        "iceberg_warehouse": str(root / "iceberg"),
+        "dbt_project": str(REPO_ROOT / "dbt"),
+        "dbt_target": str(root / "target"),
+    }
+    settings_path = config_dir / "settings.yaml"
+    settings_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    for name in ("teams.yaml", "ownership.yaml"):
+        shutil.copyfile(REPO_ROOT / "config" / name, config_dir / name)
+    return settings_path
+
+
+@pytest.fixture(scope="session")
+def isolated_config() -> Callable[[Path, float], Path]:
+    """Expose :func:`make_isolated_config` to session-scoped fixtures."""
+    return make_isolated_config

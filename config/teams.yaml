@@ -1,16 +1,28 @@
-# The four teams of the simulated company. Cost showback, incident routing and
-# migration sign-off all resolve back to an entry here, so this file is the
-# org chart the whole toolkit reasons about.
+# The org chart of the simulated company: four business teams plus the data
+# platform team. Cost showback, incident routing and migration sign-off all
+# resolve back to an entry here.
+#
+# `members` is the person-to-team mapping. The ownership registry rejects an
+# owner who is not a member of the team named on the same rule, and Phase 2 uses
+# it to attribute ad hoc queries to a team.
 teams:
+  - id: platform
+    name: Data Platform
+    channel: "#data-platform"
+    members: [priya, marco, lena]
   - id: sales
     name: Sales Analytics
     channel: "#sales-data"
+    members: [sam, diego]
   - id: marketing
     name: Marketing Analytics
     channel: "#marketing-data"
+    members: [maya, tom]
   - id: finance
     name: Finance Analytics
     channel: "#finance-data"
+    members: [alice, bruno]
   - id: product
     name: Product Analytics
     channel: "#product-data"
+    members: [kenji, olivia]
