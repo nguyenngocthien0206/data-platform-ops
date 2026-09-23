@@ -2,7 +2,7 @@
 
 ## What this project is
 
-`data-platform-ops` is a local-first toolkit for operating a multi-team data platform. It runs a simulated company (4 teams, around 120 dbt models on DuckDB) and ships three modules on top of one shared metadata layer:
+`data-platform-ops` is a local-first toolkit for operating a multi-team data platform. It runs a simulated company (4 business teams plus a data platform team, around 120 dbt models on DuckDB) and ships three modules on top of one shared metadata layer:
 
 1. `cost`: attributes query cost to owning teams and flags waste.
 2. `incidents`: turns raw data test failures into root-cause incidents routed to owners.
