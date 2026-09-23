@@ -24,6 +24,7 @@ warehouse/
 dbt/target/
 dbt/logs/
 dbt/dbt_packages/
+dbt/.user.yml
 
 # Generated reports. Real numbers come from a real run, so they are not tracked.
 reports/*

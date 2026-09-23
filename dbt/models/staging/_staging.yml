@@ -1,0 +1,103 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: One row per customer account, with email folded for matching.
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+      - name: email
+        data_tests: [not_null]
+
+  - name: stg_products
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+      - name: unit_price
+        data_tests: [non_negative]
+
+  - name: stg_orders
+    data_tests:
+      - row_count_in_range:
+          arguments:
+            min_rows_at_scale_1: 350000
+            max_rows_at_scale_1: 460000
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: customer_id
+        data_tests: [not_null]
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [completed, shipped, pending, cancelled, returned]
+      - name: channel
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [web, mobile, marketplace]
+
+  - name: stg_order_items
+    columns:
+      - name: order_item_id
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+      - name: line_amount
+        data_tests: [non_negative]
+
+  - name: stg_payments
+    columns:
+      - name: payment_id
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+      - name: amount
+        data_tests: [non_negative]
+      - name: payment_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [succeeded, refunded]
+
+  - name: stg_web_sessions
+    columns:
+      - name: session_id
+        data_tests: [unique, not_null]
+
+  - name: stg_marketing_campaigns
+    columns:
+      - name: campaign_id
+        data_tests: [unique, not_null]
+
+  - name: stg_marketing_spend
+    columns:
+      - name: spend_id
+        data_tests: [unique, not_null]
+      - name: campaign_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_marketing_campaigns')
+                field: campaign_id
+      - name: spend
+        data_tests: [non_negative]
+
+  - name: stg_support_tickets
+    columns:
+      - name: ticket_id
+        data_tests: [unique, not_null]
+      - name: priority
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [low, normal, high, urgent]

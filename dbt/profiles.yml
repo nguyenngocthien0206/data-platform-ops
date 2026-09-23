@@ -1,0 +1,10 @@
+# The warehouse path comes from platform-ops, which reads it from
+# config/settings.yaml, so there is one source of truth for where data lives.
+company:
+  target: local
+  outputs:
+    local:
+      type: duckdb
+      path: "{{ env_var('PLATFORM_OPS_DUCKDB_PATH') }}"
+      schema: main
+      threads: 4
