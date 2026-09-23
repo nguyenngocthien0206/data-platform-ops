@@ -194,14 +194,38 @@ def metadata_lineage(parse: bool = PARSE_OPTION) -> None:
 
 @simulation_app.command("run")
 def simulation_run() -> None:
-    """Run the workload generator over the simulated time window."""
-    _not_implemented("simulation run", 2)
+    """Simulate the whole window: daily data, dbt runs, dashboards, ad hoc queries.
+
+    Starts from a fresh seed every time, so the collected workload is the same
+    on every run.
+    """
+    from platform_ops.simulation.workload import run_workload
+
+    settings, clock = _start("simulation")
+    summary = run_workload(settings)
+    queries = ", ".join(f"{kind} {count:,}" for kind, count in sorted(summary.queries.items()))
+    typer.echo(
+        f"simulated {summary.days} days: {summary.real_builds} real dbt builds, "
+        f"{summary.replayed_builds} replayed; queries: {queries}; "
+        f"{summary.rows_loaded:,} rows loaded, {summary.rows_changed:,} changed in place"
+    )
 
 
 @cost_app.command("report")
 def cost_report() -> None:
-    """Collect, price, attribute, and write reports/cost.md."""
-    _not_implemented("cost report", 2)
+    """Price the collected workload, attribute it, and write reports/cost.md."""
+    from platform_ops.cost.run import CostError, run_cost
+
+    settings, _ = _start("cost")
+    try:
+        summary = run_cost(settings)
+    except CostError as error:
+        _fail(str(error))
+    totals = ", ".join(f"{model} ${usd:,.2f}" for model, usd in sorted(summary.total_usd.items()))
+    typer.echo(
+        f"priced {summary.queries:,} queries ({totals}); {summary.unused} unused tables; "
+        f"wrote {summary.report_path} and {summary.accuracy_path.name}"
+    )
 
 
 @incidents_app.command("run")

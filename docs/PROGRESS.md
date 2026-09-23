@@ -6,41 +6,33 @@ Last updated: 2026-09-23
 
 ## Current phase
 
-Phase 1: Simulated company and shared metadata layer. Implemented, all acceptance criteria verified locally from a clean state.
-Branch: `phase-1-simulated-company` (off `main` at `bdb614f`). PR open, awaiting review.
+Phase 2: Cost attribution. Implemented, all acceptance criteria verified, including at full scale.
+Branch: `phase-2-cost-attribution` (off `main` at `6e5ea33`). Not committed yet, awaiting owner review.
 
 ## Done
 
-Phase 1 acceptance, run from `make clean`:
-
-```
-make seed && make build && uv run platform-ops metadata check
-make test && make lint
-```
+Phase 2 acceptance, run at scale 1.0 over the 13-week window:
 
 | Check | Result |
 |---|---|
-| `make seed` | 3,525,042 rows across 9 raw tables, about 6 s |
-| `make build` | 118 models, 156 of 156 data tests, 12 exposures, 32 to 35 s including lineage refresh |
-| `platform-ops metadata check` | 9 of 9 sources, 118 of 118 models, 12 of 12 exposures owned; 0 warnings |
-| `platform-ops metadata check --parse` with no `dbt/target` | passes (the CI path, no data needed) |
-| Abandoned model acceptance test | every one of the 12 has zero downstream nodes and zero exposures |
-| Lineage unit tests on a hand-built graph | pass, including two diamonds and the tie-break |
-| `make test` | 104 passed in about 40 s (includes real dbt parse and build at scale 0.01) |
-| `make lint` | ruff clean, 40 files formatted, mypy strict clean on 19 source files |
-| Determinism | two clean seed and build runs: all 127 tables (9 raw, 118 models) identical by row count and full-row hash |
+| `make simulate` | 91 days, 4 real builds and 87 replayed; 24,934 dbt, 10,192 dashboard and 687 ad hoc queries; 280 s and 290 s on two runs |
+| `make cost` | 35,813 queries priced; scan $3.35, compute $296.02; 20 s and 24 s |
+| Determinism | two full runs of `make simulate && make cost`: `cost.md` byte-identical (the separate accuracy note differed by 0.1%, as designed) |
+| Unused tables | exactly the 12 abandoned models at both 30 and 90 days; nothing with a live dashboard downstream |
+| SQL parsing | every model build's parsed reads match dbt lineage (118 of 118); all 156 tests parse |
+| Pricing and parsing unit tests | both pricing models; CTEs, subqueries, `CREATE TABLE AS`, quoted identifiers and more |
+| Phase 1 re-check | two clean `make seed && make build` runs: all 127 tables identical |
+| `make seed` / `make build` | 8 s / 44 s from a clean state (3,507,865 raw rows) |
+
+Time budget: seed, build, simulate and cost together take about 6 minutes of the 10-minute `make demo` budget. `make simulate` re-seeds and rebuilds on its first simulated day, so the separate `seed` and `build` steps in `make demo` (about 52 s) are redundant and could be dropped when Phase 5 finalises the demo.
 
 Built:
 
-- `simulation/raw_data.py`: hash-based generator in DuckDB SQL, rows inserted in key order, loaded by `_loaded_at` window so Phase 2 can append one simulated day with the same function.
-- `simulation/codegen.py`: 12 rollup families producing 57 generated mart models, output committed and guarded by a sync test.
-- `dbt/`: 9 staging, 16 intermediate, 24 hand-written marts, 57 generated rollups, 12 abandoned models, 12 exposures, 3 custom generic tests, simulated-time freshness override, query comment, schema naming macro.
-- `metadata/manifest.py`, `registry.py`, `check.py`, `lineage.py`; `ops.node_ownership` and `ops.lineage_edges`.
-- `common/dbt_invoke.py`: in-process dbt via `dbtRunner`, warehouse path and vars always from settings.
-- CLI: `seed`, `build`, `metadata check [--parse]`, `metadata lineage [--parse]` are real.
-- `.github/workflows/ci.yml`: `make setup`, `make lint`, `make test`, `metadata check --parse`.
-- ADRs 0002 (ownership and platform team), 0003 (freshness on simulated time), 0004 (deterministic generation). READMEs for `simulation`, `metadata` and `dbt` with numbers from the actual run.
-- `docs/CLAUDE.md` now says "4 business teams plus a data platform team".
+- `simulation/workload.py`: 13-week simulated workload. Raw data arrives daily (with in-place changes to products and customers), dbt runs for real every 28 days and is replayed on the other days, 12 dashboards refresh every 12 or 24 hours, 5 people run ad hoc SQL. `platform-ops simulation run` / `make simulate`.
+- `cost/`: `sql_parse` (sqlglot), `sizes` (logical column sizes), `growth` (append-only observation), `collect` (`QueryCollector`, `LoggedConnection`, dbt run reader), `estimate` (bytes and modelled time, ASOF-joined to size snapshots), `pricing` (`PricingModel`, `ScanPricing`, `ComputePricing`), `attribution`, `recommend`, `report`, `run`. `platform-ops cost report` / `make cost`.
+- Outputs: `ops.query_log`, `ops.query_tables`, `ops.table_sizes`, `ops.source_growth`, `ops.query_estimates`, `ops.query_costs`, `ops.query_attribution`, `ops.cost_by_team`, `ops.cost_report_*`, `ops.cost_proxy_accuracy`; `reports/cost.md` and `reports/cost_proxy_accuracy.md`.
+- Tests: SQL parsing edge cases (CTEs, subqueries, CTAS, quoted identifiers, `__dbt_tmp`, `SELECT *`, query comment), both pricing models, sizes, growth, estimate, attribution, recommendations, collection, workload; end-to-end determinism and acceptance at scale 0.01.
+- ADRs 0005 (bytes and modelled time), 0006 (pricing and attribution), 0007 (simulated workload); `cost/README.md`.
 
 ## In progress
 
@@ -48,47 +40,47 @@ Nothing. Waiting for review.
 
 ## Decisions made
 
-### From plan review (owner)
+### Phase 2 (owner)
 
-1. A fifth `platform` team owns every raw source, staging and intermediate model. It ends up owning 34 of 139 datasets, the most of any team.
-2. Every model is a full-refresh table.
-3. `teams.yaml` has `members`; an owner must be a member of the team on the same rule.
-4. Marts, abandoned models and exposures carry a team prefix.
-5. Stale ownership rules warn, ambiguous ties fail, one `make test` target runs everything, mypy cap kept, CI added in Phase 1.
+1. **Logical bytes, not stored bytes** (ADR 0005). Compressed size is not stable between identical runs.
+2. **Modelled compute time**: 150 ms per query plus bytes at 200 MB/s, declared in settings and printed in the report. Wall-clock time is recorded, never priced.
+3. **Real simulated dollars**, no projection factor.
+4. **Products and customers change in place** during the window, so the incremental recommendation has sources to rule out.
+5. **One warehouse per workload** (transform, BI, ad hoc) for compute pricing.
+6. **BigQuery's 10 MB minimum per table** in scan pricing.
+7. **13-week window** (not the SPEC's 6), so the 90-day unused check covers a real 90 days.
+8. **Real dbt build every 28 days**, replayed daily in between. Weekly real builds measured at 8 to 9 minutes for `make simulate`, which breaks the 10-minute demo budget.
 
 ### Made during implementation
 
-6. **Abandoned models inherit their team's default tier** instead of `best_effort` as the plan said. Twelve extra rules for dead models would be unrealistic. The exception is `finance_fct_revenue_v0`, which matches the critical revenue glob by name and is demoted by an exact rule. That is the one place "most specific wins" does real work today.
-7. **`paths.dbt_target` and `simulation.history_start` added to `settings.yaml`.** The target path makes integration tests run the real CLI against a temp directory. History start was hardcoded before.
-8. **`run_dbt` closes dbt-duckdb's cached database handle after every invocation.** dbt-duckdb keeps the DuckDB file open in-process after `dbtRunner.invoke` returns, which blocks read-only connections and other processes. Phases 2 and 3 run dbt repeatedly in one process, so this matters. It uses `DuckDBConnectionManager._ENV`, a private attribute checked against dbt-duckdb 1.11.0; an integration test fails if it stops working.
-9. **Writes to `ops` tables go through one transaction** (`common.db.transaction`). Autocommitted `executemany` flushed the write-ahead log per row and took 64 s for 372 lineage edges right after a build; in one transaction it is well under a second, and readers never see a half-written table.
-10. **dbt usage tracking is off** in `dbt_project.yml`, because the toolkit runs offline; `dbt/.user.yml` is gitignored as a backstop.
-11. **Freshness is off for `products` and `marketing_campaigns`.** The catalogue is a snapshot (newest row 370 days old) and campaigns can go weeks between launches (63 h at the window start), so daily rules there would only produce noise.
+9. **History counts are independent of window length.** `raw_data.HISTORY_COUNTS` is the size by the window start; the id space is extended to cover the window. Otherwise stretching the window to 13 weeks would have shrunk the history.
+10. **dbt builds no longer receive `simulated_now`.** Only source freshness uses it, and changing vars forces dbt to re-parse the whole project. With constant vars the saved parse is reused (full parse 9 s, then about 1 s).
+11. **Row-count test bounds cover the whole window** (orders up to 680k at scale 1.0). The old upper bound failed mid-window as orders grew; the lower bound, which catches a volume drop, is unchanged.
+12. **Payments are never loaded before their order.** Found by comparing seven daily appends with one seed at full scale: a payment stamped minutes before its order was lost when a load boundary fell between them. Tests now check the invariant and many uneven appends.
+13. **Daily loads only generate ids that can land in the window**, about 0.4 s a day at scale 1.0 instead of 1.1 s.
+14. **Writes batch into one transaction per build interval, and inserts use multi-row `VALUES`.** Measured on this laptop: each commit costs 0.3 to 0.9 s; for 400 rows, `executemany` 0.17 s, Arrow about 0.8 s (a fixed cost per call), multi-row `VALUES` 0.035 s.
+15. **The proxy-accuracy report is a separate file.** It uses profiler row counts, which DuckDB does not guarantee to be identical between runs, so it must never affect `cost.md`.
+16. **dbt threads 8** (from 4): 26.6 s against 30.0 s per `make build`.
 
-### Carried from Phase 0
+### Earlier phases (still in force)
 
-- GNU make 4.4.1 via winget; Makefile recipes pinned to bash.
-- `CLAUDE.md` stays at `docs/CLAUDE.md`.
-- Placeholder CLI commands exit non-zero until their phase lands.
-- mypy pinned `>=1.10,<1.20`, built from source, called as `python -m mypy`.
+- Platform team owns sources, staging and intermediate; business teams own marts and exposures; most specific ownership rule wins, ties fail.
+- Every model is a full-refresh table; abandoned models keep their team's default tier.
+- `run_dbt` releases dbt-duckdb's cached DuckDB handle after every invocation.
+- Freshness on simulated time; off for `products` and `marketing_campaigns`.
+- GNU make via winget; mypy pinned `<1.20`, built from source; CI runs lint, tests and `metadata check --parse`.
 
 ## Known issues
 
-- **CI first run on the PR:** setup and lint passed on the Ubuntu runner; tests failed on one flaky test (below), since removed. Needs a green rerun after the fix is pushed.
-- **Phase 2 spec question: compressed sizes are not stable.** SPEC Phase 2 says to estimate bytes scanned from "stored sizes (from DuckDB storage metadata)". CI on the first PR caught DuckDB choosing FSST on one run and Dictionary on the next for the same column with identical data; locally it reproduced at 2, 4 and 8 threads, rarely. Content is identical every run, but compressed size can move, and a cost report built on it would break the identical-reports rule. Also, DuckDB 1.5.5's `pragma_storage_info` has no byte-size column at all. Recommendation to discuss at Phase 2 planning: estimate bytes from logical data (row counts times column widths), which is deterministic. This departs from the SPEC wording, so it is the owner's call.
-- The flaky test `test_storage_layout_is_identical_across_runs` was removed; it asserted a property DuckDB does not guarantee. Content determinism is still covered by `test_same_seed_produces_identical_content` and the 127-table full-run comparison.
-- Three orders reference a customer who signed up a few seconds after the order, an edge of the id-space mapping in the generator. They are harmless and read as realistic mess, but a strict "signup before order" test would catch them.
-- `make demo` still fails by design until Phases 2 to 4 replace their placeholder commands.
-- `make build` leaves Postgres untouched; it is only needed from Phase 4. It is still running from `make up`; `make down` stops it.
-- `uv` prints a `VIRTUAL_ENV` warning if an outer virtualenv is active. Harmless.
+- Replayed days price model reads on model sizes up to 4 weeks old, and dashboards read marts up to 4 weeks stale. Raw data is always current. Acceptable for quarterly cost attribution (ADR 0007).
+- The estimate ignores row-group pruning, so filtered queries are overestimated: ad hoc queries by about 2.3 times at scale 1.0, measured per run in `reports/cost_proxy_accuracy.md`. The accuracy note only covers queries that returned less than one page (500 rows), because DuckDB has no final row count for a result cut short, so dashboard accuracy there is measured on small rollup tables only.
+- Filters written against a CTE or subquery column outside it are not traced to the base table for hotspot detection. The workload and dbt do not write filters that way.
+- `make demo` still fails by design until Phases 3 and 4 replace their placeholder commands.
 
 ## Open questions for the owner
 
-None blocking. Two worth a look during review:
-
-1. Decision 6 (abandoned models keep their team's default tier). Fine, or should each get an explicit `best_effort` rule?
-2. Decision 8 relies on a private dbt-duckdb attribute. The alternative is running dbt as a subprocess, which releases the file on exit but loses the structured results Phase 3 wants from `run_results`.
+None blocking.
 
 ## Next step
 
-Owner reviews and merges `phase-1-simulated-company`, and confirms CI goes green on the first push. Then start Phase 2 (cost attribution) on `phase-2-cost-attribution` off `main`, beginning with the stored-bytes question in Known issues before designing the scan-estimate proxy.
+Owner reviews and merges `phase-2-cost-attribution`, and confirms CI is green on the PR. Then plan Phase 3 (incident management) on `phase-3-incident-management` off `main`. Phase 3 needs its own dbt runs; with about 6 of the 10 demo minutes already used, its multi-week scenario should reuse the replay approach from ADR 0007 rather than build for real every day.

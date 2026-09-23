@@ -7,4 +7,4 @@ company:
       type: duckdb
       path: "{{ env_var('PLATFORM_OPS_DUCKDB_PATH') }}"
       schema: main
-      threads: 4
+      threads: 8

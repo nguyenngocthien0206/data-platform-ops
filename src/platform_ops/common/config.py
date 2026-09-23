@@ -55,24 +55,56 @@ class SimulationWindow(_Strict):
         return self.start + self.duration
 
 
-class ScanPricing(_Strict):
+ActorType = Literal["dbt", "dashboard", "adhoc"]
+
+
+class ScanRates(_Strict):
     usd_per_tib: Annotated[float, Field(gt=0)]
+    minimum_billed_bytes_per_table: Annotated[int, Field(ge=0)]
 
 
-class ComputePricing(_Strict):
+class ComputeRates(_Strict):
     usd_per_credit: Annotated[float, Field(gt=0)]
     credits_per_hour: Annotated[float, Field(gt=0)]
     minimum_billed_seconds: Annotated[int, Field(ge=0)]
     idle_timeout_seconds: Annotated[int, Field(ge=0)]
+    warehouses: dict[ActorType, str]
+
+    @model_validator(mode="after")
+    def _every_workload_has_a_warehouse(self) -> ComputeRates:
+        missing = {"dbt", "dashboard", "adhoc"} - set(self.warehouses)
+        if missing:
+            raise ValueError(f"pricing.compute.warehouses is missing {sorted(missing)}")
+        return self
 
 
 class PricingRates(_Strict):
-    scan: ScanPricing
-    compute: ComputePricing
+    scan: ScanRates
+    compute: ComputeRates
+
+
+class CostModel(_Strict):
+    """Declared assumptions behind modelled compute time (ADR 0005)."""
+
+    throughput_bytes_per_second: Annotated[int, Field(gt=0)]
+    per_query_overhead_ms: Annotated[int, Field(ge=0)]
 
 
 class Recommendations(_Strict):
     unused_lookback_days: list[Annotated[int, Field(gt=0)]]
+    hotspot_min_table_bytes: Annotated[int, Field(ge=0)]
+    hotspot_min_filtered_reads: Annotated[int, Field(gt=0)]
+    incremental_top_n: Annotated[int, Field(gt=0)]
+
+
+class WorkloadSettings(_Strict):
+    real_build_every_days: Annotated[int, Field(ge=1)]
+    dashboard_refresh_hours: dict[str, Annotated[int, Field(ge=1, le=24)]]
+    adhoc_users: list[str]
+    adhoc_max_queries_per_day: Annotated[int, Field(ge=0)]
+    adhoc_result_page_rows: Annotated[int, Field(gt=0)]
+    product_price_changes_per_day: Annotated[int, Field(ge=0)]
+    customer_profile_changes_per_day: Annotated[int, Field(ge=0)]
 
 
 Tier = Literal["critical", "important", "best_effort"]
@@ -99,7 +131,9 @@ class Settings(_Strict):
     paths: Paths
     simulation: SimulationWindow
     pricing: PricingRates
+    cost: CostModel
     recommendations: Recommendations
+    workload: WorkloadSettings
     metadata: MetadataSettings
 
     # Directory the config file was found in, used to resolve relative paths.

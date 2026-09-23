@@ -8,9 +8,10 @@ to it, and there is one place to change if the warehouse ever moves.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import duckdb
 
@@ -59,20 +60,81 @@ def ensure_schemas(connection: duckdb.DuckDBPyConnection) -> None:
         connection.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
 
 
+_INSERT_CHUNK_ROWS = 1000
+
+
+def insert_rows(
+    connection: duckdb.DuckDBPyConnection,
+    table: str,
+    columns: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+) -> int:
+    """Bulk-insert Python rows as multi-row ``VALUES`` statements.
+
+    Measured on DuckDB 1.5.5 (400 rows): ``executemany`` 0.17 s, because it runs
+    one statement per row; the Arrow path about 0.8 s, almost all of it a fixed
+    cost per call; one parameterised multi-row ``VALUES`` statement 0.035 s.
+    Rows go in chunks so a statement never carries an unbounded parameter list.
+    """
+    column_list = ", ".join(columns)
+    width = len(columns)
+    for start in range(0, len(rows), _INSERT_CHUNK_ROWS):
+        chunk = rows[start : start + _INSERT_CHUNK_ROWS]
+        placeholders = ", ".join(["(" + ", ".join(["?"] * width) + ")"] * len(chunk))
+        params = [value for row in chunk for value in row]
+        connection.execute(f"INSERT INTO {table} ({column_list}) VALUES {placeholders}", params)
+    return len(rows)
+
+
+# Connections that currently have a transaction open through this module.
+# DuckDB aborts the outer transaction if begin() is called inside it, so nesting
+# is detected here instead of by trying.
+_OPEN_TRANSACTIONS: set[int] = set()
+
+
+def begin(connection: duckdb.DuckDBPyConnection) -> None:
+    """Open a transaction that the caller will end with :func:`commit`."""
+    connection.begin()
+    _OPEN_TRANSACTIONS.add(id(connection))
+
+
+def commit(connection: duckdb.DuckDBPyConnection) -> None:
+    _OPEN_TRANSACTIONS.discard(id(connection))
+    connection.commit()
+
+
+def rollback(connection: duckdb.DuckDBPyConnection) -> None:
+    _OPEN_TRANSACTIONS.discard(id(connection))
+    connection.rollback()
+
+
+def in_transaction(connection: duckdb.DuckDBPyConnection) -> bool:
+    return id(connection) in _OPEN_TRANSACTIONS
+
+
 @contextmanager
 def transaction(connection: duckdb.DuckDBPyConnection) -> Iterator[None]:
     """Run a block in one transaction: commit on success, roll back on error.
 
     Multi-statement writes to ``ops`` tables go through here, so readers see
-    either the old table or the new one, never something in between.
+    either the old table or the new one, never something in between. Inside an
+    outer transaction the block simply joins it, and the outer one decides.
+
+    Commits are also the expensive part of a write: each one forces DuckDB's
+    write-ahead log to disk, which took 0.3 to 0.9 s per commit on the
+    development laptop. Batching many writes into one transaction is the main
+    lever on simulation speed.
     """
-    connection.begin()
+    if in_transaction(connection):
+        yield
+        return
+    begin(connection)
     try:
         yield
     except BaseException:
-        connection.rollback()
+        rollback(connection)
         raise
-    connection.commit()
+    commit(connection)
 
 
 @contextmanager

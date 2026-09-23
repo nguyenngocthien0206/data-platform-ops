@@ -28,6 +28,7 @@ customers from the first ``u`` of theirs, because both map to the same instant.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -36,17 +37,22 @@ import duckdb
 from platform_ops.common.config import Settings
 from platform_ops.common.db import RAW_SCHEMA
 
-# Row counts over the full id space (history plus simulated window) at scale 1.0.
-# Roughly 80% of each lands in the initial seed; the rest arrives during the
-# simulated window. Floors keep tiny scales usable in tests.
-BASE_COUNTS: dict[str, int] = {
-    "customers": 60_000,
+# Rows that have arrived by the window start, at scale 1.0. The id space is then
+# extended along the same growth curve to cover the simulated window, so the
+# window length (a simulation setting) never changes how big the company's
+# history is. Floors keep tiny scales usable in tests.
+HISTORY_COUNTS: dict[str, int] = {
+    "customers": 48_000,
     "products": 2_000,
-    "orders": 500_000,
-    "web_sessions": 1_800_000,
-    "marketing_campaigns": 90,
-    "support_tickets": 36_000,
+    "orders": 400_000,
+    "web_sessions": 1_450_000,
+    "marketing_campaigns": 80,
+    "support_tickets": 28_000,
 }
+# Event time grows with sqrt(id) for these, linearly for campaigns, and the
+# product catalogue is a fixed snapshot.
+_SQRT_GROWTH = frozenset({"customers", "orders", "web_sessions", "support_tickets"})
+_LINEAR_GROWTH = frozenset({"marketing_campaigns"})
 FLOORS: dict[str, int] = {
     "customers": 200,
     "products": 50,
@@ -180,10 +186,19 @@ class RawDataPlan:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> RawDataPlan:
-        scale = settings.scale_factor
-        counts = {
-            table: max(FLOORS[table], round(base * scale)) for table, base in BASE_COUNTS.items()
-        }
+        window = settings.simulation
+        history_share = (window.start - window.history_start) / (window.end - window.history_start)
+        counts: dict[str, int] = {}
+        for table, base in HISTORY_COUNTS.items():
+            by_start = max(FLOORS[table], round(base * settings.scale_factor))
+            # Invert the growth curve: the full id space whose first part lands
+            # exactly `by_start` rows before the window opens.
+            if table in _SQRT_GROWTH:
+                counts[table] = round(by_start / history_share**2)
+            elif table in _LINEAR_GROWTH:
+                counts[table] = round(by_start / history_share)
+            else:
+                counts[table] = by_start
         return cls(
             seed=settings.seed,
             history_start=settings.simulation.history_start,
@@ -208,6 +223,37 @@ def create_raw_tables(connection: duckdb.DuckDBPyConnection) -> None:
         connection.execute(f"CREATE TABLE {RAW_SCHEMA}.{table} ({_DDL[table]})")
 
 
+@dataclass(frozen=True)
+class _Window:
+    """The load window, and the id ranges that can possibly land in it.
+
+    Event time rises with the id (square-root growth), so the rows loaded in a
+    window come from a narrow range of ids. Generating only that range, instead
+    of the whole id space and filtering, is what makes a one-day append cheap:
+    about 2,400 new orders out of 620,000 possible ids. The range is widened by
+    the table's longest load lag and a small margin, so pruning never drops a
+    row; ``test_appending_a_day_equals_seeding_through_that_day`` checks it.
+    """
+
+    after: datetime | None
+    until: datetime
+
+    def ids(self, plan: RawDataPlan, n: int, max_lag: timedelta) -> tuple[int, int]:
+        def share(moment: datetime) -> float:
+            x = (moment - plan.history_start).total_seconds() / plan.span_seconds
+            return min(1.0, max(0.0, x)) ** 2
+
+        high = min(n, math.ceil(n * share(self.until)) + 2)
+        if self.after is None:
+            return 1, max(1, high)
+        low = max(1, math.floor(n * share(self.after - max_lag - timedelta(seconds=2))) - 1)
+        return low, max(low, high)
+
+    def loaded(self, column: str = "_loaded_at") -> str:
+        upper = f"{column} <= {_ts(self.until)}"
+        return upper if self.after is None else f"{column} > {_ts(self.after)} AND {upper}"
+
+
 def load_window(
     connection: duckdb.DuckDBPyConnection,
     plan: RawDataPlan,
@@ -218,8 +264,8 @@ def load_window(
 
     Returns the number of rows inserted per table.
     """
-    lower = _ts(after) if after is not None else "TIMESTAMP '0001-01-01 00:00:00'"
-    window = f"_loaded_at > {lower} AND _loaded_at <= {_ts(until)}"
+    bounds = _Window(after, until)
+    window = bounds.loaded()
     builders = {
         "customers": _customers_sql,
         "products": _products_sql,
@@ -233,7 +279,7 @@ def load_window(
     }
     inserted: dict[str, int] = {}
     for table in TABLES:
-        select = builders[table](plan, _Sql(plan.seed))
+        select = builders[table](plan, _Sql(plan.seed), bounds)
         before = _count(connection, table)
         connection.execute(
             f"INSERT INTO {RAW_SCHEMA}.{table} "
@@ -248,6 +294,65 @@ def seed(connection: duckdb.DuckDBPyConnection, settings: Settings) -> dict[str,
     plan = RawDataPlan.from_settings(settings)
     create_raw_tables(connection)
     return load_window(connection, plan, after=None, until=settings.simulation.start)
+
+
+PRIMARY_KEYS: dict[str, str] = _PRIMARY_KEYS
+# Sources that change in place during the simulated window. Everything else
+# only ever receives new rows.
+MUTABLE_TABLES: frozenset[str] = frozenset({"products", "customers"})
+
+
+def apply_daily_changes(
+    connection: duckdb.DuckDBPyConnection,
+    plan: RawDataPlan,
+    day: int,
+    at: datetime,
+    price_changes: int,
+    profile_changes: int,
+) -> dict[str, int]:
+    """Change some existing rows in place, the way a real catalogue or CRM does.
+
+    A handful of products get a new price and a handful of customers a new phone
+    number or referral source, each chosen by hash of the row and the day, so the
+    same rows change on every run. Changed rows get ``_loaded_at = at``, as a
+    change-data-capture feed would stamp them. This is what makes these two
+    sources not append-only, so the incremental-model recommendation has
+    something to rule out.
+    """
+    s = _Sql(plan.seed)
+    changed: dict[str, int] = {}
+    n_products = plan.counts["products"]
+    product_day = f"product_id * 1000 + {day}"
+    customer_day = f"customer_id * 1000 + {day}"
+    new_price = f"round(unit_price * (0.9 + 0.2 * {s.u('price_change', 'pct', product_day)}), 2)"
+    new_phone = f"({s.h('profile_change', 'phone', customer_day)} % 10000000)::VARCHAR"
+    connection.execute(
+        f"""UPDATE {RAW_SCHEMA}.products
+            SET unit_price = {new_price},
+                _loaded_at = {_ts(at)}
+            WHERE ({s.h("price_change", "pick", product_day)} % {n_products})
+                  < {price_changes}"""
+    )
+    changed["products"] = _stamped_at(connection, "products", at)
+    n_customers = plan.counts["customers"]
+    connection.execute(
+        f"""UPDATE {RAW_SCHEMA}.customers
+            SET phone = '+1-555-' || lpad({new_phone}, 7, '0'),
+                referral_source = coalesce(referral_source, 'organic'),
+                _loaded_at = {_ts(at)}
+            WHERE ({s.h("profile_change", "pick", customer_day)} % {n_customers})
+                  < {profile_changes}
+              AND _loaded_at < {_ts(at)}"""
+    )
+    changed["customers"] = _stamped_at(connection, "customers", at)
+    return changed
+
+
+def _stamped_at(connection: duckdb.DuckDBPyConnection, table: str, at: datetime) -> int:
+    row = connection.execute(
+        f"SELECT count(*) FROM {RAW_SCHEMA}.{table} WHERE _loaded_at = {_ts(at)}"
+    ).fetchone()
+    return int(row[0]) if row is not None else 0
 
 
 def _count(connection: duckdb.DuckDBPyConnection, table: str) -> int:
@@ -268,7 +373,7 @@ def _parent_id(s: _Sql, table: str, column: str, row: str, n_self: int, n_parent
     return f"(1 + ({s.h(table, column, row)} % {eligible})::BIGINT)"
 
 
-def _customers_sql(plan: RawDataPlan, s: _Sql) -> str:
+def _customers_sql(plan: RawDataPlan, s: _Sql, w: _Window) -> str:
     n = plan.counts["customers"]
     dups = max(1, round(n * 0.02))
     t = "customers"
@@ -318,7 +423,7 @@ def _customers_sql(plan: RawDataPlan, s: _Sql) -> str:
     """
 
 
-def _products_sql(plan: RawDataPlan, s: _Sql) -> str:
+def _products_sql(plan: RawDataPlan, s: _Sql, w: _Window) -> str:
     n = plan.counts["products"]
     t = "products"
     catalog_start = plan.history_start - timedelta(days=730)
@@ -347,8 +452,9 @@ def _products_sql(plan: RawDataPlan, s: _Sql) -> str:
     """
 
 
-def _orders_sql(plan: RawDataPlan, s: _Sql) -> str:
+def _orders_sql(plan: RawDataPlan, s: _Sql, w: _Window) -> str:
     n = plan.counts["orders"]
+    lo, hi = w.ids(plan, n, max_lag=timedelta(minutes=30))
     t = "orders"
     status = s.u(t, "status", "i")
     channel = s.u(t, "channel", "i")
@@ -372,12 +478,12 @@ def _orders_sql(plan: RawDataPlan, s: _Sql) -> str:
             ordered_at + to_minutes({s.between(t, "lag", "i", 1, 30)}) AS _loaded_at
         FROM (
             SELECT i, {_event_time(plan, s, t, "i", n)} AS ordered_at
-            FROM range(1, {n + 1}) r(i)
+            FROM range({lo}, {hi + 1}) r(i)
         )
     """
 
 
-def _order_items_sql(plan: RawDataPlan, s: _Sql) -> str:
+def _order_items_sql(plan: RawDataPlan, s: _Sql, w: _Window) -> str:
     t = "order_items"
     line_id = "(o.order_id * 10 + line_number)"
     return f"""
@@ -395,13 +501,14 @@ def _order_items_sql(plan: RawDataPlan, s: _Sql) -> str:
             SELECT order_id, _loaded_at,
                    unnest(range(1, 2 + ({s.h(t, "lines", "order_id")} % 5)::BIGINT)) AS line_number
             FROM {RAW_SCHEMA}.orders
+            WHERE {w.loaded()}
         ) o
         JOIN {RAW_SCHEMA}.products p
           ON p.product_id = 1 + ({s.h(t, "product", line_id)} % {plan.counts["products"]})::BIGINT
     """
 
 
-def _payments_sql(plan: RawDataPlan, s: _Sql) -> str:
+def _payments_sql(plan: RawDataPlan, s: _Sql, w: _Window) -> str:
     t = "payments"
     pid = "order_id * 10 + part"
     method = s.pick(t, "method", "order_id", _PAYMENT_METHODS)
@@ -409,17 +516,25 @@ def _payments_sql(plan: RawDataPlan, s: _Sql) -> str:
     late_minutes = s.between(t, "late_min", pid, 0, 600)
     lag_minutes = s.between(t, "lag", pid, 1, 20)
     delay_minutes = s.between(t, "delay", pid, 1, 120)
+    # A payment lands at most about six days after its order (two hours to pay,
+    # up to five days and ten hours late), so only the last week of orders can
+    # have a payment arriving in this window.
+    lo, hi = w.ids(plan, plan.counts["orders"], max_lag=timedelta(days=7))
     return f"""
         WITH totals AS (
             SELECT order_id, sum(quantity * unit_price) AS total
-            FROM {RAW_SCHEMA}.order_items GROUP BY order_id
+            FROM {RAW_SCHEMA}.order_items
+            WHERE order_id BETWEEN {lo} AND {hi}
+            GROUP BY order_id
         ),
         eligible AS (
             SELECT o.order_id, o.ordered_at, o.status, t.total,
+                   o._loaded_at AS order_loaded_at,
                    CASE WHEN {s.u(t, "split", "o.order_id")} < 0.03 THEN 2 ELSE 1 END AS parts
             FROM {RAW_SCHEMA}.orders o
             JOIN totals t USING (order_id)
-            WHERE o.status NOT IN ('pending', 'cancelled')
+            WHERE o.order_id BETWEEN {lo} AND {hi}
+              AND o.status NOT IN ('pending', 'cancelled')
               -- About 2% of completed orders never get a payment record at all.
               AND NOT (o.status = 'completed' AND {s.u(t, "missing", "o.order_id")} < 0.02)
         ),
@@ -437,10 +552,15 @@ def _payments_sql(plan: RawDataPlan, s: _Sql) -> str:
             created_at,
             -- About 5% of payments arrive one to five days late: the payment
             -- happened, the record reached the warehouse much later.
-            CASE WHEN {s.u(t, "late", pid)} < 0.05
-                 THEN created_at + to_days({late_days}::INTEGER) + to_minutes({late_minutes})
-                 ELSE created_at + to_minutes({lag_minutes})
-            END AS _loaded_at
+            -- A payment record never reaches the warehouse before its order does, so
+            -- whenever a payment lands, the order it belongs to is already loaded.
+            greatest(
+                CASE WHEN {s.u(t, "late", pid)} < 0.05
+                     THEN created_at + to_days({late_days}::INTEGER) + to_minutes({late_minutes})
+                     ELSE created_at + to_minutes({lag_minutes})
+                END,
+                order_loaded_at + INTERVAL 1 MINUTE
+            ) AS _loaded_at
         FROM (
             SELECT *, ordered_at + to_minutes({delay_minutes}) AS created_at
             FROM split
@@ -448,8 +568,9 @@ def _payments_sql(plan: RawDataPlan, s: _Sql) -> str:
     """
 
 
-def _sessions_sql(plan: RawDataPlan, s: _Sql) -> str:
+def _sessions_sql(plan: RawDataPlan, s: _Sql, w: _Window) -> str:
     n = plan.counts["web_sessions"]
+    lo, hi = w.ids(plan, n, max_lag=timedelta(minutes=60))
     t = "web_sessions"
     n_campaigns = plan.counts["marketing_campaigns"]
     # Campaigns start evenly across the span, so only the first sqrt(u) of them
@@ -476,12 +597,12 @@ def _sessions_sql(plan: RawDataPlan, s: _Sql) -> str:
             SELECT i, {_event_time(plan, s, t, "i", n)} AS started_at,
                    CASE WHEN {s.u(t, "utm_null", "i")} < 0.6 THEN NULL
                         ELSE {s.pick(t, "utm", "i", _CHANNELS)} END AS utm_source
-            FROM range(1, {n + 1}) r(i)
+            FROM range({lo}, {hi + 1}) r(i)
         )
     """
 
 
-def _campaigns_sql(plan: RawDataPlan, s: _Sql) -> str:
+def _campaigns_sql(plan: RawDataPlan, s: _Sql, w: _Window) -> str:
     n = plan.counts["marketing_campaigns"]
     t = "marketing_campaigns"
     start_offset = (
@@ -508,7 +629,7 @@ def _campaigns_sql(plan: RawDataPlan, s: _Sql) -> str:
     """
 
 
-def _spend_sql(plan: RawDataPlan, s: _Sql) -> str:
+def _spend_sql(plan: RawDataPlan, s: _Sql, w: _Window) -> str:
     t = "marketing_spend"
     spend_id = "(c.campaign_id * 1000 + d)"
     return f"""
@@ -531,7 +652,7 @@ def _spend_sql(plan: RawDataPlan, s: _Sql) -> str:
     """
 
 
-def _tickets_sql(plan: RawDataPlan, s: _Sql) -> str:
+def _tickets_sql(plan: RawDataPlan, s: _Sql, w: _Window) -> str:
     n = plan.counts["support_tickets"]
     t = "support_tickets"
     status = s.u(t, "status", "i")

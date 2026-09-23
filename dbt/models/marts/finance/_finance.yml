@@ -5,9 +5,12 @@ models:
     description: Recognized revenue per order. The externally reported number.
     data_tests:
       - row_count_in_range:
+          # Bounds hold across the whole simulated window: about 400k orders at the
+          # window start, growing to about 620k after 13 weeks. The lower bound is what
+          # catches a volume drop.
           arguments:
             min_rows_at_scale_1: 320000
-            max_rows_at_scale_1: 420000
+            max_rows_at_scale_1: 630000
     columns:
       - name: order_id
         data_tests: [unique, not_null]

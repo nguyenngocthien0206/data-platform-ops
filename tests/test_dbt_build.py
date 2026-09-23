@@ -8,9 +8,8 @@ it executes, and that the freshness override really measures simulated time.
 
 from __future__ import annotations
 
-import dataclasses
 from collections.abc import Callable, Iterator
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -54,9 +53,8 @@ def _query(settings: Settings, sql: str) -> list[tuple[Any, ...]]:
         connection.close()
 
 
-def _freshness(settings: Settings, **vars_override: Any) -> tuple[bool, dict[str, str]]:
-    invocation = invocation_from_settings(settings)
-    invocation = dataclasses.replace(invocation, vars={**invocation.vars, **vars_override})
+def _freshness(settings: Settings, at: datetime) -> tuple[bool, dict[str, str]]:
+    invocation = invocation_from_settings(settings, simulated_now=at)
     outcome = run_dbt(invocation, ["source", "freshness"], check=False)
     statuses = {}
     if outcome.result is not None:
@@ -118,11 +116,10 @@ def test_freshness_is_measured_on_simulated_time(built: tuple[Settings, dict[str
     settings, _ = built
     orders = "source.company.raw.orders"
 
-    _, fresh = _freshness(settings)
+    _, fresh = _freshness(settings, settings.simulation.start)
     assert fresh[orders] == "pass"
 
-    later = (settings.simulation.start + timedelta(days=3)).isoformat(sep=" ")
-    stale_ok, stale = _freshness(settings, simulated_now=later)
+    stale_ok, stale = _freshness(settings, settings.simulation.start + timedelta(days=3))
     assert stale[orders] == "error"
     assert not stale_ok
 
@@ -134,9 +131,7 @@ def test_freshness_without_simulated_time_fails_loudly(
     built: tuple[Settings, dict[str, Any]],
 ) -> None:
     settings, _ = built
-    invocation = invocation_from_settings(settings)
-    without = {k: v for k, v in invocation.vars.items() if k != "simulated_now"}
-    outcome = run_dbt(
-        dataclasses.replace(invocation, vars=without), ["source", "freshness"], check=False
-    )
+    invocation = invocation_from_settings(settings)  # no simulated time given
+    assert "simulated_now" not in invocation.vars
+    outcome = run_dbt(invocation, ["source", "freshness"], check=False)
     assert not outcome.success

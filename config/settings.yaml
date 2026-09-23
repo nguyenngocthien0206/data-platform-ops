@@ -25,7 +25,9 @@ simulation:
   # All simulated time is anchored here. Weeks of simulated activity are
   # generated in minutes of real time by common.clock.
   start: 2026-01-05T00:00:00
-  weeks: 6
+  # 13 weeks (91 days) rather than the SPEC's default of 6, so the cost
+  # module's 90-day unused-table check covers a real 90 days of activity.
+  weeks: 13
   # Simulated hour of day at which the scheduled dbt run happens.
   daily_run_hour: 2
 
@@ -40,6 +42,10 @@ pricing:
   #   https://www.snowflake.com/en/pricing-options/
   scan:
     usd_per_tib: 6.25
+    # BigQuery bills at least 10 MB for every table a query references, which
+    # is why frequent refreshes of tiny tables still cost money.
+    #   https://cloud.google.com/bigquery/pricing#on_demand_pricing
+    minimum_billed_bytes_per_table: 10485760
   compute:
     usd_per_credit: 2.00
     credits_per_hour: 1.0
@@ -48,10 +54,51 @@ pricing:
     # inside this window is still billed, which is what makes bursty dashboard
     # traffic more expensive than it looks.
     idle_timeout_seconds: 300
+    # One extra-small warehouse per workload, so idle time is charged to the
+    # workload that caused it.
+    warehouses:
+      dbt: transform_wh
+      dashboard: bi_wh
+      adhoc: adhoc_wh
 
-# Windows used by the Phase 2 unused-table recommendation.
+cost:
+  # Declared modelling assumptions, not vendor figures, and printed in the cost
+  # report. Compute time is modelled as overhead + bytes / throughput, because
+  # measured wall-clock time changes on every run (see docs/adr/0005).
+  throughput_bytes_per_second: 200000000
+  per_query_overhead_ms: 150
+
 recommendations:
+  # Unused tables: written in the window but never read, directly or through
+  # anything downstream, in the last N days.
   unused_lookback_days: [30, 90]
+  # Full-scan hotspots: a large table filtered on the same column again and again.
+  hotspot_min_table_bytes: 20000000
+  hotspot_min_filtered_reads: 10
+  # Incremental candidates: the N models that cost most to build.
+  incremental_top_n: 15
+
+workload:
+  # dbt runs for real every N simulated days and is replayed from the latest
+  # real build on the days in between (see docs/adr/0007). A real build takes
+  # about 26 s at scale 1.0, so every 28 days (4 builds in 13 weeks) keeps
+  # `make simulate` inside the 10-minute `make demo` budget.
+  real_build_every_days: 28
+  # How often each dashboard refreshes, by exposure maturity.
+  dashboard_refresh_hours:
+    high: 12
+    medium: 24
+    low: 24
+  # People from config/teams.yaml who query the warehouse by hand.
+  adhoc_users: [sam, maya, bruno, olivia, lena]
+  adhoc_max_queries_per_day: 3
+  # Rows a SQL editor shows before the user stops reading. Queries are logged
+  # as written; only the fetch is capped.
+  adhoc_result_page_rows: 500
+  # Sources that change in place during the window, at scale 1.0. Everything
+  # else only ever receives new rows.
+  product_price_changes_per_day: 6
+  customer_profile_changes_per_day: 40
 
 metadata:
   # How much a downstream consumer counts, by its ownership tier. Used by the
