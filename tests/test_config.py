@@ -16,7 +16,7 @@ def test_repo_settings_load_and_validate(repo_settings: Settings) -> None:
     """The settings file that ships with the repo must actually be valid."""
     assert repo_settings.scale_factor > 0
     assert repo_settings.seed == 20260923
-    assert repo_settings.simulation.weeks == 6
+    assert repo_settings.simulation.weeks == 13
     assert repo_settings.simulation.daily_run_hour == 2
     assert repo_settings.pricing.scan.usd_per_tib > 0
     assert repo_settings.pricing.compute.minimum_billed_seconds == 60
