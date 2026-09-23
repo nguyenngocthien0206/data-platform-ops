@@ -60,19 +60,23 @@ class DbtInvocation:
 def invocation_from_settings(
     settings: Settings, *, simulated_now: datetime | None = None
 ) -> DbtInvocation:
-    """Everything dbt needs, taken from settings. ``simulated_now`` defaults to the
-    window start, which is where the seed leaves the data."""
+    """Everything dbt needs, taken from settings.
+
+    ``simulated_now`` is passed to dbt only when given, because only source
+    freshness uses it, and dbt re-parses the whole project whenever its vars
+    change. Leaving it out of builds keeps their vars constant, so the weekly
+    builds of a simulation can reuse dbt's saved parse.
+    """
     target = settings.resolve(settings.paths.dbt_target)
-    now = simulated_now if simulated_now is not None else settings.simulation.start
+    variables: dict[str, Any] = {"scale_factor": settings.scale_factor}
+    if simulated_now is not None:
+        variables["simulated_now"] = simulated_now.isoformat(sep=" ")
     return DbtInvocation(
         project_dir=settings.resolve(settings.paths.dbt_project),
         target_path=target,
         log_path=target.parent / "logs",
         duckdb_path=settings.resolve(settings.paths.duckdb),
-        vars={
-            "scale_factor": settings.scale_factor,
-            "simulated_now": now.isoformat(sep=" "),
-        },
+        vars=variables,
     )
 
 
