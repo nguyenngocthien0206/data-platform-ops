@@ -147,6 +147,36 @@ def test_children_reference_existing_parents(seeded: duckdb.DuckDBPyConnection) 
         assert orphans == 0, f"{child}.{key} -> {parent}"
 
 
+def test_no_payment_reaches_the_warehouse_before_its_order(
+    seeded: duckdb.DuckDBPyConnection,
+) -> None:
+    """Otherwise a payment due in a load window whose order is not loaded yet is lost."""
+    early = _scalar(
+        seeded,
+        """SELECT count(*) FROM raw.payments p JOIN raw.orders o USING (order_id)
+           WHERE p._loaded_at <= o._loaded_at""",
+    )
+    assert early == 0
+
+
+def test_many_uneven_appends_equal_one_seed(small: Settings) -> None:
+    """Loads with irregular boundaries lose nothing and add nothing."""
+    plan = RawDataPlan.from_settings(small)
+    start = small.simulation.start
+    appended = connect(path=":memory:")
+    raw_data.seed(appended, small)
+    previous = start
+    for step in range(1, 60):
+        until = start + timedelta(minutes=53 * step)
+        raw_data.load_window(appended, plan, after=previous, until=until)
+        previous = until
+    direct = connect(path=":memory:")
+    raw_data.create_raw_tables(direct)
+    raw_data.load_window(direct, plan, after=None, until=previous)
+    for table in TABLES:
+        assert _rows(appended, table) == _rows(direct, table), table
+
+
 def test_appending_a_day_equals_seeding_through_that_day(small: Settings) -> None:
     """The Phase 2 daily append is the same function over a one-day window."""
     day_after = small.simulation.start + timedelta(days=1)
