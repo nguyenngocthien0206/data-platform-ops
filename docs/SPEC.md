@@ -6,10 +6,10 @@ This document is the source of truth for what to build. Work through the phases 
 
 ```
 data-platform-ops/
-├── CLAUDE.md
 ├── Makefile
 ├── pyproject.toml
 ├── docker-compose.yml
+├── .env.example
 ├── config/
 │   ├── settings.yaml          # scale factor, paths, simulated time window, pricing rates
 │   ├── teams.yaml             # teams and their notification channels
@@ -23,8 +23,13 @@ data-platform-ops/
 │   ├── incidents/
 │   └── reconcile/
 ├── dashboards/                # streamlit app, one page per module
+├── data/                      # generated DuckDB warehouse file, gitignored
+├── warehouse/                 # local Iceberg warehouse, gitignored
+├── reports/                   # generated markdown reports, gitignored
 ├── tests/
 └── docs/
+    ├── CLAUDE.md
+    ├── PROGRESS.md
     ├── SPEC.md
     └── adr/
 ```
