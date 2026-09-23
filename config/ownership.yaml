@@ -1,0 +1,17 @@
+# Dataset ownership registry: the "CODEOWNERS for data" idea. Each entry globs
+# on a dbt unique_id and names a person, a team and a criticality tier. Most
+# specific match wins.
+#
+# Populated in Phase 1 together with the dbt project, because the globs have to
+# match real node ids. `platform-ops metadata check` will then fail if any model,
+# source or exposure is left without an owner.
+#
+# Shape (validated by platform_ops.metadata.registry in Phase 1):
+#
+# datasets:
+#   - match: "model.company.fct_revenue*"
+#     owner: alice
+#     team: finance
+#     tier: critical          # critical | important | best_effort
+
+datasets: []

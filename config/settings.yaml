@@ -1,0 +1,49 @@
+# Single source of truth for run parameters. Loaded and validated by
+# platform_ops.common.config. Override the file location with PLATFORM_OPS_CONFIG.
+
+# Fixed seed for every generator in the project. Two runs of `make demo` on a
+# clean checkout must produce identical reports, so nothing may draw randomness
+# from anywhere else.
+seed: 20260923
+
+# Single knob controlling dataset size. 1.0 is the default and must keep
+# `make demo` under 10 minutes on a 16 GB laptop.
+scale_factor: 1.0
+
+paths:
+  duckdb: data/warehouse.duckdb
+  reports: reports
+  iceberg_warehouse: warehouse
+  dbt_project: dbt
+
+simulation:
+  # All simulated time is anchored here. Weeks of simulated activity are
+  # generated in minutes of real time by common.clock.
+  start: 2026-01-05T00:00:00
+  weeks: 6
+  # Simulated hour of day at which the scheduled dbt run happens.
+  daily_run_hour: 2
+
+pricing:
+  # Rates are illustrative and taken from public vendor list prices so the cost
+  # module produces believable money rather than arbitrary units.
+  #
+  # scan: BigQuery on-demand analysis, 6.25 USD per TiB scanned.
+  #   https://cloud.google.com/bigquery/pricing#analysis_pricing_models
+  # compute: Snowflake Standard edition, 2.00 USD per credit, one credit per
+  #   hour per XS warehouse, 60 second minimum then per-second billing.
+  #   https://www.snowflake.com/en/pricing-options/
+  scan:
+    usd_per_tib: 6.25
+  compute:
+    usd_per_credit: 2.00
+    credits_per_hour: 1.0
+    minimum_billed_seconds: 60
+    # Warehouse stays warm this long after a query before it suspends. Idle time
+    # inside this window is still billed, which is what makes bursty dashboard
+    # traffic more expensive than it looks.
+    idle_timeout_seconds: 300
+
+# Windows used by the Phase 2 unused-table recommendation.
+recommendations:
+  unused_lookback_days: [30, 90]

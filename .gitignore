@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets. Use .env.example as the template.
+.env
+
+# Generated warehouse and data. Never commit these.
+data/*.duckdb
+data/*.duckdb.wal
+warehouse/
+*.sqlite
+
+# dbt build artifacts
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+
+# Generated reports. Real numbers come from a real run, so they are not tracked.
+reports/*
+!reports/.gitkeep

@@ -1,0 +1,56 @@
+# Legacy sources for the Phase 4 migration reconciliation.
+#
+# Postgres is the default and always starts. SQL Server sits behind a profile
+# because its official image is x86_64 only: on Apple Silicon it runs under
+# emulation, slowly and sometimes not at all. Making it optional means a
+# contributor on a Mac can still run the full reconcile path against Postgres,
+# so the migration work is never gated on one person's hardware.
+# See docs/adr/0001-postgres-as-default-legacy-source.md.
+
+name: data-platform-ops
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: dpo-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-platform_ops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-legacy}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-platform_ops} -d ${POSTGRES_DB:-legacy}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: dpo-sqlserver
+    profiles: ["sqlserver"]
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
+      MSSQL_PID: Developer
+    ports:
+      - "${MSSQL_PORT:-1433}:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  sqlserver_data:

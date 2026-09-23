@@ -1,0 +1,16 @@
+# The four teams of the simulated company. Cost showback, incident routing and
+# migration sign-off all resolve back to an entry here, so this file is the
+# org chart the whole toolkit reasons about.
+teams:
+  - id: sales
+    name: Sales Analytics
+    channel: "#sales-data"
+  - id: marketing
+    name: Marketing Analytics
+    channel: "#marketing-data"
+  - id: finance
+    name: Finance Analytics
+    channel: "#finance-data"
+  - id: product
+    name: Product Analytics
+    channel: "#product-data"
