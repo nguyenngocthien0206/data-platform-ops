@@ -1,0 +1,48 @@
+version: 2
+
+models:
+  - name: finance_fct_revenue
+    description: Recognized revenue per order. The externally reported number.
+    data_tests:
+      - row_count_in_range:
+          arguments:
+            min_rows_at_scale_1: 320000
+            max_rows_at_scale_1: 420000
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: recognized_revenue
+        data_tests: [non_negative]
+
+  - name: finance_fct_revenue_monthly
+    columns:
+      - name: revenue_month
+        data_tests: [unique, not_null]
+
+  - name: finance_fct_gross_margin
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+
+  - name: finance_fct_payments_reconciliation
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: payment_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [not_due, paid, refunded, missing, underpaid]
+      - name: outstanding_amount
+        data_tests: [non_negative]
+
+  - name: finance_fct_refunds
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+
+  - name: finance_fct_marketing_spend
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [spend_month, channel]

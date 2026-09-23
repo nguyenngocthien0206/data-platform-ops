@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: marketing_dim_campaigns
+    columns:
+      - name: campaign_id
+        data_tests: [unique, not_null]
+
+  - name: marketing_fct_campaign_performance
+    description: Lifetime spend, traffic and last-touch revenue per campaign.
+    columns:
+      - name: campaign_id
+        data_tests: [unique, not_null]
+      - name: spend
+        data_tests: [non_negative]
+
+  - name: marketing_fct_daily_spend
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [activity_date, channel]
+
+  - name: marketing_fct_attributed_orders
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+
+  - name: marketing_fct_sessions
+    columns:
+      - name: session_id
+        data_tests: [unique, not_null]
+
+  - name: marketing_acquisition_funnel
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [month, referral_source]
