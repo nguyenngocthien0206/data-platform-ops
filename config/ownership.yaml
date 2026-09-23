@@ -1,17 +1,54 @@
-# Dataset ownership registry: the "CODEOWNERS for data" idea. Each entry globs
-# on a dbt unique_id and names a person, a team and a criticality tier. Most
-# specific match wins.
+# Dataset ownership registry: CODEOWNERS for data.
 #
-# Populated in Phase 1 together with the dbt project, because the globs have to
-# match real node ids. `platform-ops metadata check` will then fail if any model,
-# source or exposure is left without an owner.
+# Each rule globs on a dbt unique_id and names an owner, their team, and a tier
+# (critical | important | best_effort). The most specific matching rule wins:
+# the one with the most literal characters, then the fewest wildcards. Two rules
+# that tie are an error, not a coin toss. See docs/adr/0002.
 #
-# Shape (validated by platform_ops.metadata.registry in Phase 1):
-#
-# datasets:
-#   - match: "model.company.fct_revenue*"
-#     owner: alice
-#     team: finance
-#     tier: critical          # critical | important | best_effort
+# Validated by platform_ops.metadata.registry; enforced by
+# `platform-ops metadata check`, which fails if any source, model or exposure
+# is left without an owner.
 
-datasets: []
+datasets:
+  # --- Data platform: raw sources, staging, intermediate --------------------
+  # The platform team owns everything upstream of the marts. Most root causes
+  # surface here, so most incidents will route here too.
+  - {match: "source.company.raw.*", owner: priya, team: platform, tier: important}
+  - {match: "source.company.raw.orders", owner: priya, team: platform, tier: critical}
+  - {match: "source.company.raw.payments", owner: marco, team: platform, tier: critical}
+  - {match: "source.company.raw.customers", owner: priya, team: platform, tier: critical}
+
+  - {match: "model.company.stg_*", owner: marco, team: platform, tier: important}
+  - {match: "model.company.stg_orders", owner: marco, team: platform, tier: critical}
+  - {match: "model.company.stg_payments", owner: marco, team: platform, tier: critical}
+  - {match: "model.company.stg_customers", owner: marco, team: platform, tier: critical}
+
+  - {match: "model.company.int_*", owner: lena, team: platform, tier: important}
+  # Feeds recognized revenue, so it carries the same tier as the revenue models.
+  - {match: "model.company.int_orders_enriched", owner: lena, team: platform, tier: critical}
+
+  # --- Sales -----------------------------------------------------------------
+  - {match: "model.company.sales_*", owner: diego, team: sales, tier: important}
+  - {match: "model.company.sales_fct_orders", owner: sam, team: sales, tier: critical}
+  - {match: "exposure.company.sales_*", owner: sam, team: sales, tier: important}
+  - {match: "exposure.company.sales_customer_insights", owner: diego, team: sales, tier: important}
+
+  # --- Marketing -------------------------------------------------------------
+  - {match: "model.company.marketing_*", owner: maya, team: marketing, tier: important}
+  - {match: "exposure.company.marketing_*", owner: maya, team: marketing, tier: important}
+  - {match: "exposure.company.marketing_traffic_sources", owner: tom, team: marketing, tier: important}
+
+  # --- Finance ---------------------------------------------------------------
+  - {match: "model.company.finance_*", owner: bruno, team: finance, tier: important}
+  - {match: "model.company.finance_fct_revenue*", owner: alice, team: finance, tier: critical}
+  # The pre-returns revenue model still matches the critical rule above by name.
+  # It was demoted in 2025-06 after an alert on it paged the finance on-call for
+  # a table nobody reads.
+  - {match: "model.company.finance_fct_revenue_v0", owner: bruno, team: finance, tier: best_effort}
+  - {match: "exposure.company.finance_*", owner: bruno, team: finance, tier: important}
+  - {match: "exposure.company.finance_revenue_dashboard", owner: alice, team: finance, tier: critical}
+
+  # --- Product ---------------------------------------------------------------
+  - {match: "model.company.product_*", owner: kenji, team: product, tier: important}
+  - {match: "exposure.company.product_*", owner: olivia, team: product, tier: important}
+  - {match: "exposure.company.product_catalog_performance", owner: kenji, team: product, tier: important}

@@ -1,8 +1,8 @@
 """The `platform-ops` command line.
 
 The command surface is the contract between the three modules and the Makefile.
-It is fixed here, in Phase 0, before any module exists, so cost, incidents and
-reconcile can later be built independently without renegotiating entry points.
+It was fixed in Phase 0, before any module existed, so cost, incidents and
+reconcile can be built independently without renegotiating entry points.
 
 Commands belonging to unbuilt phases are registered but refuse to run. They exit
 non-zero on purpose: a pipeline that is only half built must not be able to
@@ -11,11 +11,15 @@ report success.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 
 from platform_ops import __version__
-from platform_ops.common.config import load_settings
-from platform_ops.common.logging import configure_logging, get_logger
+from platform_ops.common.clock import SimulatedClock
+from platform_ops.common.config import Settings, load_settings
+from platform_ops.common.db import open_connection
+from platform_ops.common.logging import configure_logging, get_logger, log_event
 
 app = typer.Typer(
     name="platform-ops",
@@ -42,6 +46,12 @@ app.add_typer(cost_app, name="cost")
 app.add_typer(incidents_app, name="incidents")
 app.add_typer(reconcile_app, name="reconcile")
 
+PARSE_OPTION = typer.Option(
+    False,
+    "--parse",
+    help="Run `dbt parse` first, so no prior build or data is needed (the CI path).",
+)
+
 
 def _not_implemented(what: str, phase: int) -> None:
     """Fail loudly for a command whose phase has not been built yet."""
@@ -51,6 +61,32 @@ def _not_implemented(what: str, phase: int) -> None:
         err=True,
     )
     raise typer.Exit(code=1)
+
+
+def _fail(message: str) -> None:
+    typer.secho(message, fg=typer.colors.RED, err=True)
+    raise typer.Exit(code=1)
+
+
+def _start(name: str) -> tuple[Settings, SimulatedClock]:
+    """Load settings and set up logging stamped with the simulated window start."""
+    settings = load_settings()
+    clock = SimulatedClock(settings.simulation.start)
+    configure_logging(clock=clock)
+    get_logger(name)
+    return settings, clock
+
+
+def _manifest(settings: Settings, parse: bool) -> Path:
+    from platform_ops.common.dbt_invoke import DbtError, invocation_from_settings, run_dbt
+
+    invocation = invocation_from_settings(settings)
+    if parse:
+        try:
+            run_dbt(invocation, ["parse"])
+        except DbtError as error:
+            _fail(str(error))
+    return invocation.manifest_path
 
 
 @app.command()
@@ -71,14 +107,38 @@ def show_config() -> None:
 
 @app.command()
 def seed() -> None:
-    """Generate raw data for the simulated company."""
-    _not_implemented("seed", 1)
+    """Generate raw data for the simulated company, up to the window start."""
+    from platform_ops.simulation import raw_data
+
+    settings, clock = _start("seed")
+    logger = get_logger("seed")
+    with open_connection(settings) as connection:
+        counts = raw_data.seed(connection, settings)
+    for table, rows in counts.items():
+        log_event(logger, f"raw.{table}: {rows:,} rows", clock=clock)
+    typer.echo(f"seeded {sum(counts.values()):,} rows across {len(counts)} raw tables")
 
 
 @app.command()
 def build() -> None:
-    """Run dbt build against the simulated company."""
-    _not_implemented("build", 1)
+    """Run dbt build, then refresh ops.lineage_edges from the new manifest."""
+    from platform_ops.common.dbt_invoke import DbtError, invocation_from_settings, run_dbt
+    from platform_ops.metadata.lineage import build_graph, persist_edges
+    from platform_ops.metadata.manifest import load_manifest
+
+    settings, clock = _start("build")
+    logger = get_logger("build")
+    invocation = invocation_from_settings(settings)
+    try:
+        run_dbt(invocation, ["build"])
+    except DbtError as error:
+        _fail(str(error))
+
+    graph = build_graph(load_manifest(invocation.manifest_path))
+    with open_connection(settings) as connection:
+        edges = persist_edges(connection, graph)
+    log_event(logger, f"ops.lineage_edges: {edges:,} edges", clock=clock)
+    typer.echo(f"dbt build succeeded; lineage refreshed with {edges:,} edges")
 
 
 @app.command()
@@ -88,15 +148,48 @@ def dashboard() -> None:
 
 
 @metadata_app.command("check")
-def metadata_check() -> None:
-    """Fail if any dbt model, source or exposure has no owner."""
-    _not_implemented("metadata check", 1)
+def metadata_check(parse: bool = PARSE_OPTION) -> None:
+    """Fail if any dbt model, source or exposure has no single, valid owner."""
+    from platform_ops.metadata.check import persist_ownership, run_check
+    from platform_ops.metadata.manifest import load_manifest
+    from platform_ops.metadata.registry import Registry
+
+    settings, _ = _start("metadata")
+    try:
+        nodes = load_manifest(_manifest(settings, parse))
+    except FileNotFoundError as error:
+        _fail(str(error))
+    registry = Registry.from_config_dir(settings.root / "config")
+    report = run_check(registry, nodes)
+
+    for resource_type, (owned, total) in report.coverage.items():
+        typer.echo(f"{resource_type + 's':<10} {owned:>4} of {total:<4} owned")
+    for warning in report.warnings:
+        typer.secho(f"warning: {warning}", fg=typer.colors.YELLOW)
+    for problem in report.errors:
+        typer.secho(f"error: {problem}", fg=typer.colors.RED, err=True)
+    if not report.passed:
+        _fail(f"metadata check failed with {len(report.errors)} error(s)")
+
+    with open_connection(settings) as connection:
+        rows = persist_ownership(connection, report, nodes)
+    typer.echo(f"metadata check passed; ops.node_ownership has {rows} rows")
 
 
 @metadata_app.command("lineage")
-def metadata_lineage() -> None:
-    """Build the lineage graph and persist edges to ops.lineage_edges."""
-    _not_implemented("metadata lineage", 1)
+def metadata_lineage(parse: bool = PARSE_OPTION) -> None:
+    """Build the lineage graph and persist its edges to ops.lineage_edges."""
+    from platform_ops.metadata.lineage import build_graph, persist_edges
+    from platform_ops.metadata.manifest import load_manifest
+
+    settings, _ = _start("metadata")
+    try:
+        graph = build_graph(load_manifest(_manifest(settings, parse)))
+    except FileNotFoundError as error:
+        _fail(str(error))
+    with open_connection(settings) as connection:
+        edges = persist_edges(connection, graph)
+    typer.echo(f"ops.lineage_edges: {edges:,} edges across {graph.number_of_nodes():,} nodes")
 
 
 @simulation_app.command("run")

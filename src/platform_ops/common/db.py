@@ -60,6 +60,22 @@ def ensure_schemas(connection: duckdb.DuckDBPyConnection) -> None:
 
 
 @contextmanager
+def transaction(connection: duckdb.DuckDBPyConnection) -> Iterator[None]:
+    """Run a block in one transaction: commit on success, roll back on error.
+
+    Multi-statement writes to ``ops`` tables go through here, so readers see
+    either the old table or the new one, never something in between.
+    """
+    connection.begin()
+    try:
+        yield
+    except BaseException:
+        connection.rollback()
+        raise
+    connection.commit()
+
+
+@contextmanager
 def open_connection(
     settings: Settings | None = None,
     *,
