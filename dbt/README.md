@@ -44,7 +44,8 @@ Twelve exposures stand in for dashboards, three per business team, and they are 
 | Models built | 118 |
 | Data tests passed | 156 of 156 |
 | Exposures | 12 |
-| `make build` wall time, including dbt startup and the lineage refresh | 32 to 35 s |
-| Warehouse file after a clean seed and build | 293 MB |
+| `make build` wall time from a clean state, including dbt's first full parse and the lineage refresh | 44 s |
+| of which dbt executing models and tests | 22.6 s |
+| Warehouse file after a clean seed and build | 297 MB |
 
 Two clean runs of seed and build produced identical content in all 127 tables (9 raw, 118 models), compared by row count and a hash over every row.
