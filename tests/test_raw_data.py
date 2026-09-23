@@ -62,27 +62,6 @@ def test_same_seed_produces_identical_content(
         assert _rows(seeded, table) == _rows(again, table), table
 
 
-def test_storage_layout_is_identical_across_runs(small: Settings, tmp_path: Path) -> None:
-    """Phase 2 prices stored bytes, so compression and layout must not drift."""
-
-    def fingerprint(path: Path) -> list[tuple[Any, ...]]:
-        connection = connect(path=path)
-        raw_data.seed(connection, small)
-        connection.execute("CHECKPOINT")
-        rows: list[tuple[Any, ...]] = []
-        for table in TABLES:
-            rows += connection.execute(
-                f"""SELECT '{table}', row_group_id, column_name, segment_id, start, count,
-                           compression, stats
-                    FROM pragma_storage_info('raw.{table}')
-                    ORDER BY row_group_id, column_id, segment_id"""
-            ).fetchall()
-        connection.close()
-        return rows
-
-    assert fingerprint(tmp_path / "a.duckdb") == fingerprint(tmp_path / "b.duckdb")
-
-
 def test_different_seed_produces_different_data(
     small: Settings, seeded: duckdb.DuckDBPyConnection
 ) -> None:

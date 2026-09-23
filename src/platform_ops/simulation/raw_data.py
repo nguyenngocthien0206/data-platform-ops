@@ -1,13 +1,18 @@
 """Raw data for the simulated company, generated inside DuckDB.
 
-Two rules make this deterministic, and both matter more than they look:
+Two rules make the content deterministic:
 
 1. Every "random" value is a pure hash of ``(seed, table, row id, column)``.
    DuckDB's ``random()`` depends on how work is split across threads, so it is
    never used. A hash depends only on its inputs.
-2. Rows are inserted in primary-key order. Physical order drives compression,
-   compression drives the storage sizes that Phase 2 turns into money, so a
-   stable order is part of determinism, not a nicety.
+2. Rows are inserted in primary-key order, so the physical row order and the
+   row groups are the same on every run.
+
+What is *not* deterministic is the on-disk encoding. DuckDB picks a compression
+codec per segment when it writes, and that choice can differ between two runs
+of identical data (seen as FSST versus Dictionary on the same column). Anything
+that needs a stable size, such as Phase 2's scan estimate, must be computed from
+the logical data, not from compressed storage. See ADR 0004.
 
 Each table is defined over a fixed id space that covers the history *and* the
 whole simulated window. A load inserts only the rows whose ``_loaded_at`` falls

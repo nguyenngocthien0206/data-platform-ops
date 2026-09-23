@@ -7,7 +7,7 @@ Last updated: 2026-09-23
 ## Current phase
 
 Phase 1: Simulated company and shared metadata layer. Implemented, all acceptance criteria verified locally from a clean state.
-Branch: `phase-1-simulated-company` (off `main` at `bdb614f`). Not committed yet, awaiting owner review.
+Branch: `phase-1-simulated-company` (off `main` at `bdb614f`). PR open, awaiting review.
 
 ## Done
 
@@ -26,7 +26,7 @@ make test && make lint
 | `platform-ops metadata check --parse` with no `dbt/target` | passes (the CI path, no data needed) |
 | Abandoned model acceptance test | every one of the 12 has zero downstream nodes and zero exposures |
 | Lineage unit tests on a hand-built graph | pass, including two diamonds and the tie-break |
-| `make test` | 105 passed in about 40 s (includes real dbt parse and build at scale 0.01) |
+| `make test` | 104 passed in about 40 s (includes real dbt parse and build at scale 0.01) |
 | `make lint` | ruff clean, 40 files formatted, mypy strict clean on 19 source files |
 | Determinism | two clean seed and build runs: all 127 tables (9 raw, 118 models) identical by row count and full-row hash |
 
@@ -74,8 +74,9 @@ Nothing. Waiting for review.
 
 ## Known issues
 
-- **CI has not run on GitHub yet.** The workflow mirrors the local make targets, which all pass, but action versions and the Ubuntu runner are untested until the first push.
-- **Heads-up for Phase 2: DuckDB 1.5.5 exposes no per-segment byte size.** `pragma_storage_info` gives segments, row counts, compression and block ids but no size column. The scan-estimate proxy will need another source for stored bytes (for example block counts times block size, or `pragma_database_size`). Verify before designing the proxy.
+- **CI first run on the PR:** setup and lint passed on the Ubuntu runner; tests failed on one flaky test (below), since removed. Needs a green rerun after the fix is pushed.
+- **Phase 2 spec question: compressed sizes are not stable.** SPEC Phase 2 says to estimate bytes scanned from "stored sizes (from DuckDB storage metadata)". CI on the first PR caught DuckDB choosing FSST on one run and Dictionary on the next for the same column with identical data; locally it reproduced at 2, 4 and 8 threads, rarely. Content is identical every run, but compressed size can move, and a cost report built on it would break the identical-reports rule. Also, DuckDB 1.5.5's `pragma_storage_info` has no byte-size column at all. Recommendation to discuss at Phase 2 planning: estimate bytes from logical data (row counts times column widths), which is deterministic. This departs from the SPEC wording, so it is the owner's call.
+- The flaky test `test_storage_layout_is_identical_across_runs` was removed; it asserted a property DuckDB does not guarantee. Content determinism is still covered by `test_same_seed_produces_identical_content` and the 127-table full-run comparison.
 - Three orders reference a customer who signed up a few seconds after the order, an edge of the id-space mapping in the generator. They are harmless and read as realistic mess, but a strict "signup before order" test would catch them.
 - `make demo` still fails by design until Phases 2 to 4 replace their placeholder commands.
 - `make build` leaves Postgres untouched; it is only needed from Phase 4. It is still running from `make up`; `make down` stops it.
