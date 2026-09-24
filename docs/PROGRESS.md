@@ -6,8 +6,8 @@ Last updated: 2026-09-24
 
 ## Current phase
 
-Phase 3: Incident management. Implemented, awaiting review.
-Branch: `phase-3-incident-management` (off `main` at `e6cdeda`).
+Phase 4: Migration reconciliation. Implemented, awaiting review.
+Branch: `phase-4-migration-reconciliation` (off `main` at `efacb72`).
 
 ## Done
 
@@ -15,11 +15,33 @@ Branch: `phase-3-incident-management` (off `main` at `e6cdeda`).
 - Phase 3 implemented: fault injector with repair (`simulation/faults.py`), and `incidents/` with ingestion, grouping, severity, routing, notifier, lifecycle, the 21-day scenario, metrics and report. `platform-ops incidents run` is live; ADR 0008 and `src/platform_ops/incidents/README.md` written.
 - Phase 3 reference numbers at scale 1.0: `make incidents` 2 min 22 s to 2 min 56 s over three runs, byte-identical `incidents.md` and postmortems across two runs. 8 faults, 18 failing checks, 8 incidents (exactly one per fault), 8 pages. Routing right person 8 of 8 (naive rule 3 of 8). dbt ran on 8 of 21 nights, 19 invocations.
 
+- Phase 3 merged (PR #5).
+- Phase 4 implemented: `reconcile/` (schema, canonical rules and renderers, connectors for Postgres, SQL Server and DuckDB, legacy generator, migration job with four defects, segmented diff, classification, metrics, sign-off report) and `simulation/migration_faults.py`. `platform-ops reconcile run` is live, so every Makefile target is implemented. ADR 0009 and `src/platform_ops/reconcile/README.md` written.
+- Phase 4 reference numbers at scale 1.0: `make reconcile` about 52 s, byte-identical `reconciliation.md` across two runs. As delivered: 199,465 planted discrepancies, 100% recall, precision and classification accuracy; not signed off. Job fixed: 44 planted, all found; the diff moves 0.6% to 9.6% of the rows a naive comparison would. `make demo` from a clean state: 6 min 54 s.
+
 ## In progress
 
-Nothing. Phase 3 is waiting for review.
+Nothing. Phase 4 is waiting for review.
 
 ## Decisions made
+
+### Phase 4 (owner)
+
+1. **PyIceberg plans the files, DuckDB reads them with `read_parquet`.** Offline; the DuckDB `iceberg` extension would need a download.
+2. **`reconcile run` exits 0 whatever the verdict**; the verdict is in the report. `--strict` exits non-zero when the delivered migration is not signed off.
+3. **`pymssql` as an optional extra** (`uv sync --extra sqlserver`). It carries its own driver; pyodbc needs ODBC Driver 18 on the host.
+4. **Realistic time zone defect kept**: daylight saving ignored, about 65% of payments shifted by one hour.
+5. **Canonical defaults**: Postgres neither trims nor folds case; SQL Server folds case, like its case-insensitive collation.
+6. **Two passes** (asked during implementation): the job as delivered, then the job with its defects fixed. Systematic defects make every segment differ, so only the second pass shows what the segmented diff saves.
+
+### Phase 4, made during implementation
+
+24. **Legacy data has its own generator covering calendar 2025.** The Phase 1 data spans only a winter, so a daylight saving defect would never fire. Local times fall between 06:00 and midnight, avoiding the ambiguous hour when clocks go back.
+25. **Hash: MD5 of the UTF-8 row string, split into two unsigned 32-bit halves, summed per segment.** Verified identical in Python, DuckDB 1.5.5, Postgres 16.15 and SQL Server 2022 CU27 on golden rows. SQL Server's legacy database uses a `_UTF8` collation so VARCHAR bytes match; style 126 drops a zero fraction, so microseconds are formatted by hand; pymssql mangles non-ASCII VARCHAR, so leaf values are fetched as NVARCHAR.
+26. **Each side hashes its rows once into a temp table**, and every level groups that. The diff went from 53 s to 20 s at scale 1.0.
+27. **The legacy export is read once for both passes.**
+28. **Report percentages use three decimals and never round up to 100%.**
+29. **Isolated test configs copy `.env`**, so the Postgres and SQL Server tests find their credentials; they skip when the engine is not reachable, so CI stays green without Docker.
 
 ### Phase 3 (owner, at planning)
 
@@ -74,15 +96,14 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 - Replayed days price model reads on model sizes up to 4 weeks old, and dashboards read marts up to 4 weeks stale. Raw data is always current. Acceptable for quarterly cost attribution (ADR 0007).
 - The estimate ignores row-group pruning, so filtered queries are overestimated: ad hoc queries by about 2.3 times at scale 1.0, measured per run in `reports/cost_proxy_accuracy.md`. The accuracy note only covers queries that returned less than one page (500 rows), because DuckDB has no final row count for a result cut short, so dashboard accuracy there is measured on small rollup tables only.
 - Filters written against a CTE or subquery column outside it are not traced to the base table for hotspot detection. The workload and dbt do not write filters that way.
-- `make demo` still fails by design until Phase 4 replaces its placeholder command.
 - `make incidents` at scale 1.0 ranged from 2 min 22 s to 2 min 56 s on this laptop, so it sometimes goes over the 2.5-minute target from the plan. With Phase 2 at about 5.3 min, the demo has roughly 1.5 to 2 min left for Phase 4 and setup.
 - The alert storm is modest: 18 failing checks for 8 faults. Most downstream tests check keys and row counts that a few bad values do not break. The volume drop is the one fault with a real cascade (5 checks).
 - Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0008).
 
 ## Open questions for the owner
 
-None open. The three Phase 3 questions were settled with their planned defaults (decision 18).
+None open.
 
 ## Next step
 
-Owner reviews Phase 3 and opens the PR. Then plan Phase 4 (migration reconciliation) on a new branch from `main`, keeping its `make demo` share within about 1.5 minutes.
+Owner reviews Phase 4 and opens the PR. Then plan Phase 5 (dashboards, root README, CI, cloud cost collectors) on a new branch from `main`.

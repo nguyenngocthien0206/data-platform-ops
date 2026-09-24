@@ -119,6 +119,47 @@ incidents:
     resolve_hours: {SEV1: 6, SEV2: 18, SEV3: 40}
     load_factor: 0.5
 
+reconcile:
+  # Legacy engines to reconcile, each against its own Iceberg copy. `sqlserver`
+  # needs `docker compose --profile sqlserver up -d` and `uv sync --extra
+  # sqlserver`; `platform-ops reconcile run --engine ...` picks engines for one run.
+  engines: [postgres]
+  # Legacy rows at scale_factor 1.0. The legacy system holds calendar year
+  # legacy_year, so its local timestamps cross both DST changes.
+  rows: {customers: 50000, orders: 300000, payments: 300000}
+  legacy_year: 2025
+  # The legacy system stores local wall-clock time in this zone. SQL Server
+  # names zones the Windows way, so it gets its own spelling.
+  legacy_timezone: America/New_York
+  legacy_timezone_windows: Eastern Standard Time
+  # Segmented diff: each differing segment splits into `fanout` children until
+  # a segment spans at most `leaf_width` keys; only then are rows fetched.
+  fanout: 16
+  leaf_width: 256
+  # A decimal difference up to this size is classified as rounding.
+  rounding_tolerance: 0.01
+  # How values are rendered before hashing (ADR 0009). Engine defaults first,
+  # then per-column overrides as "table.column": {rtrim, casefold, scale}.
+  # SQL Server folds case to model its case-insensitive default collation.
+  canonical:
+    engines:
+      postgres: {rtrim: false, casefold: false}
+      sqlserver: {rtrim: false, casefold: true}
+      duckdb: {rtrim: false, casefold: false}
+    columns: {}
+  # Sign-off criteria, fixed before the run and stated first in the report.
+  thresholds:
+    min_row_match_rate: 0.999
+    min_column_match_rate: 0.999
+    max_discrepancies:
+      missing_in_target: 0
+      extra_in_target: 0
+      value_mismatch: 0
+      timezone_shift: 0
+      whitespace: 0
+      case_only: 0
+      rounding: 100
+
 metadata:
   # How much a downstream consumer counts, by its ownership tier. Used by the
   # lineage helpers and, in Phase 3, by incident severity: breaking one critical

@@ -10,7 +10,6 @@ the standard library. Tests never set it.
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
@@ -23,6 +22,7 @@ import duckdb
 
 from platform_ops.common.clock import SimulatedClock
 from platform_ops.common.db import OPS_SCHEMA, insert_rows
+from platform_ops.common.env import env_value
 from platform_ops.common.logging import get_logger, log_event
 
 NotificationKind = Literal["page", "update", "resolved"]
@@ -127,16 +127,7 @@ class CompositeNotifier:
 
 def slack_webhook_url(env_file: Path) -> str | None:
     """The webhook from the environment, else from ``.env``, else ``None``."""
-    from_env = os.environ.get(SLACK_ENV_VAR, "").strip()
-    if from_env:
-        return from_env
-    if not env_file.is_file():
-        return None
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        name, sep, value = line.strip().partition("=")
-        if sep and name.strip() == SLACK_ENV_VAR and not name.startswith("#"):
-            return value.strip().strip("'\"") or None
-    return None
+    return env_value(SLACK_ENV_VAR, env_file)
 
 
 def build_notifier(local: LocalNotifier, env_file: Path) -> Notifier:
