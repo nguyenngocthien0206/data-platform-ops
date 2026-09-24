@@ -162,6 +162,80 @@ class IncidentSettings(_Strict):
     lifecycle: LifecycleSettings
 
 
+Engine = Literal["postgres", "sqlserver", "duckdb"]
+DiscrepancyClass = Literal[
+    "missing_in_target",
+    "extra_in_target",
+    "rounding",
+    "timezone_shift",
+    "whitespace",
+    "case_only",
+    "value_mismatch",
+]
+DISCREPANCY_CLASSES: tuple[DiscrepancyClass, ...] = (
+    "missing_in_target",
+    "extra_in_target",
+    "rounding",
+    "timezone_shift",
+    "whitespace",
+    "case_only",
+    "value_mismatch",
+)
+
+
+class CanonicalRule(_Strict):
+    """How one column, or every text column of one engine, is rendered before hashing."""
+
+    rtrim: bool | None = None
+    casefold: bool | None = None
+    scale: Annotated[int, Field(ge=0, le=18)] | None = None
+
+
+class CanonicalSettings(_Strict):
+    engines: dict[Engine, CanonicalRule]
+    columns: dict[str, CanonicalRule] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _columns_are_table_dot_column(self) -> CanonicalSettings:
+        bad = [key for key in self.columns if key.count(".") != 1]
+        if bad:
+            raise ValueError(f"reconcile.canonical.columns keys must be table.column: {bad}")
+        return self
+
+
+class Thresholds(_Strict):
+    min_row_match_rate: Annotated[float, Field(ge=0, le=1)]
+    min_column_match_rate: Annotated[float, Field(ge=0, le=1)]
+    max_discrepancies: dict[DiscrepancyClass, Annotated[int, Field(ge=0)]]
+
+    @model_validator(mode="after")
+    def _every_class(self) -> Thresholds:
+        missing = set(DISCREPANCY_CLASSES) - set(self.max_discrepancies)
+        if missing:
+            raise ValueError(f"reconcile.thresholds.max_discrepancies is missing {sorted(missing)}")
+        return self
+
+
+class ReconcileSettings(_Strict):
+    engines: Annotated[list[Engine], Field(min_length=1)]
+    rows: dict[Literal["customers", "orders", "payments"], Annotated[int, Field(gt=0)]]
+    legacy_year: Annotated[int, Field(ge=2000, le=2100)]
+    legacy_timezone: str
+    legacy_timezone_windows: str
+    fanout: Annotated[int, Field(ge=2, le=256)]
+    leaf_width: Annotated[int, Field(ge=1)]
+    rounding_tolerance: Annotated[float, Field(ge=0)]
+    canonical: CanonicalSettings
+    thresholds: Thresholds
+
+    @model_validator(mode="after")
+    def _every_table_sized(self) -> ReconcileSettings:
+        missing = {"customers", "orders", "payments"} - set(self.rows)
+        if missing:
+            raise ValueError(f"reconcile.rows is missing {sorted(missing)}")
+        return self
+
+
 class Settings(_Strict):
     seed: int
     scale_factor: Annotated[float, Field(gt=0)]
@@ -172,6 +246,7 @@ class Settings(_Strict):
     recommendations: Recommendations
     workload: WorkloadSettings
     incidents: IncidentSettings
+    reconcile: ReconcileSettings
     metadata: MetadataSettings
 
     # Directory the config file was found in, used to resolve relative paths.

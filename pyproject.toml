@@ -23,6 +23,12 @@ dependencies = [
 [project.scripts]
 platform-ops = "platform_ops.cli:main"
 
+[project.optional-dependencies]
+# Only for the optional SQL Server legacy source (`docker compose --profile
+# sqlserver`). pymssql ships its own TDS driver, so nothing else is installed on
+# the host, unlike pyodbc, which needs Microsoft's ODBC driver.
+sqlserver = ["pymssql>=2.3"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.2",
@@ -67,7 +73,7 @@ warn_unreachable = true
 # Third-party packages that ship no type information. Kept as a narrow list on
 # purpose: anything not named here must type check properly.
 [[tool.mypy.overrides]]
-module = ["duckdb.*", "pyiceberg.*"]
+module = ["duckdb.*", "pyiceberg.*", "pyarrow", "pyarrow.*", "pymssql"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

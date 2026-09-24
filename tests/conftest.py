@@ -63,6 +63,26 @@ SETTINGS_YAML = textwrap.dedent(
         ack_minutes: {SEV1: 20, SEV2: 90, SEV3: 480}
         resolve_hours: {SEV1: 6, SEV2: 18, SEV3: 40}
         load_factor: 0.5
+    reconcile:
+      engines: [postgres]
+      rows: {customers: 50000, orders: 300000, payments: 300000}
+      legacy_year: 2025
+      legacy_timezone: America/New_York
+      legacy_timezone_windows: Eastern Standard Time
+      fanout: 16
+      leaf_width: 256
+      rounding_tolerance: 0.01
+      canonical:
+        engines:
+          postgres: {rtrim: false, casefold: false}
+          sqlserver: {rtrim: false, casefold: true}
+          duckdb: {rtrim: false, casefold: false}
+        columns: {}
+      thresholds:
+        min_row_match_rate: 0.999
+        min_column_match_rate: 0.999
+        max_discrepancies: {missing_in_target: 0, extra_in_target: 0, value_mismatch: 0,
+          timezone_shift: 0, whitespace: 0, case_only: 0, rounding: 100}
     metadata:
       tier_weights:
         critical: 3
@@ -136,6 +156,9 @@ def make_isolated_config(root: Path, scale_factor: float, weeks: int | None = No
     settings_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
     for name in ("teams.yaml", "ownership.yaml"):
         shutil.copyfile(REPO_ROOT / "config" / name, config_dir / name)
+    # Local service credentials (Postgres, SQL Server) live in .env at the root.
+    if (REPO_ROOT / ".env").is_file():
+        shutil.copyfile(REPO_ROOT / ".env", root / ".env")
     return settings_path
 
 
