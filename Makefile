@@ -73,5 +73,7 @@ clean: ## Remove generated data, reports and build artifacts
 	rm -rf .pytest_cache .ruff_cache .mypy_cache
 	find reports -type f ! -name .gitkeep -delete 2>/dev/null || true
 
-demo: clean setup up seed build simulate cost incidents reconcile ## Full end to end run
+# `simulate` re-seeds and builds on its first simulated day, so `demo` needs no
+# separate `seed` and `build` steps.
+demo: clean setup up simulate cost incidents reconcile ## Full end to end run
 	@echo "demo complete. Reports are in reports/."

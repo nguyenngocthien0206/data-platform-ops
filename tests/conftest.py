@@ -55,6 +55,14 @@ SETTINGS_YAML = textwrap.dedent(
       adhoc_result_page_rows: 500
       product_price_changes_per_day: 6
       customer_profile_changes_per_day: 40
+    incidents:
+      scenario_days: 21
+      fault_hour: 10
+      severity: {root_tier_multiplier: 10, sev1_min_score: 150, sev2_min_score: 45}
+      lifecycle:
+        ack_minutes: {SEV1: 20, SEV2: 90, SEV3: 480}
+        resolve_hours: {SEV1: 6, SEV2: 18, SEV3: 40}
+        load_factor: 0.5
     metadata:
       tier_weights:
         critical: 3

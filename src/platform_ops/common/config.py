@@ -125,6 +125,43 @@ class MetadataSettings(_Strict):
     tier_weights: TierWeights
 
 
+Severity = Literal["SEV1", "SEV2", "SEV3"]
+SEVERITIES: tuple[Severity, ...] = ("SEV1", "SEV2", "SEV3")
+
+
+class SeveritySettings(_Strict):
+    root_tier_multiplier: Annotated[int, Field(ge=0)]
+    sev1_min_score: Annotated[int, Field(ge=0)]
+    sev2_min_score: Annotated[int, Field(ge=0)]
+
+    @model_validator(mode="after")
+    def _ordered(self) -> SeveritySettings:
+        if self.sev2_min_score > self.sev1_min_score:
+            raise ValueError("incidents.severity: sev2_min_score must not exceed sev1_min_score")
+        return self
+
+
+class LifecycleSettings(_Strict):
+    ack_minutes: dict[Severity, Annotated[int, Field(gt=0)]]
+    resolve_hours: dict[Severity, Annotated[int, Field(gt=0)]]
+    load_factor: Annotated[float, Field(ge=0)]
+
+    @model_validator(mode="after")
+    def _every_severity(self) -> LifecycleSettings:
+        for name in ("ack_minutes", "resolve_hours"):
+            missing = set(SEVERITIES) - set(getattr(self, name))
+            if missing:
+                raise ValueError(f"incidents.lifecycle.{name} is missing {sorted(missing)}")
+        return self
+
+
+class IncidentSettings(_Strict):
+    scenario_days: Annotated[int, Field(ge=1)]
+    fault_hour: Annotated[int, Field(ge=0, le=23)]
+    severity: SeveritySettings
+    lifecycle: LifecycleSettings
+
+
 class Settings(_Strict):
     seed: int
     scale_factor: Annotated[float, Field(gt=0)]
@@ -134,6 +171,7 @@ class Settings(_Strict):
     cost: CostModel
     recommendations: Recommendations
     workload: WorkloadSettings
+    incidents: IncidentSettings
     metadata: MetadataSettings
 
     # Directory the config file was found in, used to resolve relative paths.
