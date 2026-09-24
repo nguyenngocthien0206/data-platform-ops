@@ -12,7 +12,6 @@ runner = CliRunner()
 
 # Every command a Makefile target invokes, with the phase that implements it.
 PLACEHOLDER_COMMANDS: list[tuple[list[str], int]] = [
-    (["reconcile", "run"], 4),
     (["dashboard"], 5),
 ]
 

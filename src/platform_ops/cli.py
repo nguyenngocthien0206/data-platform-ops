@@ -253,10 +253,46 @@ def incidents_run() -> None:
         _fail("not every injected fault maps to exactly one incident; see the report")
 
 
+ENGINE_OPTION = typer.Option(
+    None,
+    "--engine",
+    help="Legacy engine to reconcile (repeatable). Defaults to reconcile.engines in settings.",
+)
+STRICT_OPTION = typer.Option(
+    False, "--strict", help="Exit non-zero when the migration as delivered is not signed off."
+)
+
+
 @reconcile_app.command("run")
-def reconcile_run() -> None:
-    """Run the migration scenario and the diff, write the sign-off report."""
-    _not_implemented("reconcile run", 4)
+def reconcile_run(engine: list[str] | None = ENGINE_OPTION, strict: bool = STRICT_OPTION) -> None:
+    """Run the migration scenario and the diff, write the sign-off report.
+
+    The verdict lives in the report; the command succeeds whether or not the
+    migration is signed off, unless --strict is given.
+    """
+    from typing import cast
+
+    from platform_ops.common.config import Engine
+    from platform_ops.reconcile.run import ReconcileError, run_and_report
+
+    settings, _ = _start("reconcile")
+    allowed = ("postgres", "sqlserver", "duckdb")
+    unknown = [e for e in engine or [] if e not in allowed]
+    if unknown:
+        _fail(f"unknown engine {unknown}; choose from {list(allowed)}")
+    engines = [cast(Engine, e) for e in engine] if engine else None
+    try:
+        summary, _ = run_and_report(settings, engines)
+    except ReconcileError as error:
+        _fail(str(error))
+    verdict = "signed off" if summary.signed_off else "NOT signed off"
+    typer.echo(
+        f"reconciled {', '.join(summary.engines)}: migration as delivered {verdict}; "
+        f"detection recall {summary.recall:.2%}, classification accuracy "
+        f"{summary.classification_accuracy:.2%}; wrote {summary.report_path}"
+    )
+    if strict and not summary.signed_off:
+        _fail("the migration as delivered does not meet the sign-off thresholds")
 
 
 def main() -> None:
