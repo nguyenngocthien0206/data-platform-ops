@@ -6,8 +6,8 @@ Last updated: 2026-09-24
 
 ## Current phase
 
-Phase 3: Incident management. Implemented, awaiting review.
-Branch: `phase-3-incident-management` (off `main` at `e6cdeda`).
+Phase 4: Migration reconciliation. Planned, waiting for the owner's approval and answers to the open questions.
+Branch: `phase-4-migration-reconciliation` (off `main` at `efacb72`).
 
 ## Done
 
@@ -15,9 +15,11 @@ Branch: `phase-3-incident-management` (off `main` at `e6cdeda`).
 - Phase 3 implemented: fault injector with repair (`simulation/faults.py`), and `incidents/` with ingestion, grouping, severity, routing, notifier, lifecycle, the 21-day scenario, metrics and report. `platform-ops incidents run` is live; ADR 0008 and `src/platform_ops/incidents/README.md` written.
 - Phase 3 reference numbers at scale 1.0: `make incidents` 2 min 22 s to 2 min 56 s over three runs, byte-identical `incidents.md` and postmortems across two runs. 8 faults, 18 failing checks, 8 incidents (exactly one per fault), 8 pages. Routing right person 8 of 8 (naive rule 3 of 8). dbt ran on 8 of 21 nights, 19 invocations.
 
+- Phase 3 merged (PR #5).
+
 ## In progress
 
-Nothing. Phase 3 is waiting for review.
+Phase 4 plan written. Checked against installed versions before planning: DuckDB 1.5.5 casts `'0x'`-prefixed hex to BIGINT, converts IANA zones with DST (ICU is loaded), rounds decimals half away from zero, and renders TIMESTAMPTZ in the session zone (so canonical SQL must `SET TimeZone='UTC'`). The DuckDB `iceberg` extension is not installed and would need network; PyIceberg 0.12 `scan().plan_files()` plus DuckDB `read_parquet` works offline, and its delete is copy-on-write (no delete files). PyIceberg on Windows needs a plain warehouse path, not a `file://` URI. Postgres and SQL Server checks are still to do (Docker was not running).
 
 ## Decisions made
 
@@ -81,8 +83,8 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 
 ## Open questions for the owner
 
-None open. The three Phase 3 questions were settled with their planned defaults (decision 18).
+Phase 4 questions are in the plan (Iceberg read path, exit code when sign-off fails, SQL Server driver, dense timezone defect, canonical defaults).
 
 ## Next step
 
-Owner reviews Phase 3 and opens the PR. Then plan Phase 4 (migration reconciliation) on a new branch from `main`, keeping its `make demo` share within about 1.5 minutes.
+Owner reviews the Phase 4 plan. Once approved, start with the cross-engine checks on Postgres (md5, hex to bigint, UTC rendering, COPY speed), then implement in the plan's order.
