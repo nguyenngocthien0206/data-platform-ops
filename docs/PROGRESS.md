@@ -2,31 +2,42 @@
 
 Handoff file between sessions. Read this first, then `docs/SPEC.md`.
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 ## Current phase
 
-Phase 3: Incident management. Planned and approved, not yet implemented.
+Phase 3: Incident management. Implemented, awaiting review.
 Branch: `phase-3-incident-management` (off `main` at `e6cdeda`).
 
 ## Done
 
 - Phase 2 merged (PR #4). Reference numbers at scale 1.0: `make simulate` 280 to 290 s, `make cost` 20 to 24 s, byte-identical `cost.md` across two runs, unused list exactly the 12 abandoned models.
-- Phase 3 plan written; three design decisions taken with the owner (below).
+- Phase 3 implemented: fault injector with repair (`simulation/faults.py`), and `incidents/` with ingestion, grouping, severity, routing, notifier, lifecycle, the 21-day scenario, metrics and report. `platform-ops incidents run` is live; ADR 0008 and `src/platform_ops/incidents/README.md` written.
+- Phase 3 reference numbers at scale 1.0: `make incidents` 2 min 22 s to 2 min 56 s over three runs, byte-identical `incidents.md` and postmortems across two runs. 8 faults, 18 failing checks, 8 incidents (exactly one per fault), 8 pages. Routing right person 8 of 8 (naive rule 3 of 8). dbt ran on 8 of 21 nights, 19 invocations.
 
 ## In progress
 
-Nothing. Waiting for the go-ahead to implement Phase 3.
+Nothing. Phase 3 is waiting for review.
 
 ## Decisions made
 
 ### Phase 3 (owner, at planning)
 
-1. **Run only what faults touch.** 3-week scenario, 8 faults covering all 6 types. dbt runs for real only on days a fault is active, selecting `source:raw.<target>+` (7% to 76% of a build depending on the source). Green days run nothing, because the baseline is all green; an e2e test proves a targeted run finds the same failures as a full one.
+1. **Run only what faults touch.** 3-week scenario, 8 faults covering all 6 types. dbt runs for real only on days a fault is active. Green days run nothing, because the baseline is all green; an e2e test proves a targeted run finds the same failures as a full one. (Selector changed during implementation, see 20.)
 2. **Staging roots page the source owner**, because staging only renames and casts. Routing accuracy is reported per person and per team.
 3. **`make demo` drops its redundant `seed` and `build` steps** (about 52 s); `make simulate` already does both.
 
 Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a failed test (`Fail` is in `task/build.py` `MARK_DEPENDENT_ERRORS_STATUSES`), which would hide the alert storm. `dbt run` then `dbt test` skip only on `Error`, so the scenario uses those. Severity inputs (tier-weighted downstream consumers): customers 213, orders 189, order_items and products 160, campaigns and web_sessions 76, support_tickets 34, marketing_spend 20, payments 19.
+
+### Phase 3, made during implementation
+
+17. **A test that reads two models is its own subject.** A relationships test is attached to one model but depends on two. Treating it as its own node below both keeps a volume drop in orders from opening a second incident on order items.
+18. **Open questions resolved with the planned defaults**: a recurrence after resolution opens a new incident linked to the old by root; appends send an update, not a page; severity thresholds stay in config.
+19. **Repairs regenerate data from the seed**, no backup tables. The generator is deterministic, so "put back what the generator says" is exact; a round-trip test per fault proves every table matches a clean load.
+20. **Selection is `@source:raw.<table>`, not `source:raw.<table>+`.** Every model is a table, so downstream-only runs compared fresh payments with a stale `stg_orders` and opened incidents nobody caused. `@` also rebuilds the parents of everything selected. Targeted equals full on all four fault nights.
+21. **One parse, reused by every dbt invocation**, including freshness: dbt resolves `simulated_now` at run time, so freshness costs 0.6 s instead of 5.2 s.
+22. **Faults land in pairs** on days 2, 5, 9 and 14, on different tables. With the freshness change this took `make incidents` from 3 min 13 s to 2 min 22 to 2 min 56 s.
+23. **`dbt run` and `dbt test` are separate invocations with console logging off** in the scenario. Failing tests are expected; dbt's log file keeps the detail.
 
 ### Phase 2 (owner)
 
@@ -63,16 +74,15 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 - Replayed days price model reads on model sizes up to 4 weeks old, and dashboards read marts up to 4 weeks stale. Raw data is always current. Acceptable for quarterly cost attribution (ADR 0007).
 - The estimate ignores row-group pruning, so filtered queries are overestimated: ad hoc queries by about 2.3 times at scale 1.0, measured per run in `reports/cost_proxy_accuracy.md`. The accuracy note only covers queries that returned less than one page (500 rows), because DuckDB has no final row count for a result cut short, so dashboard accuracy there is measured on small rollup tables only.
 - Filters written against a CTE or subquery column outside it are not traced to the base table for hotspot detection. The workload and dbt do not write filters that way.
-- `make demo` still fails by design until Phases 3 and 4 replace their placeholder commands.
+- `make demo` still fails by design until Phase 4 replaces its placeholder command.
+- `make incidents` at scale 1.0 ranged from 2 min 22 s to 2 min 56 s on this laptop, so it sometimes goes over the 2.5-minute target from the plan. With Phase 2 at about 5.3 min, the demo has roughly 1.5 to 2 min left for Phase 4 and setup.
+- The alert storm is modest: 18 failing checks for 8 faults. Most downstream tests check keys and row counts that a few bad values do not break. The volume drop is the one fault with a real cascade (5 checks).
+- Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0008).
 
 ## Open questions for the owner
 
-Defaults in brackets; none blocks starting.
-
-1. An incident that recurs after resolution: reopen the old one or open a new one? [new one, linked by root node]
-2. Do appended pages count as alerts in the "after grouping" per-person rate? [no: one page per incident]
-3. Severity thresholds (SEV1 >= 150, SEV2 >= 45): tunable in config, or fixed in the ADR? [config, calibration explained in ADR 0008]
+None open. The three Phase 3 questions were settled with their planned defaults (decision 18).
 
 ## Next step
 
-Implement Phase 3 on `phase-3-incident-management`, in this order: incident settings and the `make demo` change; fault injector with ground truth and repair; ingestion; grouping; severity and routing; notifier and lifecycle; the scenario and `platform-ops incidents run`; metrics and report; end-to-end and targeted-vs-full tests; ADR 0008, incidents README and results here. Check early: the `source:raw.<table>+` selector with `dbt run` and `dbt test`, one root per fault on a real run, and runtime against the 2.5-minute budget.
+Owner reviews Phase 3 and opens the PR. Then plan Phase 4 (migration reconciliation) on a new branch from `main`, keeping its `make demo` share within about 1.5 minutes.
