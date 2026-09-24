@@ -100,6 +100,25 @@ workload:
   product_price_changes_per_day: 6
   customer_profile_changes_per_day: 40
 
+incidents:
+  # Length of the incident scenario, from its own fresh seed at simulation.start.
+  scenario_days: 21
+  # Faults happen during the working day; the next 02:00 run is the first
+  # chance to catch them.
+  fault_hour: 10
+  # Severity score = root_tier_multiplier x tier weight of the root dataset
+  # + tier-weighted count of downstream models and exposures (ADR 0008).
+  severity:
+    root_tier_multiplier: 10
+    sev1_min_score: 150
+    sev2_min_score: 45
+  # Simulated response times. Each incident the owner already has open slows
+  # them down by load_factor, because people juggling incidents are slower.
+  lifecycle:
+    ack_minutes: {SEV1: 20, SEV2: 90, SEV3: 480}
+    resolve_hours: {SEV1: 6, SEV2: 18, SEV3: 40}
+    load_factor: 0.5
+
 metadata:
   # How much a downstream consumer counts, by its ownership tier. Used by the
   # lineage helpers and, in Phase 3, by incident severity: breaking one critical

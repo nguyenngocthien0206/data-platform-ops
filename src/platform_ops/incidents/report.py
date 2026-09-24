@@ -1,0 +1,336 @@
+"""``reports/incidents.md`` and one postmortem per SEV1 incident.
+
+Built only from simulated times, counts and ids, never from wall-clock times,
+file paths or dbt's free-text messages, so two runs write byte-identical files.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from collections.abc import Sequence
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from platform_ops.cost.report import table
+from platform_ops.incidents.metrics import Accuracy, IncidentMetrics
+from platform_ops.incidents.scenario import Incident, ScenarioResult
+from platform_ops.simulation.faults import CATALOGUE
+
+FAULT_TYPE_LABEL = {
+    "null_spike": "null spike",
+    "invalid_category": "invalid categorical values",
+    "duplicate_keys": "duplicate primary keys",
+    "stale_source": "stale source",
+    "schema_drop": "schema change (column dropped)",
+    "schema_rename": "schema change (column renamed)",
+    "volume_drop": "volume drop",
+}
+
+
+def short(unique_id: str) -> str:
+    """``model.company.stg_orders`` to ``stg_orders``; sources keep ``raw.``."""
+    parts = unique_id.split(".")
+    if parts[0] == "source":
+        return ".".join(parts[2:4])
+    if parts[0] == "test":
+        return "test " + parts[2][:60]
+    return parts[-1]
+
+
+def when(at: datetime | None) -> str:
+    return "" if at is None else f"{at:%Y-%m-%d %H:%M}"
+
+
+def hours(delta: timedelta) -> str:
+    return f"{delta.total_seconds() / 3600:.1f}"
+
+
+def pct(accuracy: Accuracy) -> str:
+    return f"{accuracy.correct} of {accuracy.total} ({accuracy.rate:.0%})"
+
+
+def render(result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int) -> str:
+    by_id = {i.incident_id: i for i in result.incidents}
+    reduction = 1 - metrics.pages / metrics.raw_alerts if metrics.raw_alerts else 0.0
+    fault_rows = []
+    for outcome in metrics.faults:
+        t = outcome.truth
+        found = [by_id[i] for i in outcome.incident_ids]
+        first = found[0] if found else None
+        fault_rows.append((
+            t.fault_id,
+            FAULT_TYPE_LABEL.get(t.fault_type, t.fault_type),
+            t.target,
+            when(t.injected_at),
+            ", ".join(outcome.incident_ids) or "**none**",
+            short(first.root) if first else "",
+            first.severity if first else "",
+            hours(first.opened_at - t.injected_at) if first else "",
+            f"{first.owner} ({'ok' if first.owner == t.owner else 'wrong'})" if first else "",
+        ))  # fmt: skip
+
+    incident_rows = [
+        (i.incident_id, short(i.root), i.severity, i.score, i.owner, when(i.opened_at),
+         when(i.acknowledged_at), when(i.resolved_at), hours(i.resolved_at - i.opened_at),
+         len(i.run_ids), i.checks, len(i.consumers), len(i.skipped),
+         i.previous_incident_id or "")
+        for i in result.incidents
+    ]  # fmt: skip
+
+    people = sorted(set(metrics.alerts_before) | set(metrics.alerts_after))
+    load_rows = []
+    for person in people:
+        before = metrics.alerts_before.get(person, 0)
+        after = metrics.alerts_after.get(person, 0)
+        weeks = metrics.weeks
+        load_rows.append((person, before, f"{before / weeks:.1f}", after, f"{after / weeks:.1f}"))
+
+    per_owner: dict[str, list[int]] = {}
+    for outcome in metrics.faults:
+        for incident_id in outcome.incident_ids:
+            tally = per_owner.setdefault(outcome.truth.owner, [0, 0, 0])
+            tally[0] += 1
+            tally[1] += by_id[incident_id].owner == outcome.truth.owner
+            tally[2] += by_id[incident_id].naive_owner == outcome.truth.owner
+    owner_rows = [(o, n, ok, naive) for o, (n, ok, naive) in sorted(per_owner.items())]
+
+    severity_rows = [
+        (sev, sum(1 for i in result.incidents if sev in ("all", i.severity)),
+         f"{metrics.mttd_hours[sev]:.1f}" if sev in metrics.mttd_hours else "",
+         f"{metrics.mttr_hours[sev]:.1f}" if sev in metrics.mttr_hours else "")
+        for sev in ("SEV1", "SEV2", "SEV3", "all")
+    ]  # fmt: skip
+
+    run_rows = [
+        (r.run_id.removeprefix("run:"), ", ".join(r.selected_sources), r.checks_run, r.failures,
+         r.opened, r.appended)
+        for r in result.runs
+    ]  # fmt: skip
+    run_days = len(result.runs)
+
+    check_types = Counter(event.check_type for event, _ in result.events)
+    kinds = ", ".join(f"{n} {kind}" for kind, n in sorted(check_types.items()))
+
+    verdict = (
+        "Every injected fault maps to exactly one incident, and every incident to a fault."
+        if metrics.one_incident_per_fault
+        else "**Not every fault maps to exactly one incident.** See the table below."
+    )
+    lines = [
+        "# Incident management report",
+        "",
+        f"A {scenario_days}-day scenario with {len(metrics.faults)} injected faults. dbt ran on "
+        f"{run_days} of the {scenario_days} nights (the nights a fault was active), each time on "
+        "the part of the graph the faulted sources reach. Generated by `make incidents`; every "
+        "number below comes from that run.",
+        "",
+        verdict,
+        "",
+        "## Noise: raw alerts vs incidents",
+        "",
+        table(
+            ["Measure", "Count"],
+            [
+                ("Failing checks (raw alerts)", metrics.raw_alerts),
+                ("Incidents opened", metrics.incidents),
+                ("Pages sent (one per incident)", metrics.pages),
+                (
+                    "Updates on open incidents (not pages)",
+                    sum(1 for n in result.notifications if n.kind == "update"),
+                ),
+                ("Pages avoided by grouping", f"{reduction:.0%}"),
+            ],  # fmt: skip
+            right=[1],
+        ),
+        "",
+        f"Failing checks by kind: {kinds}.",
+        "",
+        "## Faults and the incidents they caused",
+        "",
+        table(
+            [
+                "Fault",
+                "Type",
+                "Target",
+                "Injected",
+                "Incident",
+                "Root",
+                "Severity",
+                "MTTD (h)",
+                "Paged",
+            ],
+            fault_rows,
+            right=[7],
+        ),  # fmt: skip
+        "",
+        "## Routing accuracy",
+        "",
+        "Graded against the owner of the faulted source. The rule pages the source owner when the "
+        "root is a staging model; the naive rule pages whoever owns the root node.",
+        "",
+        table(
+            ["Rule", "Right person", "Right team"],
+            [
+                (
+                    "Staging roots page the source owner",
+                    pct(metrics.routing_person),
+                    pct(metrics.routing_team),
+                ),
+                ("Page the root node's owner", pct(metrics.naive_person), pct(metrics.naive_team)),
+            ],  # fmt: skip
+        ),
+        "",
+        table(
+            ["Faulted source owner", "Incidents", "Routed right", "Naive right"],
+            owner_rows,
+            right=[1, 2, 3],
+        ),  # fmt: skip
+        "",
+        "## Time to detect and to resolve",
+        "",
+        "MTTD is detected minus injected; detection happens at the next 02:00 run at the "
+        "earliest. MTTR is resolved minus detected.",
+        "",
+        table(
+            ["Severity", "Incidents", "Mean MTTD (h)", "Mean MTTR (h)"],
+            severity_rows,
+            right=[1, 2, 3],
+        ),  # fmt: skip
+        "",
+        "## Alerts per person",
+        "",
+        f"Before grouping, every failing check pages the owner of the node it is about. After, "
+        f"each incident pages once. Per week is over {metrics.weeks:.0f} weeks.",
+        "",
+        table(
+            ["Person", "Before", "Before per week", "After", "After per week"],
+            load_rows,
+            right=[1, 2, 3, 4],
+        ),  # fmt: skip
+        "",
+        "## Incidents",
+        "",
+        table(
+            [
+                "Incident",
+                "Root",
+                "Sev",
+                "Score",
+                "Owner",
+                "Opened",
+                "Acknowledged",
+                "Resolved",
+                "MTTR (h)",
+                "Runs",
+                "Checks",
+                "Downstream",
+                "Skipped",
+                "Same root before",
+            ],
+            incident_rows,
+            right=[3, 8, 9, 10, 11, 12],
+        ),  # fmt: skip
+        "",
+        "## Runs",
+        "",
+        table(
+            ["Run", "Faulted sources", "Checks run", "Failing", "Opened", "Appended"],
+            run_rows,
+            right=[2, 3, 4, 5],
+        ),  # fmt: skip
+        "",
+    ]
+    if metrics.unmatched_incidents:
+        lines += ["Incidents with no matching fault: " + ", ".join(metrics.unmatched_incidents), ""]
+    return "\n".join(lines)
+
+
+def postmortem(incident: Incident, metrics: IncidentMetrics, events: Sequence[str]) -> str:
+    truth = metrics.fault_of(incident.incident_id)
+    fault = next((f for f in CATALOGUE if truth and f.fault_id == truth.fault_id), None)
+    exposures = [c for c in incident.consumers if c.resource_type == "exposure"]
+    by_tier = Counter(c.tier for c in incident.consumers)
+    tiers = ", ".join(f"{n} {tier}" for tier, n in sorted(by_tier.items()))
+    timeline = [
+        (when(truth.injected_at) if truth else "", "Fault enters the raw data"),
+        (when(incident.opened_at), f"Detected by the 02:00 run; {incident.owner} paged"),
+        (when(incident.acknowledged_at), f"Acknowledged by {incident.owner}"),
+        (when(incident.resolved_at), "Resolved; raw data repaired"),
+    ]
+    lines = [
+        f"# Postmortem: {incident.incident_id} ({incident.severity})",
+        "",
+        "_Generated from the incident record. The sections in italics are for the owner to "
+        "complete._",
+        "",
+        "## Summary",
+        "",
+        f"- Root: `{incident.root}`",
+        f"- Severity: {incident.severity} (score {incident.score}, root tier {incident.root_tier})",
+        f"- Owner: {incident.owner} ({incident.team}), routed via `{incident.routed_via}`",
+        f"- Time to detect: {hours(incident.opened_at - truth.injected_at) if truth else '?'} h; "
+        f"time to resolve: {hours(incident.resolved_at - incident.opened_at)} h",
+        "",
+        "## Impact",
+        "",
+        f"{len(incident.consumers)} downstream models and exposures ({tiers or 'none'}), "
+        f"{len(incident.skipped)} models skipped.",
+        "",
+        *[f"- `{c.unique_id}` ({c.tier})" for c in exposures],
+        "",
+        "## Timeline",
+        "",
+        table(["Simulated time", "Event"], timeline),
+        "",
+        "## Root cause",
+        "",
+        (
+            f"{FAULT_TYPE_LABEL.get(truth.fault_type, truth.fault_type).capitalize()} "
+            f"in `{truth.target}`"
+            + (f", column `{fault.column}`" if fault and fault.column else "")
+            + "."
+            if truth
+            else "_Unknown: no injected fault matches this incident._"
+        ),  # fmt: skip
+        "",
+        "## Detection",
+        "",
+        f"{incident.checks} failing checks across {len(incident.run_ids)} run(s):",
+        "",
+        *[f"- `{check}`" for check in events],
+        "",
+        "## What went well",
+        "",
+        "_To be completed._",
+        "",
+        "## What went wrong",
+        "",
+        "_To be completed._",
+        "",
+        "## Action items",
+        "",
+        "_To be completed: owner, action, due date._",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def write_reports(
+    reports_dir: Path, result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int
+) -> tuple[Path, list[Path]]:
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report_path = reports_dir / "incidents.md"
+    report_path.write_text(render(result, metrics, scenario_days), encoding="utf-8", newline="\n")
+    postmortems_dir = reports_dir / "postmortems"
+    postmortems_dir.mkdir(exist_ok=True)
+    for stale in postmortems_dir.glob("INC-*.md"):
+        stale.unlink()
+    written = []
+    for incident in result.incidents:
+        if incident.severity != "SEV1":
+            continue
+        checks = sorted({e.check_id for e, i in result.events if i == incident.incident_id})
+        path = postmortems_dir / f"{incident.incident_id}.md"
+        path.write_text(postmortem(incident, metrics, checks), encoding="utf-8", newline="\n")
+        written.append(path)
+    return report_path, written

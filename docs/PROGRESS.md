@@ -2,43 +2,42 @@
 
 Handoff file between sessions. Read this first, then `docs/SPEC.md`.
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 ## Current phase
 
-Phase 2: Cost attribution. Implemented, all acceptance criteria verified, including at full scale.
-Branch: `phase-2-cost-attribution` (off `main` at `6e5ea33`). Not committed yet, awaiting owner review.
+Phase 3: Incident management. Implemented, awaiting review.
+Branch: `phase-3-incident-management` (off `main` at `e6cdeda`).
 
 ## Done
 
-Phase 2 acceptance, run at scale 1.0 over the 13-week window:
-
-| Check | Result |
-|---|---|
-| `make simulate` | 91 days, 4 real builds and 87 replayed; 24,934 dbt, 10,192 dashboard and 687 ad hoc queries; 280 s and 290 s on two runs |
-| `make cost` | 35,813 queries priced; scan $3.35, compute $296.02; 20 s and 24 s |
-| Determinism | two full runs of `make simulate && make cost`: `cost.md` byte-identical (the separate accuracy note differed by 0.1%, as designed) |
-| Unused tables | exactly the 12 abandoned models at both 30 and 90 days; nothing with a live dashboard downstream |
-| SQL parsing | every model build's parsed reads match dbt lineage (118 of 118); all 156 tests parse |
-| Pricing and parsing unit tests | both pricing models; CTEs, subqueries, `CREATE TABLE AS`, quoted identifiers and more |
-| Phase 1 re-check | two clean `make seed && make build` runs: all 127 tables identical |
-| `make seed` / `make build` | 8 s / 44 s from a clean state (3,507,865 raw rows) |
-
-Time budget: seed, build, simulate and cost together take about 6 minutes of the 10-minute `make demo` budget. `make simulate` re-seeds and rebuilds on its first simulated day, so the separate `seed` and `build` steps in `make demo` (about 52 s) are redundant and could be dropped when Phase 5 finalises the demo.
-
-Built:
-
-- `simulation/workload.py`: 13-week simulated workload. Raw data arrives daily (with in-place changes to products and customers), dbt runs for real every 28 days and is replayed on the other days, 12 dashboards refresh every 12 or 24 hours, 5 people run ad hoc SQL. `platform-ops simulation run` / `make simulate`.
-- `cost/`: `sql_parse` (sqlglot), `sizes` (logical column sizes), `growth` (append-only observation), `collect` (`QueryCollector`, `LoggedConnection`, dbt run reader), `estimate` (bytes and modelled time, ASOF-joined to size snapshots), `pricing` (`PricingModel`, `ScanPricing`, `ComputePricing`), `attribution`, `recommend`, `report`, `run`. `platform-ops cost report` / `make cost`.
-- Outputs: `ops.query_log`, `ops.query_tables`, `ops.table_sizes`, `ops.source_growth`, `ops.query_estimates`, `ops.query_costs`, `ops.query_attribution`, `ops.cost_by_team`, `ops.cost_report_*`, `ops.cost_proxy_accuracy`; `reports/cost.md` and `reports/cost_proxy_accuracy.md`.
-- Tests: SQL parsing edge cases (CTEs, subqueries, CTAS, quoted identifiers, `__dbt_tmp`, `SELECT *`, query comment), both pricing models, sizes, growth, estimate, attribution, recommendations, collection, workload; end-to-end determinism and acceptance at scale 0.01.
-- ADRs 0005 (bytes and modelled time), 0006 (pricing and attribution), 0007 (simulated workload); `cost/README.md`.
+- Phase 2 merged (PR #4). Reference numbers at scale 1.0: `make simulate` 280 to 290 s, `make cost` 20 to 24 s, byte-identical `cost.md` across two runs, unused list exactly the 12 abandoned models.
+- Phase 3 implemented: fault injector with repair (`simulation/faults.py`), and `incidents/` with ingestion, grouping, severity, routing, notifier, lifecycle, the 21-day scenario, metrics and report. `platform-ops incidents run` is live; ADR 0008 and `src/platform_ops/incidents/README.md` written.
+- Phase 3 reference numbers at scale 1.0: `make incidents` 2 min 22 s to 2 min 56 s over three runs, byte-identical `incidents.md` and postmortems across two runs. 8 faults, 18 failing checks, 8 incidents (exactly one per fault), 8 pages. Routing right person 8 of 8 (naive rule 3 of 8). dbt ran on 8 of 21 nights, 19 invocations.
 
 ## In progress
 
-Nothing. Waiting for review.
+Nothing. Phase 3 is waiting for review.
 
 ## Decisions made
+
+### Phase 3 (owner, at planning)
+
+1. **Run only what faults touch.** 3-week scenario, 8 faults covering all 6 types. dbt runs for real only on days a fault is active. Green days run nothing, because the baseline is all green; an e2e test proves a targeted run finds the same failures as a full one. (Selector changed during implementation, see 20.)
+2. **Staging roots page the source owner**, because staging only renames and casts. Routing accuracy is reported per person and per team.
+3. **`make demo` drops its redundant `seed` and `build` steps** (about 52 s); `make simulate` already does both.
+
+Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a failed test (`Fail` is in `task/build.py` `MARK_DEPENDENT_ERRORS_STATUSES`), which would hide the alert storm. `dbt run` then `dbt test` skip only on `Error`, so the scenario uses those. Severity inputs (tier-weighted downstream consumers): customers 213, orders 189, order_items and products 160, campaigns and web_sessions 76, support_tickets 34, marketing_spend 20, payments 19.
+
+### Phase 3, made during implementation
+
+17. **A test that reads two models is its own subject.** A relationships test is attached to one model but depends on two. Treating it as its own node below both keeps a volume drop in orders from opening a second incident on order items.
+18. **Open questions resolved with the planned defaults**: a recurrence after resolution opens a new incident linked to the old by root; appends send an update, not a page; severity thresholds stay in config.
+19. **Repairs regenerate data from the seed**, no backup tables. The generator is deterministic, so "put back what the generator says" is exact; a round-trip test per fault proves every table matches a clean load.
+20. **Selection is `@source:raw.<table>`, not `source:raw.<table>+`.** Every model is a table, so downstream-only runs compared fresh payments with a stale `stg_orders` and opened incidents nobody caused. `@` also rebuilds the parents of everything selected. Targeted equals full on all four fault nights.
+21. **One parse, reused by every dbt invocation**, including freshness: dbt resolves `simulated_now` at run time, so freshness costs 0.6 s instead of 5.2 s.
+22. **Faults land in pairs** on days 2, 5, 9 and 14, on different tables. With the freshness change this took `make incidents` from 3 min 13 s to 2 min 22 to 2 min 56 s.
+23. **`dbt run` and `dbt test` are separate invocations with console logging off** in the scenario. Failing tests are expected; dbt's log file keeps the detail.
 
 ### Phase 2 (owner)
 
@@ -75,12 +74,15 @@ Nothing. Waiting for review.
 - Replayed days price model reads on model sizes up to 4 weeks old, and dashboards read marts up to 4 weeks stale. Raw data is always current. Acceptable for quarterly cost attribution (ADR 0007).
 - The estimate ignores row-group pruning, so filtered queries are overestimated: ad hoc queries by about 2.3 times at scale 1.0, measured per run in `reports/cost_proxy_accuracy.md`. The accuracy note only covers queries that returned less than one page (500 rows), because DuckDB has no final row count for a result cut short, so dashboard accuracy there is measured on small rollup tables only.
 - Filters written against a CTE or subquery column outside it are not traced to the base table for hotspot detection. The workload and dbt do not write filters that way.
-- `make demo` still fails by design until Phases 3 and 4 replace their placeholder commands.
+- `make demo` still fails by design until Phase 4 replaces its placeholder command.
+- `make incidents` at scale 1.0 ranged from 2 min 22 s to 2 min 56 s on this laptop, so it sometimes goes over the 2.5-minute target from the plan. With Phase 2 at about 5.3 min, the demo has roughly 1.5 to 2 min left for Phase 4 and setup.
+- The alert storm is modest: 18 failing checks for 8 faults. Most downstream tests check keys and row counts that a few bad values do not break. The volume drop is the one fault with a real cascade (5 checks).
+- Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0008).
 
 ## Open questions for the owner
 
-None blocking.
+None open. The three Phase 3 questions were settled with their planned defaults (decision 18).
 
 ## Next step
 
-Owner reviews and merges `phase-2-cost-attribution`, and confirms CI is green on the PR. Then plan Phase 3 (incident management) on `phase-3-incident-management` off `main`. Phase 3 needs its own dbt runs; with about 6 of the 10 demo minutes already used, its multi-week scenario should reuse the replay approach from ADR 0007 rather than build for real every day.
+Owner reviews Phase 3 and opens the PR. Then plan Phase 4 (migration reconciliation) on a new branch from `main`, keeping its `make demo` share within about 1.5 minutes.
