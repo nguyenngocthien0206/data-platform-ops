@@ -230,8 +230,27 @@ def cost_report() -> None:
 
 @incidents_app.command("run")
 def incidents_run() -> None:
-    """Inject faults, detect and group incidents, write metrics."""
-    _not_implemented("incidents run", 3)
+    """Inject faults, detect and group incidents, write metrics.
+
+    Starts from a fresh seed every time, so two runs produce the same report.
+    """
+    from platform_ops.common.dbt_invoke import DbtError
+    from platform_ops.incidents.run import run_incidents
+    from platform_ops.incidents.scenario import ScenarioError
+
+    settings, _ = _start("incidents")
+    try:
+        summary, _, _ = run_incidents(settings)
+    except (DbtError, ScenarioError) as error:
+        _fail(str(error))
+    typer.echo(
+        f"{summary.faults} faults, {summary.raw_alerts} failing checks, "
+        f"{summary.incidents} incidents, {summary.pages} pages; dbt ran on {summary.runs} "
+        f"nights ({summary.dbt_invocations} invocations); wrote {summary.report_path} and "
+        f"{len(summary.postmortems)} postmortems"
+    )
+    if not summary.one_incident_per_fault:
+        _fail("not every injected fault maps to exactly one incident; see the report")
 
 
 @reconcile_app.command("run")
