@@ -29,6 +29,8 @@ customers from the first ``u`` of theirs, because both map to the same instant.
 from __future__ import annotations
 
 import math
+import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -254,39 +256,82 @@ class _Window:
         return upper if self.after is None else f"{column} > {_ts(self.after)} AND {upper}"
 
 
+_BUILDERS: dict[str, Callable[[RawDataPlan, _Sql, _Window], str]] = {}
+
+
+def generated_rows(plan: RawDataPlan, table: str, until: datetime) -> str:
+    """SQL for every row of ``table`` the generator produces with ``_loaded_at <= until``.
+
+    This is the ground truth of what the table should hold. Fault repair uses it
+    to put back rows or values a fault removed.
+    """
+    window = _Window(None, until)
+    select = _BUILDERS[table](plan, _Sql(plan.seed), window)
+    return f"SELECT * FROM ({select}) WHERE {window.loaded()}"
+
+
 def load_window(
     connection: duckdb.DuckDBPyConnection,
     plan: RawDataPlan,
     after: datetime | None,
     until: datetime,
+    tables: Sequence[str] | None = None,
 ) -> dict[str, int]:
     """Insert every row whose ``_loaded_at`` is in ``(after, until]``.
+
+    ``tables`` limits the load to some tables, which is how a stale source is
+    simulated. Rows are inserted by column name into whatever columns the table
+    has now, so loading keeps working while a schema-change fault has dropped
+    or renamed a column, the way an upstream feed would.
 
     Returns the number of rows inserted per table.
     """
     bounds = _Window(after, until)
     window = bounds.loaded()
-    builders = {
-        "customers": _customers_sql,
-        "products": _products_sql,
-        "orders": _orders_sql,
-        "order_items": _order_items_sql,
-        "payments": _payments_sql,
-        "web_sessions": _sessions_sql,
-        "marketing_campaigns": _campaigns_sql,
-        "marketing_spend": _spend_sql,
-        "support_tickets": _tickets_sql,
-    }
     inserted: dict[str, int] = {}
     for table in TABLES:
-        select = builders[table](plan, _Sql(plan.seed), bounds)
+        if tables is not None and table not in tables:
+            continue
+        select = _BUILDERS[table](plan, _Sql(plan.seed), bounds)
+        columns = ", ".join(_shared_columns(connection, table))
         before = _count(connection, table)
         connection.execute(
-            f"INSERT INTO {RAW_SCHEMA}.{table} "
-            f"SELECT * FROM ({select}) WHERE {window} ORDER BY {_PRIMARY_KEYS[table]}"
+            f"INSERT INTO {RAW_SCHEMA}.{table} ({columns}) "
+            f"SELECT {columns} FROM ({select}) WHERE {window} ORDER BY {_PRIMARY_KEYS[table]}"
         )
         inserted[table] = _count(connection, table) - before
     return inserted
+
+
+def _ddl_columns(table: str) -> list[tuple[str, str]]:
+    """(name, type) pairs from ``_DDL``, splitting on commas outside parentheses."""
+    parts = re.split(r",(?![^(]*\))", _DDL[table])
+    return [(name, data_type.strip()) for name, _, data_type in
+            (part.strip().partition(" ") for part in parts)]  # fmt: skip
+
+
+def generated_columns(table: str) -> list[str]:
+    """The columns the generator produces for ``table``, in table order."""
+    return [name for name, _ in _ddl_columns(table)]
+
+
+def column_type(table: str, column: str) -> str:
+    """The generator's type for ``table.column``, used to re-add a dropped column."""
+    for name, data_type in _ddl_columns(table):
+        if name == column:
+            return data_type
+    raise KeyError(f"{table}.{column}")
+
+
+def _shared_columns(connection: duckdb.DuckDBPyConnection, table: str) -> list[str]:
+    present = {
+        str(r[0])
+        for r in connection.execute(
+            "SELECT column_name FROM duckdb_columns() WHERE schema_name = ? AND table_name = ?",
+            [RAW_SCHEMA, table],
+        ).fetchall()
+    }
+    return [c for c in generated_columns(table) if c in present]
 
 
 def seed(connection: duckdb.DuckDBPyConnection, settings: Settings) -> dict[str, int]:
@@ -692,3 +737,18 @@ def _tickets_sql(plan: RawDataPlan, s: _Sql, w: _Window) -> str:
             )
         )
     """
+
+
+_BUILDERS.update(
+    {
+        "customers": _customers_sql,
+        "products": _products_sql,
+        "orders": _orders_sql,
+        "order_items": _order_items_sql,
+        "payments": _payments_sql,
+        "web_sessions": _sessions_sql,
+        "marketing_campaigns": _campaigns_sql,
+        "marketing_spend": _spend_sql,
+        "support_tickets": _tickets_sql,
+    }
+)
