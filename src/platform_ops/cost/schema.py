@@ -24,6 +24,9 @@ COLLECTION_TABLES: dict[str, str] = {
         replayed BOOLEAN NOT NULL,
         wallclock_ms DOUBLE,
         rows_scanned BIGINT,
+        -- Bytes the vendor measured (BigQuery total_bytes_billed, Snowflake
+        -- BYTES_SCANNED). NULL for the local collectors, which are estimated.
+        bytes_scanned BIGINT,
         writes VARCHAR,
         select_star BOOLEAN NOT NULL,
         columns_resolved BOOLEAN NOT NULL,
