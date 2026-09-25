@@ -2,12 +2,12 @@
 
 Handoff file between sessions. Read this first, then `docs/SPEC.md`.
 
-Last updated: 2026-09-24
+Last updated: 2026-09-25
 
 ## Current phase
 
-Phase 4: Migration reconciliation. Implemented, awaiting review.
-Branch: `phase-4-migration-reconciliation` (off `main` at `efacb72`).
+Phase 5: Dashboards, documentation, polish. Planned and approved, not yet implemented.
+Branch: `phase-5-dashboards-docs` (off `main` at `a71f2e1`).
 
 ## Done
 
@@ -17,13 +17,22 @@ Branch: `phase-4-migration-reconciliation` (off `main` at `efacb72`).
 
 - Phase 3 merged (PR #5).
 - Phase 4 implemented: `reconcile/` (schema, canonical rules and renderers, connectors for Postgres, SQL Server and DuckDB, legacy generator, migration job with four defects, segmented diff, classification, metrics, sign-off report) and `simulation/migration_faults.py`. `platform-ops reconcile run` is live, so every Makefile target is implemented. ADR 0009 and `src/platform_ops/reconcile/README.md` written.
+- Phase 4 merged (PR #6).
 - Phase 4 reference numbers at scale 1.0: `make reconcile` about 52 s, byte-identical `reconciliation.md` across two runs. As delivered: 199,465 planted discrepancies, 100% recall, precision and classification accuracy; not signed off. Job fixed: 44 planted, all found; the diff moves 0.6% to 9.6% of the rows a naive comparison would. `make demo` from a clean state: 6 min 54 s.
 
 ## In progress
 
-Nothing. Phase 4 is waiting for review.
+Phase 5 plan approved; waiting for the go-ahead to implement.
 
 ## Decisions made
+
+### Phase 5 (owner, at planning)
+
+1. **Dashboard tests run on a real warehouse at scale 0.01**: the ops-only data layer is tested on its own, and an AppTest smoke test renders every page against a warehouse built by all four modules (about 3 more minutes of `make test`).
+2. **`make readme-check`** verifies that every number in the README "Results" sections appears in `reports/*.md`. READMEs stay hand-written; the check runs after `make demo`, not in CI.
+3. **Vendor collector fixtures are generated from the simulated workload**: a deterministic script maps a sample of `ops.query_log` into BigQuery `INFORMATION_SCHEMA.JOBS` and Snowflake `QUERY_HISTORY` columns; the files are committed.
+
+Planned defaults: no lineage graph on the Overview page; `make demo` does not run `readme-check`; `QueryRecord` gains an optional `bytes_scanned` for vendor-measured bytes; Streamlit usage stats off (offline after setup).
 
 ### Phase 4 (owner)
 
@@ -106,4 +115,4 @@ None open.
 
 ## Next step
 
-Owner reviews Phase 4 and opens the PR. Then plan Phase 5 (dashboards, root README, CI, cloud cost collectors) on a new branch from `main`.
+Implement Phase 5 on `phase-5-dashboards-docs`, in this order: dashboard data layer; Streamlit pages and `platform-ops dashboard`; page smoke tests on a real warehouse; optional vendor bytes on `QueryRecord`; BigQuery and Snowflake collectors with generated fixtures; `make readme-check`; ADR 0010 (local-first design); root README with results from a clean `make demo`; module README updates.
