@@ -12,6 +12,7 @@ report success.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -51,16 +52,6 @@ PARSE_OPTION = typer.Option(
     "--parse",
     help="Run `dbt parse` first, so no prior build or data is needed (the CI path).",
 )
-
-
-def _not_implemented(what: str, phase: int) -> None:
-    """Fail loudly for a command whose phase has not been built yet."""
-    typer.secho(
-        f"{what} is not implemented until phase {phase}. See docs/SPEC.md.",
-        fg=typer.colors.YELLOW,
-        err=True,
-    )
-    raise typer.Exit(code=1)
 
 
 def _fail(message: str) -> None:
@@ -141,10 +132,64 @@ def build() -> None:
     typer.echo(f"dbt build succeeded; lineage refreshed with {edges:,} edges")
 
 
+PORT_OPTION = typer.Option(8501, "--port", help="Port to serve the dashboards on.")
+HEADLESS_OPTION = typer.Option(False, "--headless", help="Do not open a browser.")
+DASHBOARD_START_SECONDS = 60
+
+
+def _wait_until_healthy(url: str, process: Any, timeout: float) -> bool:
+    """Poll Streamlit's health endpoint until it answers or the server exits."""
+    import time
+    import urllib.request
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and process.poll() is None:
+        try:
+            with urllib.request.urlopen(f"{url}/_stcore/health", timeout=2) as response:  # noqa: S310
+                if response.read().decode().strip() == "ok":
+                    return True
+        except OSError:
+            pass
+        time.sleep(0.5)
+    return False
+
+
 @app.command()
-def dashboard() -> None:
-    """Launch the Streamlit dashboards."""
-    _not_implemented("dashboard", 5)
+def dashboard(port: int = PORT_OPTION, headless: bool = HEADLESS_OPTION) -> None:
+    """Launch the Streamlit dashboards (read-only over the ops schema)."""
+    import os
+    import subprocess
+    import sys
+    import webbrowser
+
+    from platform_ops.common.config import CONFIG_PATH_ENV_VAR
+
+    settings, _ = _start("dashboard")
+    app_path = settings.root / "dashboards" / "app.py"
+    if not app_path.is_file():
+        _fail(f"no dashboards at {app_path}")
+    env = dict(os.environ)
+    env.setdefault(CONFIG_PATH_ENV_VAR, str(settings.root / "config" / "settings.yaml"))
+    # Streamlit always runs headless: otherwise its first run on a machine stops
+    # at an interactive "Email:" prompt. The browser is opened from here instead.
+    command = [
+        sys.executable, "-m", "streamlit", "run", str(app_path),
+        "--server.port", str(port),
+        "--server.headless", "true",
+        "--browser.gatherUsageStats", "false",
+    ]  # fmt: skip
+    url = f"http://localhost:{port}"
+    typer.echo(f"serving the dashboards on {url} (Ctrl+C to stop)")
+    # Run from the repo root so Streamlit also reads .streamlit/config.toml.
+    process = subprocess.Popen(command, cwd=settings.root, env=env)  # noqa: S603
+    try:
+        if not headless and _wait_until_healthy(url, process, DASHBOARD_START_SECONDS):
+            webbrowser.open(url)
+        code = process.wait()
+    except KeyboardInterrupt:
+        process.terminate()
+        code = process.wait()
+    raise typer.Exit(code)
 
 
 @metadata_app.command("check")

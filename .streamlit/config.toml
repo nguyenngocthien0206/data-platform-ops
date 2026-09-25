@@ -1,0 +1,10 @@
+# Streamlit settings for `make dashboard`, read from the repo root.
+# The toolkit runs offline after setup, so Streamlit must not phone home
+# (the same reason dbt's anonymous usage stats are off).
+
+[browser]
+gatherUsageStats = false
+
+[server]
+# Local only: the dashboards read the warehouse on this machine.
+address = "localhost"
