@@ -31,7 +31,9 @@ Nothing but `metrics.py` reads the ground truth. The scenario finds its incident
 
 ## Results at scale 1.0
 
-From two actual runs of `platform-ops incidents run` at scale 1.0, which wrote byte-identical `incidents.md` files and postmortems. Across three timed runs the command took between 2 minutes 22 seconds and 2 minutes 56 seconds. dbt ran on 8 of the 21 nights, 19 invocations in all.
+From two actual runs of `platform-ops incidents run` at scale 1.0, which wrote byte-identical `incidents.md` files and postmortems. dbt ran on 8 of the 21 nights.
+
+Across three timed runs the command took between 2 minutes 22 seconds and 2 minutes 56 seconds, with 19 dbt invocations each. <!-- readme-check: runtime -->
 
 | Measure | Count |
 |---|---:|
@@ -65,7 +67,7 @@ What the numbers say:
 - **Grouping cut 18 alerts to 8 pages.** The storm is smaller than the word suggests, because most downstream tests check keys and row counts that a few bad values do not break. The volume drop in `raw.orders` is the clearest case: five failing checks across staging, sales and finance models, one incident.
 - **Routing matters more than grouping here.** Before grouping, 13 of 18 alerts went to marco, who owns the staging models. Only the 3 about payments were about a source marco owns. The naive rule (page the root's owner) gets the team right every time and the person right only 3 times in 8. Paging the source owner gets all 8 right and moves the load to priya, who owns six of the eight faulted sources.
 - **Ownership concentration shows up as time.** Every incident pages someone on the platform team, as ADR 0002 predicted, and an owner who already has an incident open is modelled as slower on the next one. The support tickets incident was opened in the same run as the SEV1 on orders, for the same owner, and was the slowest SEV2 to resolve at 36.9 hours; the other four took 11.2 to 24.6. The random spread in response times plays a part too, so one run shows the direction, not the size, of the effect.
-- **Detection is bounded by the schedule.** Faults land at 10:00 and dbt runs at 02:00, so the fastest possible MTTD is 16 hours, and seven of eight faults hit it. The stale source took 40, because freshness only errors after 48 hours without data.
+- **Detection is bounded by the schedule.** Faults land at 10:00 and dbt runs at 02:00, so the fastest possible MTTD is 16 hours, and seven of eight faults hit it. The stale source took 40.0 hours, because freshness only errors after two days without data.
 
 ## Running it
 
