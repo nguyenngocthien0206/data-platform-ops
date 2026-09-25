@@ -86,6 +86,21 @@ def test_create_table_as_writes_the_target_and_reads_the_source() -> None:
     assert cols(parsed, "marts.orders") == {"order_date"}
 
 
+def test_a_query_comment_after_the_final_semicolon_is_not_a_second_statement() -> None:
+    # What a warehouse's query history records for a dbt model: the compiled SQL,
+    # which ends with `;`, then dbt's appended query comment.
+    sql = (
+        'create table "warehouse"."marts"."daily__dbt_tmp" as '
+        "(select order_date from marts.orders);\n"
+        '/* {"app": "platform-ops", "unique_id": "model.company.daily"} */'
+    )
+    parsed = parse_query(sql, CATALOG)
+    assert parsed.ok, parsed.error
+    assert parsed.writes == "marts.daily"
+    assert parsed.node_id == "model.company.daily"
+    assert not parse_query("select 1; select 2", CATALOG).ok, "two real statements still fail"
+
+
 def test_insert_select_writes_the_target() -> None:
     parsed = parse_query("insert into marts.customers select * from marts.customers", CATALOG)
     assert parsed.writes == "marts.customers"

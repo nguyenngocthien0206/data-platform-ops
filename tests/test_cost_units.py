@@ -90,7 +90,7 @@ def test_growth_tells_appends_from_in_place_changes(db: duckdb.DuckDBPyConnectio
 def _log(db: duckdb.DuckDBPyConnection, query_id: str, at: datetime, resolved: bool = True) -> None:
     db.execute(
         "INSERT INTO ops.query_log VALUES (?, 'r', 'u', 'adhoc', NULL, ?, 'sql', false, "
-        "NULL, NULL, NULL, false, ?, NULL)",
+        "NULL, NULL, NULL, NULL, false, ?, NULL)",
         [query_id, at, resolved],
     )
 
@@ -208,7 +208,7 @@ def _costs(db: duckdb.DuckDBPyConnection, rows: list[tuple[str, str, str]]) -> N
 def _write(db: duckdb.DuckDBPyConnection, query_id: str, relation: str, at: datetime) -> None:
     db.execute(
         "INSERT INTO ops.query_log VALUES (?, 'r', 'dbt', 'dbt', NULL, ?, 'sql', false, "
-        "NULL, NULL, ?, false, true, NULL)",
+        "NULL, NULL, NULL, ?, false, true, NULL)",
         [query_id, at, relation],
     )
 
@@ -239,7 +239,7 @@ def test_unused_tables_respect_lineage_and_lookback(db: duckdb.DuckDBPyConnectio
     ]:
         db.execute(
             "INSERT INTO ops.query_log VALUES (?, 'r', 'u', 'dashboard', NULL, ?, 'sql', false, "
-            "NULL, NULL, NULL, false, true, NULL)",
+            "NULL, NULL, NULL, NULL, false, true, NULL)",
             [query_id, at],
         )
         db.execute("INSERT INTO ops.query_tables VALUES (?, ?, ['x'], [])", [query_id, relation])

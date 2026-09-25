@@ -30,27 +30,40 @@ Collection, pricing and attribution are separate steps, so a real vendor's query
 
 ## Results at scale 1.0
 
-From two actual runs of `make simulate && make cost` over the 13-week window. `make cost` took 20 and 24 seconds, priced 35,813 queries, and wrote byte-identical `cost.md` files both times.
+From actual runs of `make simulate && make cost` over the 91-day window: 24,934 dbt queries, 10,192 dashboard queries and 687 ad hoc queries. Two runs wrote byte-identical `cost.md` files.
+
+`make cost` took 20 and 24 seconds in the Phase 2 reference runs. <!-- readme-check: runtime -->
 
 | Team | Scan pricing | Compute pricing |
 |---|---:|---:|
-| finance | $0.66 | $82.16 |
-| sales | $0.72 | $76.33 |
-| product | $0.51 | $58.00 |
-| marketing | $0.63 | $52.97 |
-| platform | $0.83 | $26.56 |
+| finance | $0.6610 | $82.16 |
+| sales | $0.7204 | $76.33 |
+| product | $0.5138 | $58.00 |
+| marketing | $0.6250 | $52.97 |
+| platform | $0.8314 | $26.56 |
 | **total** | **$3.35** | **$296.02** |
 
 | Workload | Scan pricing | Compute pricing | Idle share of billed time |
 |---|---:|---:|---:|
 | dbt builds and tests | $2.55 | $18.01 | 84% |
-| dashboards | $0.65 | $167.90 | 99% |
-| ad hoc | $0.15 | $110.12 | 100% |
+| dashboards | $0.6514 | $167.90 | 99% |
+| ad hoc | $0.1459 | $110.12 | 100% |
 
 What the numbers say:
 
 - **The platform team is the cheapest team under compute pricing and the most expensive under scan pricing.** It builds the shared layers, which scan the most bytes, but it owns no dashboards, so none of the BI warehouse's idle time, the biggest cost under compute pricing, lands on it.
-- **Idle warehouses, not dead tables, are where the money goes.** Every dashboard refresh wakes the BI warehouse for seconds of work and five minutes of idling: $167.90 against $0.65 for the same queries billed on demand. The 12 abandoned models are exactly the unused list at both 30 and 90 days, and together would save about $0.35 a month under compute pricing and $0.06 under scan pricing.
+- **Idle warehouses, not dead tables, are where the money goes.** Every dashboard refresh wakes the BI warehouse for seconds of work and five minutes of idling: $167.90 against $0.6514 for the same queries billed on demand. The 12 abandoned models are exactly the unused list at both 30 and 90 days, and together would save well under a dollar a month under either model.
 - **Six full-scan hotspots.** The largest is `marts.finance_fct_payments_reconciliation`, filtered by `ordered_at` 182 times by the cash reconciliation dashboard, which scanned 9.64 GB to read a 0.07 GB table again and again.
 - **Four incremental candidates**, all staging models on append-only sources: `stg_order_items`, `stg_web_sessions`, `stg_payments` and `stg_orders`. Everything built on `raw.products` or `raw.customers` is ruled out, including the most expensive model, `sales_fct_order_items`.
-- **The bytes estimate is conservative.** For ad hoc queries that ran to completion it assumed 234 million rows, about 2.3 times what DuckDB actually scanned, because it bills whole columns while DuckDB skips row groups that a filter rules out. Dashboard queries that returned less than one page, all on small rollup tables, matched exactly.
+- **The bytes estimate is conservative.** For ad hoc queries that ran to completion it assumed more than twice the rows DuckDB actually scanned, because it bills whole columns while DuckDB skips row groups that a filter rules out. Dashboard queries that returned less than one page, all on small rollup tables, matched exactly.
+
+## On a real warehouse
+
+Collection is the only step that knows where queries came from, so moving from the simulated company to a real warehouse means swapping the collector. `cost/collectors/` has two, both implementing the same `QueryCollector` protocol as the local ones:
+
+- `BigQueryJobsCollector` reads `INFORMATION_SCHEMA.JOBS`. It skips jobs that are not queries, not finished, failed, served from cache, and the parent job of a script (its children carry the statements), and counts each reason.
+- `SnowflakeQueryHistoryCollector` reads `ACCOUNT_USAGE.QUERY_HISTORY`. It skips `fail` and `incident` statuses and keeps result-cache hits, which scan nothing but still ran.
+
+Both take a `Principals` mapping that says which service account is dbt and which is the BI tool; everyone else is a person, recorded by the name before the `@` so it lines up with `config/teams.yaml`. The dbt node comes from the query comment dbt appends to every statement, and a dashboard from its job label or query tag. The vendor's own byte count lands in `ops.query_log.bytes_scanned`, which the estimate (ADR 0005) exists to stand in for when there is no vendor to ask.
+
+Neither collector makes a network call. They are pinned by contract tests (`tests/test_collectors.py`) against a few hundred recorded rows per vendor in `tests/fixtures/`, written in the documented column names and types by `scripts/make_vendor_fixtures.py` from this project's own simulated query log. Writing those tests found a real parser gap: a warehouse records dbt's statement with the comment after the final semicolon, which the parser now ignores.

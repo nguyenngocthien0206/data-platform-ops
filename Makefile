@@ -14,7 +14,7 @@ RUN := $(UV) run
 COMPOSE ?= docker compose
 
 .PHONY: help setup up down seed build simulate cost incidents reconcile \
-        dashboard test lint fmt clean demo
+        dashboard readme-check test lint fmt clean demo
 
 help: ## Show the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -51,8 +51,13 @@ incidents: ## Inject faults, detect and group incidents, write metrics
 reconcile: ## Run the migration scenario and the diff, write the sign-off report
 	$(RUN) platform-ops reconcile run
 
-dashboard: ## Launch streamlit
+dashboard: ## Launch the Streamlit dashboards (read-only over the ops schema)
 	$(RUN) platform-ops dashboard
+
+# Not part of `demo`: the README numbers come from the reference run, and a
+# first `make demo` on another machine should not fail on a documentation check.
+readme-check: ## Check every README results number against reports/ (after make demo)
+	$(RUN) python scripts/check_readme.py
 
 test: ## Run the unit and integration tests
 	$(RUN) pytest

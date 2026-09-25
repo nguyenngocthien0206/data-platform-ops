@@ -10,9 +10,15 @@ from platform_ops.cli import app
 
 runner = CliRunner()
 
-# Every command a Makefile target invokes, with the phase that implements it.
-PLACEHOLDER_COMMANDS: list[tuple[list[str], int]] = [
-    (["dashboard"], 5),
+# Every command a Makefile target invokes.
+MAKEFILE_COMMANDS: list[list[str]] = [
+    ["seed"],
+    ["build"],
+    ["simulation", "run"],
+    ["cost", "report"],
+    ["incidents", "run"],
+    ["reconcile", "run"],
+    ["dashboard"],
 ]
 
 
@@ -38,15 +44,8 @@ def test_config_command_prints_validated_settings() -> None:
     assert '"usd_per_tib"' in result.output
 
 
-@pytest.mark.parametrize(("command", "phase"), PLACEHOLDER_COMMANDS)
-def test_unbuilt_commands_fail_loudly(command: list[str], phase: int) -> None:
-    """A half-built pipeline must not be able to report success."""
-    result = runner.invoke(app, command)
-    assert result.exit_code != 0, f"{' '.join(command)} should not succeed yet"
-    assert f"phase {phase}" in result.output
-
-
-@pytest.mark.parametrize(("command", "phase"), PLACEHOLDER_COMMANDS)
-def test_every_command_has_help_text(command: list[str], phase: int) -> None:
+@pytest.mark.parametrize("command", MAKEFILE_COMMANDS, ids=" ".join)
+def test_every_makefile_command_is_built_and_documented(command: list[str]) -> None:
     result = runner.invoke(app, [*command, "--help"])
     assert result.exit_code == 0
+    assert "not implemented" not in result.output.lower()

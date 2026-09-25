@@ -31,7 +31,9 @@ Nothing in the diff reads the ground truth. Only the grading does, the same spli
 
 ## Results at scale 1.0
 
-From two actual runs of `make reconcile` (50,000 customers, 300,000 orders, 300,000 payments), which wrote byte-identical reports in about 52 seconds each. The full `make demo`, all four modules from a clean state, took 6 minutes 54 seconds.
+From two actual runs of `make reconcile` (50,000 customers, 300,000 orders, 300,000 payments), which wrote byte-identical reports.
+
+`make reconcile` took about 52 seconds; the full `make demo`, all four modules from a clean state, took 6 minutes 54 seconds and 9 minutes 1 second in two runs on the same laptop. <!-- readme-check: runtime -->
 
 **Verdict: not signed off.** Both passes fail the thresholds, which allow no missing, extra, shifted or mismatched values.
 
@@ -57,9 +59,9 @@ From two actual runs of `make reconcile` (50,000 customers, 300,000 orders, 300,
 
 What the numbers say:
 
-- **A systematic defect makes the smart diff no smarter than a dumb one.** Trimmed padding touches 5% of customers, which lands in every 256-key segment; the daylight saving bug touches 65% of payments. In the first pass the diff moves as many customer and payment rows as a full comparison would, and saves only 28% on orders; every top-level segment of customers and payments already differs, so the first level says as much. That is the cue to stop diffing and send the job back.
-- **Once the job is fixed, the diff pays for itself.** With only a few dozen one-off faults left, it moves between 0.6% and 9.6% of what a full comparison would, which is what makes a nightly verification of a large migration affordable instead of a one-off before cutover.
-- **The float cast is the quiet one.** Ordinary amounts survive a trip through DOUBLE; only the 0.5% of orders above ten billion lose their sixth decimal. That still adds up to 1,434 rounding differences, over the threshold of 100, so orders fails on them as well as on the rows dropped at batch boundaries. Whether a sixth-decimal difference on an enterprise invoice is acceptable is a call for finance, and the threshold is where they make it.
+- **A systematic defect makes the smart diff no smarter than a dumb one.** Trimmed padding touches 2,497 of 50,000 customers, which lands in every 256-key segment; the daylight saving bug touches 195,478 of 300,000 payments. In the first pass the diff moves as many customer and payment rows as a full comparison would, and saves only 27.658% on orders; every top-level segment of customers and payments already differs, so the first level says as much. That is the cue to stop diffing and send the job back.
+- **Once the job is fixed, the diff pays for itself.** With only a few dozen one-off faults left, it saves between 90.443% and 99.358% of the rows a full comparison would move, which is what makes a nightly verification of a large migration affordable instead of a one-off before cutover.
+- **The float cast is the quiet one.** Ordinary amounts survive a trip through DOUBLE; only the largest orders, above ten billion, lose their sixth decimal. That still adds up to 1,434 rounding differences, over the threshold of 100, so orders fails on them as well as on the rows dropped at batch boundaries. Whether a sixth-decimal difference on an enterprise invoice is acceptable is a call for finance, and the threshold is where they make it.
 
 ## Running it
 

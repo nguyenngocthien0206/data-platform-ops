@@ -18,6 +18,13 @@ dependencies = [
     "pyiceberg[sql-sqlite]>=0.7",
     "psycopg[binary]>=3.1",
     "streamlit>=1.36",
+    # Capped below releases too new to have built download reputation. Windows
+    # Smart App Control refuses to load unsigned native modules without it, and
+    # on the development laptop it blocked pandas 3.0.6 and pyarrow 25.0.1 while
+    # pandas 2.3.3 and pyarrow 21.0.0 load. Streamlit needs both; PyIceberg and
+    # the reconciliation need pyarrow. Raise the caps once newer wheels load.
+    "pandas>=2.2,<3",
+    "pyarrow>=18,<22",
 ]
 
 [project.scripts]
@@ -73,7 +80,7 @@ warn_unreachable = true
 # Third-party packages that ship no type information. Kept as a narrow list on
 # purpose: anything not named here must type check properly.
 [[tool.mypy.overrides]]
-module = ["duckdb.*", "pyiceberg.*", "pyarrow", "pyarrow.*", "pymssql"]
+module = ["duckdb.*", "pyiceberg.*", "pyarrow", "pyarrow.*", "pymssql", "pandas", "pandas.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

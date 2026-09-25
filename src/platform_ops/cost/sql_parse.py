@@ -129,7 +129,13 @@ def parse_query(sql: str, catalog: Catalog, dialect: str = "duckdb") -> ParsedQu
     """Parse one statement and report what it read and wrote."""
     node_id = node_id_from_comment(sql)
     try:
-        statements = [s for s in sqlglot.parse(sql, dialect=dialect) if s is not None]
+        # A comment after the final `;` (dbt appends its query comment there when
+        # the compiled SQL ends with one) parses as an empty Semicolon statement.
+        statements = [
+            s
+            for s in sqlglot.parse(sql, dialect=dialect)
+            if s is not None and not isinstance(s, exp.Semicolon)
+        ]
     except SqlglotError as error:
         return ParsedQuery(node_id=node_id, error=f"parse: {error}".splitlines()[0])
     if len(statements) != 1:

@@ -40,6 +40,7 @@ QUERY_LOG_COLUMNS = (
     "replayed",
     "wallclock_ms",
     "rows_scanned",
+    "bytes_scanned",
     "writes",
     "select_star",
     "columns_resolved",
@@ -65,6 +66,9 @@ class QueryRecord:
     replayed: bool = False
     wallclock_ms: float | None = None
     rows_scanned: int | None = None
+    # Measured by the vendor, when a cloud collector supplies it. Local
+    # collectors leave it ``None`` and bytes are estimated instead (ADR 0005).
+    bytes_scanned: int | None = None
 
 
 class QueryCollector(Protocol):
@@ -132,6 +136,7 @@ class QueryLog:
                 record.replayed,
                 record.wallclock_ms,
                 record.rows_scanned,
+                record.bytes_scanned,
                 parsed.writes,
                 parsed.select_star,
                 parsed.columns_resolved,

@@ -2,12 +2,12 @@
 
 Handoff file between sessions. Read this first, then `docs/SPEC.md`.
 
-Last updated: 2026-09-24
+Last updated: 2026-09-25
 
 ## Current phase
 
-Phase 4: Migration reconciliation. Implemented, awaiting review.
-Branch: `phase-4-migration-reconciliation` (off `main` at `efacb72`).
+Phase 5: Dashboards, documentation, polish. Implemented, awaiting review. All five phases are built.
+Branch: `phase-5-dashboards-docs` (off `main` at `a71f2e1`).
 
 ## Done
 
@@ -17,13 +17,36 @@ Branch: `phase-4-migration-reconciliation` (off `main` at `efacb72`).
 
 - Phase 3 merged (PR #5).
 - Phase 4 implemented: `reconcile/` (schema, canonical rules and renderers, connectors for Postgres, SQL Server and DuckDB, legacy generator, migration job with four defects, segmented diff, classification, metrics, sign-off report) and `simulation/migration_faults.py`. `platform-ops reconcile run` is live, so every Makefile target is implemented. ADR 0009 and `src/platform_ops/reconcile/README.md` written.
+- Phase 4 merged (PR #6).
+- Phase 5 implemented: Streamlit dashboards (`dashboards/`, data layer and charts in `src/platform_ops/dashboard/`), `platform-ops dashboard`, BigQuery and Snowflake collectors (`cost/collectors/`) with generated fixtures and contract tests, `make readme-check`, ADR 0010, the root README, a dashboards README and a collectors section in the cost README.
+- Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
+- Phase 5 reference numbers: `make demo` from a clean state took 6 min 54 s and 9 min 1 s in two runs on the same laptop (slower machine state on the second: Docker Desktop just started, Smart App Control checking native modules), with identical reports. `make readme-check`: 178 numbers across the root and module READMEs, all found in the reports.
 - Phase 4 reference numbers at scale 1.0: `make reconcile` about 52 s, byte-identical `reconciliation.md` across two runs. As delivered: 199,465 planted discrepancies, 100% recall, precision and classification accuracy; not signed off. Job fixed: 44 planted, all found; the diff moves 0.6% to 9.6% of the rows a naive comparison would. `make demo` from a clean state: 6 min 54 s.
 
 ## In progress
 
-Nothing. Phase 4 is waiting for review.
+Nothing. Phase 5 is waiting for review.
 
 ## Decisions made
+
+### Phase 5 (owner, at planning)
+
+1. **Dashboard tests run on a real warehouse at scale 0.01**: the ops-only data layer is tested on its own, and an AppTest smoke test renders every page against a warehouse built by all four modules (about 3 more minutes of `make test`).
+2. **`make readme-check`** verifies that every number in the README "Results" sections appears in `reports/*.md`. READMEs stay hand-written; the check runs after `make demo`, not in CI.
+3. **Vendor collector fixtures are generated from the simulated workload**: a deterministic script maps a sample of `ops.query_log` into BigQuery `INFORMATION_SCHEMA.JOBS` and Snowflake `QUERY_HISTORY` columns; the files are committed.
+
+Planned defaults: no lineage graph on the Overview page; `make demo` does not run `readme-check`; `QueryRecord` gains an optional `bytes_scanned` for vendor-measured bytes; Streamlit usage stats off (offline after setup).
+
+### Phase 5, made during implementation
+
+30. **pandas capped `<3`, pyarrow `<22`** (asked the owner). Windows Smart App Control switched to enforcing on the development laptop and refused pandas 3.0.6 and pyarrow 25.0.1 (too new to have reputation); pandas 2.3.3 and pyarrow 21.0.0 load. Without the cap `make reconcile` and the dashboards do not run on that machine. Raise the caps once newer wheels load.
+31. **`ops.query_log.bytes_scanned`** (nullable) stores vendor-measured bytes from a cloud collector; local collectors leave it NULL and `cost.md` is unchanged. Three tests that insert into `query_log` by position gained a NULL.
+32. **The SQL parser ignores a comment after the final `;`.** Found by the collector contract tests: a warehouse records a dbt model's statement with dbt's query comment after the compiled SQL's semicolon, which parsed as a second statement.
+33. **Fixtures carry the dbt query comment and modelled times.** The query log keeps dbt's compiled SQL from `target/run`, written before the comment is appended, so the fixture generator appends it as the warehouse would see it; elapsed times are modelled, never measured, so the fixtures are deterministic.
+34. **README runtimes are marked `<!-- readme-check: runtime -->`.** Timings are printed on the console, not written to a report; every other results number must appear in the reports. Derived percentages in the READMEs were rewritten with the reports' own figures.
+35. **Chart colours**: the validated reference palette, checked against Streamlit's own light and dark surfaces; three light-mode slots are below 3:1 contrast, so every chart has tooltips and its data table beside it.
+37. **Streamlit always runs headless; `platform-ops dashboard` opens the browser itself** once the health check answers. Found by the fresh-clone run: on a machine that never ran Streamlit, a non-headless start stops at an interactive "Email:" prompt, so `make dashboard` hung.
+36. **Hotspots can be empty at small scale** (tables under 20 MB never qualify); the Cost page says so instead of showing an empty table.
 
 ### Phase 4 (owner)
 
@@ -98,6 +121,8 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 - Filters written against a CTE or subquery column outside it are not traced to the base table for hotspot detection. The workload and dbt do not write filters that way.
 - `make incidents` at scale 1.0 ranged from 2 min 22 s to 2 min 56 s on this laptop, so it sometimes goes over the 2.5-minute target from the plan. With Phase 2 at about 5.3 min, the demo has roughly 1.5 to 2 min left for Phase 4 and setup.
 - The alert storm is modest: 18 failing checks for 8 faults. Most downstream tests check keys and row counts that a few bad values do not break. The volume drop is the one fault with a real cascade (5 checks).
+- The dashboards were checked by rendering every page with Streamlit's AppTest and by serving them headless (health check and page load), but not by eye: headless Chrome only captures Streamlit's loading skeleton, and no browser automation is installed. They should be looked at once in a browser.
+- `make demo` timing varies with machine state: 6 min 54 s and 9 min 1 s on the same laptop. Both are under the 10-minute budget, but the margin is thinner than the first run suggested.
 - Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0008).
 
 ## Open questions for the owner
@@ -106,4 +131,4 @@ None open.
 
 ## Next step
 
-Owner reviews Phase 4 and opens the PR. Then plan Phase 5 (dashboards, root README, CI, cloud cost collectors) on a new branch from `main`.
+Owner reviews Phase 5 and opens the PR. The SPEC's five phases are then complete.
