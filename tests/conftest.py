@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
@@ -11,6 +10,7 @@ import pytest
 import yaml
 
 from platform_ops.common.config import Settings, load_settings
+from platform_ops.common.sandbox import write_isolated_config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -133,36 +133,51 @@ def repo_settings() -> Settings:
 def make_isolated_config(root: Path, scale_factor: float, weeks: int | None = None) -> Path:
     """A throwaway copy of the repo config whose outputs all land under ``root``.
 
-    The real settings, teams and ownership files are used, with the warehouse,
-    dbt target and reports redirected into ``root`` and the dbt project pointing
-    at the repo's real one. Integration tests drive the actual CLI against this,
-    so they exercise exactly what a user runs without touching the real
-    warehouse or ``dbt/target``.
+    See :func:`platform_ops.common.sandbox.write_isolated_config`. Integration
+    tests drive the actual CLI against it, so they exercise exactly what a user
+    runs without touching the real warehouse or ``dbt/target``.
     """
-    config_dir = root / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    raw = yaml.safe_load((REPO_ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
-    raw["scale_factor"] = scale_factor
-    if weeks is not None:
-        raw["simulation"]["weeks"] = weeks
-    raw["paths"] = {
-        "duckdb": str(root / "warehouse.duckdb"),
-        "reports": str(root / "reports"),
-        "iceberg_warehouse": str(root / "iceberg"),
-        "dbt_project": str(REPO_ROOT / "dbt"),
-        "dbt_target": str(root / "target"),
-    }
-    settings_path = config_dir / "settings.yaml"
-    settings_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-    for name in ("teams.yaml", "ownership.yaml"):
-        shutil.copyfile(REPO_ROOT / "config" / name, config_dir / name)
-    # Local service credentials (Postgres, SQL Server) live in .env at the root.
-    if (REPO_ROOT / ".env").is_file():
-        shutil.copyfile(REPO_ROOT / ".env", root / ".env")
-    return settings_path
+    return write_isolated_config(root, scale_factor, weeks)
 
 
 @pytest.fixture(scope="session")
 def isolated_config() -> Callable[..., Path]:
     """Expose :func:`make_isolated_config` to session-scoped fixtures."""
     return make_isolated_config
+
+
+@pytest.fixture(scope="session")
+def full_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Settings:
+    """One warehouse built the way ``make demo`` builds it, at scale 0.01, shared.
+
+    Simulate three weeks, price them, run the incident scenario and the
+    reconciliation (DuckDB as the legacy engine, so no Docker). It is the most
+    expensive thing the suite builds, so every test that only reads such a
+    warehouse uses this one: the dashboard pages, and the first of the two
+    incident runs whose reports must match. Tests that need an independent run
+    still build their own.
+    """
+    from typer.testing import CliRunner
+
+    from platform_ops.cli import app
+    from platform_ops.common.config import CONFIG_PATH_ENV_VAR
+
+    settings_path = make_isolated_config(tmp_path_factory.mktemp("full"), 0.01, weeks=3)
+    patch = pytest.MonkeyPatch()
+    patch.setenv(CONFIG_PATH_ENV_VAR, str(settings_path))
+    patch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    runner = CliRunner()
+    try:
+        for command in (
+            ["simulation", "run"],
+            ["cost", "report"],
+            ["incidents", "run"],
+            ["reconcile", "run", "--engine", "duckdb"],
+        ):
+            result = runner.invoke(app, command)
+            assert result.exit_code == 0, f"{' '.join(command)} failed:\n{result.output}"
+    finally:
+        # Restored before returning: a session fixture must not leave its config
+        # in the environment for every test that runs after it.
+        patch.undo()
+    return load_settings(settings_path)

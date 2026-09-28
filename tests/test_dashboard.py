@@ -9,7 +9,6 @@ Every page is then rendered with Streamlit's AppTest.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +16,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 from typer.testing import CliRunner
 
-from platform_ops.cli import app
-from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings, load_settings
+from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings
 from platform_ops.cost.sql_parse import parse_query
 from platform_ops.dashboard.queries import QUERIES, MissingData, Warehouse, producer
 
@@ -65,31 +63,14 @@ def test_a_missing_table_names_its_command(tmp_path: Path) -> None:
 # -- a real warehouse ------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def built(
-    tmp_path_factory: pytest.TempPathFactory, isolated_config: Callable[..., Path]
-) -> Iterator[Settings]:
-    settings_path = isolated_config(tmp_path_factory.mktemp("dashboard"), 0.01, weeks=3)
-    patch = pytest.MonkeyPatch()
-    patch.setenv(CONFIG_PATH_ENV_VAR, str(settings_path))
-    try:
-        for command in (["simulation", "run"], ["cost", "report"], ["incidents", "run"],
-                        ["reconcile", "run", "--engine", "duckdb"]):  # fmt: skip
-            result = runner.invoke(app, command)
-            assert result.exit_code == 0, f"{' '.join(command)} failed:\n{result.output}"
-        yield load_settings(settings_path)
-    finally:
-        patch.undo()
-
-
 # Hotspots need tables over `hotspot_min_table_bytes` (20 MB); none are that big at 0.01.
 MAY_BE_EMPTY_AT_SMALL_SCALE = {"hotspots"}
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize("name", sorted(QUERIES))
-def test_every_query_runs_on_a_full_warehouse(built: Settings, name: str) -> None:
-    frame = Warehouse(built.resolve(built.paths.duckdb)).frame(name)
+def test_every_query_runs_on_a_full_warehouse(full_warehouse: Settings, name: str) -> None:
+    frame = Warehouse(full_warehouse.resolve(full_warehouse.paths.duckdb)).frame(name)
     if name not in MAY_BE_EMPTY_AT_SMALL_SCALE:
         assert not frame.empty, f"{name} returned nothing on a full run"
 
@@ -112,8 +93,10 @@ EXPECTED = {
 
 @pytest.mark.integration
 @pytest.mark.parametrize("page", sorted(EXPECTED))
-def test_every_page_renders(built: Settings, page: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = built.root / "config" / "settings.yaml"
+def test_every_page_renders(
+    full_warehouse: Settings, page: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = full_warehouse.root / "config" / "settings.yaml"
     monkeypatch.setenv(CONFIG_PATH_ENV_VAR, str(config))
     title, charts = EXPECTED[page]
     test = AppTest.from_file(str(PAGES / f"{page}.py"), default_timeout=120)
@@ -128,9 +111,9 @@ def test_every_page_renders(built: Settings, page: str, monkeypatch: pytest.Monk
 
 @pytest.mark.integration
 def test_the_cost_page_switches_pricing_model(
-    built: Settings, monkeypatch: pytest.MonkeyPatch
+    full_warehouse: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(CONFIG_PATH_ENV_VAR, str(built.root / "config" / "settings.yaml"))
+    monkeypatch.setenv(CONFIG_PATH_ENV_VAR, str(full_warehouse.root / "config" / "settings.yaml"))
     test = AppTest.from_file(str(PAGES / "cost.py"), default_timeout=120).run()
     compute_total = test.metric[0].value
     test.button_group[0].set_value("Scan").run()
