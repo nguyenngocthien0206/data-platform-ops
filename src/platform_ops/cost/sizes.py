@@ -120,23 +120,6 @@ def record_snapshot(
     return len(rows)
 
 
-def latest(
-    connection: duckdb.DuckDBPyConnection, table: str
-) -> tuple[int, dict[str, tuple[str, int]]] | None:
-    """The most recent snapshot of ``table``, used to add a day's growth to it."""
-    rows = connection.execute(
-        f"""SELECT column_name, data_type, row_count, logical_bytes
-            FROM {OPS_SCHEMA}.table_sizes
-            WHERE table_name = ?
-              AND snapshot_at = (SELECT max(snapshot_at) FROM {OPS_SCHEMA}.table_sizes
-                                 WHERE table_name = ?)""",
-        [table, table],
-    ).fetchall()
-    if not rows:
-        return None
-    return int(rows[0][2]), {str(c): (str(t), int(b)) for c, t, _, b in rows}
-
-
 def add(
     base: tuple[int, dict[str, tuple[str, int]]], delta: tuple[int, dict[str, tuple[str, int]]]
 ) -> tuple[int, dict[str, tuple[str, int]]]:

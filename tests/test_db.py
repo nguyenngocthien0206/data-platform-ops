@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
+import pyarrow as pa
+import pytest
+
 from platform_ops.common.config import Settings
 from platform_ops.common.db import (
     OPS_SCHEMA,
@@ -9,6 +13,8 @@ from platform_ops.common.db import (
     connect,
     database_path,
     open_connection,
+    replace_table,
+    replace_table_from_arrow,
 )
 
 
@@ -59,3 +65,26 @@ def test_database_path_comes_from_settings(settings: Settings) -> None:
     path = database_path(settings)
     assert path.is_absolute()
     assert path.name == "test.duckdb"
+
+
+def test_replace_table_swaps_the_whole_table() -> None:
+    connection = connect(path=":memory:")
+    ddl = "k INTEGER, v VARCHAR"
+    assert replace_table(connection, "t", ddl, ("k", "v"), [(1, "a"), (2, "b")]) == 2
+    assert replace_table(connection, "t", ddl, ("k", "v"), [(3, "c")]) == 1
+    assert connection.execute("SELECT k, v FROM ops.t").fetchall() == [(3, "c")]
+
+
+def test_a_failed_replacement_leaves_the_old_table() -> None:
+    connection = connect(path=":memory:")
+    replace_table(connection, "t", "k INTEGER NOT NULL", ("k",), [(1,)])
+    with pytest.raises(duckdb.Error):
+        replace_table(connection, "t", "k INTEGER NOT NULL", ("k",), [(2,), (None,)])
+    assert connection.execute("SELECT k FROM ops.t").fetchall() == [(1,)]
+
+
+def test_replace_table_from_arrow() -> None:
+    connection = connect(path=":memory:")
+    data = pa.table({"k": [1, 2, 3]})
+    assert replace_table_from_arrow(connection, "t", data) == 3
+    assert connection.execute("SELECT sum(k) FROM ops.t").fetchone() == (6,)

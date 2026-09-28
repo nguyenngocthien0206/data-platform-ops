@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from platform_ops.common.config import LifecycleSettings, Severity
-from platform_ops.simulation.workload import stable_hash
+from platform_ops.common.hashing import stable_hash
 
 _HASH_SPACE = 2**64
 

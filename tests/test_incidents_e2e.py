@@ -1,8 +1,9 @@
 """End to end: the incident scenario (SPEC Phase 3 acceptance).
 
 The full 3-week scenario at scale 0.01, run twice in separate directories: once
-through the real CLI, once through ``run_incidents`` with a full ``dbt run``
-and ``dbt test`` added on every fault night. Proves:
+through the real CLI (the shared ``full_warehouse``, built as ``make demo``
+builds it), once through ``run_incidents`` with a full ``dbt run`` and
+``dbt test`` added on every fault night. Proves:
 
 - every injected fault maps to exactly one incident, and every incident to a fault;
 - grouping cuts the noise: raw alerts outnumber incidents;
@@ -22,8 +23,7 @@ import duckdb
 import pytest
 from typer.testing import CliRunner
 
-from platform_ops.cli import app
-from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings, load_settings
+from platform_ops.common.config import Settings, load_settings
 from platform_ops.incidents.notify import SLACK_ENV_VAR
 from platform_ops.incidents.run import run_incidents
 from platform_ops.incidents.scenario import ScenarioResult
@@ -41,22 +41,20 @@ FULL_RUN_DAYS = (3, 6, 10, 15)
 
 @pytest.fixture(scope="module")
 def runs(
-    tmp_path_factory: pytest.TempPathFactory, isolated_config: Callable[..., Path]
+    tmp_path_factory: pytest.TempPathFactory,
+    isolated_config: Callable[..., Path],
+    full_warehouse: Settings,
 ) -> Iterator[tuple[Settings, Settings, ScenarioResult]]:
+    # The first run is the shared warehouse's `incidents run`, through the real
+    # CLI; the second is independent, with full runs added on the fault nights.
     patch = pytest.MonkeyPatch()
     patch.delenv(SLACK_ENV_VAR, raising=False)
     try:
-        first_path = isolated_config(tmp_path_factory.mktemp("inc_a"), 0.01, weeks=3)
-        patch.setenv(CONFIG_PATH_ENV_VAR, str(first_path))
-        result = runner.invoke(app, ["incidents", "run"])
-        assert result.exit_code == 0, f"incidents run failed:\n{result.output}"
-        patch.delenv(CONFIG_PATH_ENV_VAR)
-
         second = load_settings(isolated_config(tmp_path_factory.mktemp("inc_b"), 0.01, weeks=3))
         _, scenario, _ = run_incidents(second, allow_slack=False, full_run_on_days=FULL_RUN_DAYS)
     finally:
         patch.undo()
-    yield load_settings(first_path), second, scenario
+    yield full_warehouse, second, scenario
 
 
 def _query(settings: Settings, sql: str) -> list[tuple[Any, ...]]:

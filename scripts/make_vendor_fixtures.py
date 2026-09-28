@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -29,7 +28,6 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
-import yaml
 from typer.testing import CliRunner
 
 REPO = Path(__file__).resolve().parent.parent
@@ -40,8 +38,10 @@ DBT_PRINCIPAL = {
     "bigquery": f"dbt-runner@{PROJECT}.iam.gserviceaccount.com",
     "snowflake": "DBT_RUNNER",
 }
-BI_PRINCIPAL = {"bigquery": f"bi-dashboards@{PROJECT}.iam.gserviceaccount.com",
-                "snowflake": "BI_DASHBOARDS"}  # fmt: skip
+BI_PRINCIPAL = {
+    "bigquery": f"bi-dashboards@{PROJECT}.iam.gserviceaccount.com",
+    "snowflake": "BI_DASHBOARDS",
+}
 ROLES = {"dbt": "TRANSFORMER", "dashboard": "REPORTER", "adhoc": "ANALYST"}
 
 
@@ -56,26 +56,18 @@ def _number(*parts: object, modulo: int) -> int:
 def _simulate(root: Path) -> tuple[Path, dict[str, str]]:
     """One week at scale 0.01, simulated and priced, in ``root``."""
     from platform_ops.cli import app
-    from platform_ops.common.config import CONFIG_PATH_ENV_VAR
+    from platform_ops.common.config import CONFIG_PATH_ENV_VAR, load_settings
+    from platform_ops.common.sandbox import write_isolated_config
 
-    config = root / "config"
-    config.mkdir(parents=True)
-    raw = yaml.safe_load((REPO / "config" / "settings.yaml").read_text(encoding="utf-8"))
-    raw["scale_factor"] = 0.01
-    raw["simulation"]["weeks"] = 1
-    raw["paths"] = {"duckdb": str(root / "warehouse.duckdb"), "reports": str(root / "reports"),
-                    "iceberg_warehouse": str(root / "iceberg"), "dbt_project": str(REPO / "dbt"),
-                    "dbt_target": str(root / "target")}  # fmt: skip
-    (config / "settings.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
-    for name in ("teams.yaml", "ownership.yaml"):
-        shutil.copyfile(REPO / "config" / name, config / name)
+    settings_path = write_isolated_config(root, 0.01, weeks=1, repo=REPO)
     runner = CliRunner()
-    env = {CONFIG_PATH_ENV_VAR: str(config / "settings.yaml")}
+    env = {CONFIG_PATH_ENV_VAR: str(settings_path)}
     for command in (["simulation", "run"], ["cost", "report"]):
         result = runner.invoke(app, command, env=env)
         if result.exit_code != 0:
             sys.exit(f"{' '.join(command)} failed:\n{result.output}")
-    return root / "warehouse.duckdb", raw["pricing"]["compute"]["warehouses"]
+    warehouses = load_settings(settings_path).pricing.compute.warehouses
+    return root / "warehouse.duckdb", {str(k): v for k, v in warehouses.items()}
 
 
 def _sample(warehouse: Path) -> list[dict[str, Any]]:
@@ -93,13 +85,27 @@ def _sample(warehouse: Path) -> list[dict[str, Any]]:
         ).fetchall()
     finally:
         connection.close()
-    names = ["query_id", "run_id", "actor", "actor_type", "node_id", "started_at", "sql_text",
-             "wallclock_ms", "writes", "bytes", "modeled_ms", "tables"]  # fmt: skip
+    names = [
+        "query_id",
+        "run_id",
+        "actor",
+        "actor_type",
+        "node_id",
+        "started_at",
+        "sql_text",
+        "wallclock_ms",
+        "writes",
+        "bytes",
+        "modeled_ms",
+        "tables",
+    ]
     queries = [dict(zip(names, row, strict=True)) for row in rows]
     chosen: list[dict[str, Any]] = []
     for actor_type, n in SAMPLE.items():
-        pool = sorted((q for q in queries if q["actor_type"] == actor_type),
-                      key=lambda q: _digest("sample", q["query_id"]))  # fmt: skip
+        pool = sorted(
+            (q for q in queries if q["actor_type"] == actor_type),
+            key=lambda q: _digest("sample", q["query_id"]),
+        )
         chosen += pool[:n]
     return sorted(chosen, key=lambda q: (q["started_at"], q["query_id"]))
 
@@ -218,38 +224,84 @@ def snowflake_row(query: dict[str, Any], warehouses: dict[str, str]) -> dict[str
 
 def bigquery_edges(base: dict[str, Any]) -> list[dict[str, Any]]:
     """Rows the collector must skip or handle specially, derived from a real row."""
-    failed = {**base, "job_id": "bquxjob_edge_failed", "total_bytes_billed": 0,
-              "error_result": {"reason": "invalidQuery", "location": "query",
-                               "message": "Unrecognized name: ordered_on"}}  # fmt: skip
-    cached = {**base, "job_id": "bquxjob_edge_cached", "cache_hit": True,
-              "total_bytes_processed": 0, "total_bytes_billed": 0}  # fmt: skip
-    running = {**base, "job_id": "bquxjob_edge_running", "state": "RUNNING", "end_time": None,
-               "total_bytes_billed": None}  # fmt: skip
-    script = {**base, "job_id": "bquxjob_edge_script", "statement_type": "SCRIPT",
-              "query": "DECLARE d DATE DEFAULT CURRENT_DATE(); SELECT d;",
-              "referenced_tables": [], "labels": []}  # fmt: skip
-    child = {**base, "job_id": "bquxjob_edge_script_child",
-             "parent_job_id": "bquxjob_edge_script", "query": "SELECT d",
-             "statement_type": "SELECT", "referenced_tables": [], "labels": [],
-             "user_email": "maya@company.example", "destination_table": None}  # fmt: skip
+    failed = {
+        **base,
+        "job_id": "bquxjob_edge_failed",
+        "total_bytes_billed": 0,
+        "error_result": {
+            "reason": "invalidQuery",
+            "location": "query",
+            "message": "Unrecognized name: ordered_on",
+        },
+    }
+    cached = {
+        **base,
+        "job_id": "bquxjob_edge_cached",
+        "cache_hit": True,
+        "total_bytes_processed": 0,
+        "total_bytes_billed": 0,
+    }
+    running = {
+        **base,
+        "job_id": "bquxjob_edge_running",
+        "state": "RUNNING",
+        "end_time": None,
+        "total_bytes_billed": None,
+    }
+    script = {
+        **base,
+        "job_id": "bquxjob_edge_script",
+        "statement_type": "SCRIPT",
+        "query": "DECLARE d DATE DEFAULT CURRENT_DATE(); SELECT d;",
+        "referenced_tables": [],
+        "labels": [],
+    }
+    child = {
+        **base,
+        "job_id": "bquxjob_edge_script_child",
+        "parent_job_id": "bquxjob_edge_script",
+        "query": "SELECT d",
+        "statement_type": "SELECT",
+        "referenced_tables": [],
+        "labels": [],
+        "user_email": "maya@company.example",
+        "destination_table": None,
+    }
     return [failed, cached, running, script, child]
 
 
 def snowflake_edges(base: dict[str, Any]) -> list[dict[str, Any]]:
-    failed = {**base, "QUERY_ID": "01bedgefailed", "EXECUTION_STATUS": "fail",
-              "ERROR_CODE": 904, "BYTES_SCANNED": 0}  # fmt: skip
-    incident = {**base, "QUERY_ID": "01bedgeincident", "EXECUTION_STATUS": "incident",
-                "ERROR_CODE": 300005}  # fmt: skip
-    cached = {**base, "QUERY_ID": "01bedgeresultcache", "BYTES_SCANNED": 0,
-              "EXECUTION_TIME": 0, "PERCENTAGE_SCANNED_FROM_CACHE": 1.0,
-              "USER_NAME": "MAYA", "ROLE_NAME": "ANALYST", "QUERY_TAG": "",
-              "QUERY_TEXT": "select count(*) from marts.sales_fct_orders"}  # fmt: skip
+    failed = {
+        **base,
+        "QUERY_ID": "01bedgefailed",
+        "EXECUTION_STATUS": "fail",
+        "ERROR_CODE": 904,
+        "BYTES_SCANNED": 0,
+    }
+    incident = {
+        **base,
+        "QUERY_ID": "01bedgeincident",
+        "EXECUTION_STATUS": "incident",
+        "ERROR_CODE": 300005,
+    }
+    cached = {
+        **base,
+        "QUERY_ID": "01bedgeresultcache",
+        "BYTES_SCANNED": 0,
+        "EXECUTION_TIME": 0,
+        "PERCENTAGE_SCANNED_FROM_CACHE": 1.0,
+        "USER_NAME": "MAYA",
+        "ROLE_NAME": "ANALYST",
+        "QUERY_TAG": "",
+        "QUERY_TEXT": "select count(*) from marts.sales_fct_orders",
+    }
     return [failed, incident, cached]
 
 
 def _write(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows),
-                    encoding="utf-8", newline="\n")  # fmt: skip
+    path.write_text(
+        "".join(json.dumps(r, sort_keys=True) + "\n" for r in rows), encoding="utf-8", newline="\n"
+    )
 
 
 def main() -> None:

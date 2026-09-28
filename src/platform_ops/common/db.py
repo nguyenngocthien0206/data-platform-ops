@@ -150,3 +150,33 @@ def open_connection(
         yield connection
     finally:
         connection.close()
+
+
+def replace_table(
+    connection: duckdb.DuckDBPyConnection,
+    name: str,
+    ddl: str,
+    columns: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+) -> int:
+    """Replace ``ops.<name>`` with ``rows``, in one transaction.
+
+    The table is recreated and filled inside the same transaction, so a reader
+    sees either the old table or the new one, never an empty one in between.
+    """
+    with transaction(connection):
+        connection.execute(f"CREATE OR REPLACE TABLE {OPS_SCHEMA}.{name} ({ddl})")
+        return insert_rows(connection, f"{OPS_SCHEMA}.{name}", columns, rows)
+
+
+def replace_table_from_arrow(connection: duckdb.DuckDBPyConnection, name: str, data: Any) -> int:
+    """Replace ``ops.<name>`` with an Arrow table, for results too large for ``VALUES``."""
+    with transaction(connection):
+        connection.register("_replacement", data)
+        try:
+            connection.execute(
+                f"CREATE OR REPLACE TABLE {OPS_SCHEMA}.{name} AS SELECT * FROM _replacement"
+            )
+        finally:
+            connection.unregister("_replacement")
+    return int(data.num_rows)

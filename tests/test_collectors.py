@@ -78,8 +78,11 @@ def test_schema_check_catches_missing_extra_and_mistyped_columns() -> None:
     row["cache_hit"] = "false"
     row["total_slot_ms"] = True
     assert sorted(schema_problems(row, JOBS_SCHEMA)) == [
-        "cache_hit is str", "missing query", "total_slot_ms is bool", "unexpected surprise",
-    ]  # fmt: skip
+        "cache_hit is str",
+        "missing query",
+        "total_slot_ms is bool",
+        "unexpected surprise",
+    ]
 
 
 # -- the mapping onto QueryRecord --------------------------------------------------------

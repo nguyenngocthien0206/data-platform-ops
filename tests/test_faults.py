@@ -75,8 +75,13 @@ def test_inject_then_repair_restores_the_raw_data(small: Settings, fault: Fault)
 
 def test_catalogue_covers_every_fault_type_in_the_spec() -> None:
     kinds = {f.fault_type for f in CATALOGUE}
-    assert {"null_spike", "duplicate_keys", "stale_source", "volume_drop",
-            "invalid_category"} <= kinds  # fmt: skip
+    assert {
+        "null_spike",
+        "duplicate_keys",
+        "stale_source",
+        "volume_drop",
+        "invalid_category",
+    } <= kinds
     assert kinds & {"schema_drop", "schema_rename"}, "schema change"
 
 

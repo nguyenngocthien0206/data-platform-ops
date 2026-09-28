@@ -302,8 +302,11 @@ class Scenario:
         stalled = loaded_until if fault.fault_type == "stale_source" else None
         self._active[fault.table] = _ActiveFault(fault, at, stalled)
         self.clock.advance_to(at)
-        log_event(self.logger, f"injected {fault.fault_id} ({fault.fault_type}) into "
-                  f"{fault.target}, {rows:,} rows", clock=self.clock)  # fmt: skip
+        log_event(
+            self.logger,
+            f"injected {fault.fault_id} ({fault.fault_type}) into {fault.target}, {rows:,} rows",
+            clock=self.clock,
+        )
 
     def _resolve(self, incident: Incident, at: datetime, loaded_until: datetime) -> None:
         self.clock.advance_to(at)
@@ -312,8 +315,9 @@ class Scenario:
         repaired = []
         for table, active in sorted(self._active.items()):
             if self.source_of[table] in reach:
-                faults.repair(self.connection, self.plan, active.fault, at, loaded_until,
-                              active.stalled_since)  # fmt: skip
+                faults.repair(
+                    self.connection, self.plan, active.fault, at, loaded_until, active.stalled_since
+                )
                 repaired.append(table)
         for table in repaired:
             del self._active[table]
@@ -333,13 +337,19 @@ class Scenario:
         target = self.invocation.target_path
         select = ["--select", *selectors] if selectors else []
         self._dbt(self.invocation, ["run", *select])
-        ran = ingest.parse_run_results(ingest.read_json(target / "run_results.json"), self.nodes,
-                                       run_id=run_id, detected_at=run_at)  # fmt: skip
+        ran = ingest.parse_run_results(
+            ingest.read_json(target / "run_results.json"),
+            self.nodes,
+            run_id=run_id,
+            detected_at=run_at,
+        )
         self._dbt(self.invocation, ["test", *select])
         tested = ingest.parse_run_results(
-            ingest.read_json(target / "run_results.json"), self.nodes,
-            run_id=run_id, detected_at=run_at,
-        )  # fmt: skip
+            ingest.read_json(target / "run_results.json"),
+            self.nodes,
+            run_id=run_id,
+            detected_at=run_at,
+        )
         return ingest.merge([ran, tested])
 
     def _freshness(self, run_id: str, run_at: datetime, tables: Sequence[str]) -> RunOutcome:
@@ -371,12 +381,22 @@ class Scenario:
             )
         opened, appended = self._handle(run_id, run_at, outcome)
         self.result.runs.append(
-            RunRecord(run_id, run_at, tuple(tables), outcome.checks_run, len(outcome.events),
-                      opened, appended)
-        )  # fmt: skip
-        log_event(self.logger, f"{run_id}: {len(tables)} sources, {outcome.checks_run} checks, "
-                  f"{len(outcome.events)} failing, {opened} opened, {appended} appended",
-                  clock=self.clock)  # fmt: skip
+            RunRecord(
+                run_id,
+                run_at,
+                tuple(tables),
+                outcome.checks_run,
+                len(outcome.events),
+                opened,
+                appended,
+            )
+        )
+        log_event(
+            self.logger,
+            f"{run_id}: {len(tables)} sources, {outcome.checks_run} checks, "
+            f"{len(outcome.events)} failing, {opened} opened, {appended} appended",
+            clock=self.clock,
+        )
 
     def _handle(self, run_id: str, run_at: datetime, outcome: RunOutcome) -> tuple[int, int]:
         groups = group_failures(self.graph, outcome.events, outcome.skipped)
@@ -387,13 +407,17 @@ class Scenario:
         for incident_id, group in assignment.appended:
             incident = by_id[incident_id]
             incident.add(run_id, run_at, group)
-            incident_of.update({node: incident_id for node in group.failed_nodes})
-            self._notify(incident, "update", run_at,
-                         f"still failing: {_checks(len(group.events))} in {run_id}")  # fmt: skip
+            incident_of.update(dict.fromkeys(group.failed_nodes, incident_id))
+            self._notify(
+                incident,
+                "update",
+                run_at,
+                f"still failing: {_checks(len(group.events))} in {run_id}",
+            )
         for group in assignment.new:
             incident = self._open(group, run_at)
             incident.add(run_id, run_at, group)
-            incident_of.update({node: incident.incident_id for node in group.failed_nodes})
+            incident_of.update(dict.fromkeys(group.failed_nodes, incident.incident_id))
             text = f"{_checks(len(group.events))} failing, rooted at {incident.root}"
             self._notify(incident, "page", run_at, text)
         self.result.events.extend((e, incident_of[e.subject]) for e in outcome.events)
@@ -405,8 +429,14 @@ class Scenario:
         page = route(group.root, self.nodes, self.registry)
         naive = naive_route(group.root, self.nodes, self.registry)
         busy = sum(1 for i in self.result.incidents if i.owner == page.owner and i.is_open(run_at))
-        response = respond(incident_id, scored.severity, run_at, busy,
-                           self.settings.incidents.lifecycle, self.settings.seed)  # fmt: skip
+        response = respond(
+            incident_id,
+            scored.severity,
+            run_at,
+            busy,
+            self.settings.incidents.lifecycle,
+            self.settings.seed,
+        )
         previous = [i.incident_id for i in self.result.incidents if i.root == group.root]
         incident = Incident(
             incident_id=incident_id,
@@ -430,7 +460,8 @@ class Scenario:
         return incident
 
     def _notify(self, incident: Incident, kind: NotificationKind, at: datetime, text: str) -> None:
-        notification = Notification(incident.incident_id, kind, incident.owner, incident.team,
-                                    incident.severity, text, at)  # fmt: skip
+        notification = Notification(
+            incident.incident_id, kind, incident.owner, incident.team, incident.severity, text, at
+        )
         self.result.notifications.append(notification)
         self.notifier.send(notification)

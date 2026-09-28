@@ -194,26 +194,18 @@ class Warehouse:
             raise MissingData(f"No warehouse at {self.path}. Run `make demo` first.")
         return duckdb.connect(str(self.path), read_only=True)
 
-    def available(self) -> set[str]:
-        connection = self._connect()
-        try:
-            rows = connection.execute(
-                "SELECT table_name FROM duckdb_tables() WHERE schema_name = ?", [OPS_SCHEMA]
-            ).fetchall()
-        finally:
-            connection.close()
+    @staticmethod
+    def _tables(connection: duckdb.DuckDBPyConnection) -> set[str]:
+        rows = connection.execute(
+            "SELECT table_name FROM duckdb_tables() WHERE schema_name = ?", [OPS_SCHEMA]
+        ).fetchall()
         return {str(r[0]) for r in rows}
 
     def frame(self, name: str) -> pd.DataFrame:
         query = QUERIES[name]
         connection = self._connect()
         try:
-            present = {
-                str(r[0])
-                for r in connection.execute(
-                    "SELECT table_name FROM duckdb_tables() WHERE schema_name = ?", [OPS_SCHEMA]
-                ).fetchall()
-            }
+            present = self._tables(connection)
             missing = [t for t in query.tables if t not in present]
             if missing:
                 commands = sorted({producer(t) for t in missing})

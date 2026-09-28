@@ -110,7 +110,7 @@ class SlackNotifier:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=SLACK_TIMEOUT_SECONDS):  # noqa: S310
+            with urllib.request.urlopen(request, timeout=SLACK_TIMEOUT_SECONDS):
                 pass
         except (urllib.error.URLError, TimeoutError) as error:
             self.logger.warning("Slack post for %s failed: %s", notification.incident_id, error)

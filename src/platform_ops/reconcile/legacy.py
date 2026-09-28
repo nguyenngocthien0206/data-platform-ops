@@ -22,26 +22,28 @@ from platform_ops.reconcile.schema import TABLES, TableSpec, arrow_schema
 
 FLOORS = {"customers": 200, "orders": 1000, "payments": 1000}
 
+# fmt: off
 FIRST_NAMES = [
     "Anna", "Ben", "Chloe", "David", "Emma", "Farid", "Grace", "Hiro", "Isabel", "Jonas",
     "Karin", "Liam", "Maya", "Noah", "Olivia", "Pedro", "Quinn", "Rosa", "Sam", "Tara",
     "José", "Zoë", "Łukasz", "Anh", "Søren", "Chloé", "Mateo", "Aisha", "Yuki", "Björn",
-]  # fmt: skip
+]
 LAST_NAMES = [
     "Smith", "Jones", "Garcia", "Miller", "Davis", "Lopez", "Wilson", "Taylor", "Moore", "Lee",
     "Nguyễn", "Müller", "O'Brien", "Kowalski", "Rossi", "Dubois", "Andersson", "Tanaka",
     "Novak", "Silva",
-]  # fmt: skip
+]
 COMPANIES = [
     "Acme Corp", "Globex", "Initech", "Umbrella Group", "Stark Industries", "Wayne Enterprises",
     "Hooli", "Vandelay Import|Export", "Soylent", "Tyrell Co",
-]  # fmt: skip
+]
 COUNTRIES = ["US", "CA", "GB", "DE", "FR", "VN", "BR", "JP"]
 STATUSES = ["placed", "shipped", "delivered", "cancelled", "returned"]
 CHANNELS = ["web", "mobile", "store", "phone", "partner"]
 CURRENCIES = ["USD", "EUR", "GBP", "CAD"]
 METHODS = ["card", "paypal", "bank_transfer", "gift_card", "apple_pay"]
 PAYMENT_STATUSES = ["captured", "authorized", "refunded", "failed"]
+# fmt: on
 
 
 def row_counts(settings: Settings) -> dict[str, int]:
@@ -119,7 +121,7 @@ def generate(settings: Settings) -> dict[str, pa.Table]:
         ({local_time("cr")} AT TIME ZONE '{zone}') + to_seconds(CAST(h('up') % 7776000 AS BIGINT))
             AS updated_at
         """,
-    )  # fmt: skip
+    )
     n_customers = counts["customers"]
     orders = build(
         TABLES[1],
@@ -139,7 +141,7 @@ def generate(settings: Settings) -> dict[str, pa.Table]:
         ({local_time("or")} AT TIME ZONE '{zone}') + to_seconds(CAST(h('cr') % 120 AS BIGINT))
             AS created_at
         """,
-    )  # fmt: skip
+    )
     n_orders = counts["orders"]
     payments = build(
         TABLES[2],
@@ -158,6 +160,6 @@ def generate(settings: Settings) -> dict[str, pa.Table]:
              ELSE ({local_time("pa")} AT TIME ZONE '{zone}')
                   + to_seconds(CAST(h('sd') % 259200 AS BIGINT)) END AS settled_at
         """,
-    )  # fmt: skip
+    )
     con.close()
     return {"customers": customers, "orders": orders, "payments": payments}

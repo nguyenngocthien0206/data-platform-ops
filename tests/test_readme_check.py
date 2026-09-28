@@ -26,8 +26,12 @@ def test_numbers_are_found_whatever_their_formatting() -> None:
     text = "Cost $296.02 for 35,813 queries, 94.968% matched, 8 of 8 right."
     assert check_readme.numbers(text) == ["$296.02", "35,813", "94.968%", "8", "8"]
     assert [check_readme.normalize(n) for n in check_readme.numbers(text)] == [
-        "296.02", "35813", "94.968", "8", "8",
-    ]  # fmt: skip
+        "296.02",
+        "35813",
+        "94.968",
+        "8",
+        "8",
+    ]
 
 
 def test_code_links_and_adr_numbers_are_not_data() -> None:
@@ -38,8 +42,10 @@ def test_code_links_and_adr_numbers_are_not_data() -> None:
 def test_only_results_sections_are_checked() -> None:
     markdown = "# Title\n42\n## Results at scale 1.0\n7 rows\n### Detail\n9\n## Running it\n11\n"
     assert [line for _, line in check_readme.results_lines(markdown)] == [
-        "7 rows", "### Detail", "9",
-    ]  # fmt: skip
+        "7 rows",
+        "### Detail",
+        "9",
+    ]
 
 
 def test_missing_numbers_are_reported_with_their_line(tmp_path: Path) -> None:

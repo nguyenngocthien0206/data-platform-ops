@@ -1,1 +1,1 @@
-"""Ownership registry and lineage graph. Built in Phase 1."""
+"""The shared metadata layer: ownership registry and lineage graph."""

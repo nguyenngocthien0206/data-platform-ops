@@ -1,12 +1,10 @@
 """The `platform-ops` command line.
 
-The command surface is the contract between the three modules and the Makefile.
-It was fixed in Phase 0, before any module existed, so cost, incidents and
-reconcile can be built independently without renegotiating entry points.
-
-Commands belonging to unbuilt phases are registered but refuse to run. They exit
-non-zero on purpose: a pipeline that is only half built must not be able to
-report success.
+The command surface is the contract between the three modules and the Makefile:
+every Makefile target is one command here, so a target's behaviour can be run,
+tested and documented without make. Each command imports its module lazily, so
+`platform-ops --help` stays fast and one module's dependencies never slow down
+another's command.
 """
 
 from __future__ import annotations
@@ -145,7 +143,7 @@ def _wait_until_healthy(url: str, process: Any, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline and process.poll() is None:
         try:
-            with urllib.request.urlopen(f"{url}/_stcore/health", timeout=2) as response:  # noqa: S310
+            with urllib.request.urlopen(f"{url}/_stcore/health", timeout=2) as response:
                 if response.read().decode().strip() == "ok":
                     return True
         except OSError:
@@ -165,7 +163,9 @@ def dashboard(port: int = PORT_OPTION, headless: bool = HEADLESS_OPTION) -> None
     from platform_ops.common.config import CONFIG_PATH_ENV_VAR
 
     settings, _ = _start("dashboard")
-    app_path = settings.root / "dashboards" / "app.py"
+    # The dashboards ship with the repo, next to src/; the config may live elsewhere.
+    repo = Path(__file__).resolve().parents[2]
+    app_path = repo / "dashboards" / "app.py"
     if not app_path.is_file():
         _fail(f"no dashboards at {app_path}")
     env = dict(os.environ)
@@ -173,15 +173,22 @@ def dashboard(port: int = PORT_OPTION, headless: bool = HEADLESS_OPTION) -> None
     # Streamlit always runs headless: otherwise its first run on a machine stops
     # at an interactive "Email:" prompt. The browser is opened from here instead.
     command = [
-        sys.executable, "-m", "streamlit", "run", str(app_path),
-        "--server.port", str(port),
-        "--server.headless", "true",
-        "--browser.gatherUsageStats", "false",
-    ]  # fmt: skip
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.port",
+        str(port),
+        "--server.headless",
+        "true",
+        "--browser.gatherUsageStats",
+        "false",
+    ]
     url = f"http://localhost:{port}"
     typer.echo(f"serving the dashboards on {url} (Ctrl+C to stop)")
     # Run from the repo root so Streamlit also reads .streamlit/config.toml.
-    process = subprocess.Popen(command, cwd=settings.root, env=env)  # noqa: S603
+    process = subprocess.Popen(command, cwd=repo, env=env)
     try:
         if not headless and _wait_until_healthy(url, process, DASHBOARD_START_SECONDS):
             webbrowser.open(url)
@@ -246,7 +253,7 @@ def simulation_run() -> None:
     """
     from platform_ops.simulation.workload import run_workload
 
-    settings, clock = _start("simulation")
+    settings, _ = _start("simulation")
     summary = run_workload(settings)
     queries = ", ".join(f"{kind} {count:,}" for kind, count in sorted(summary.queries.items()))
     typer.echo(

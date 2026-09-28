@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta
-from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -250,7 +249,7 @@ class Settings(_Strict):
     metadata: MetadataSettings
 
     # Directory the config file was found in, used to resolve relative paths.
-    root: Path = Field(default=Path("."), exclude=True)
+    root: Path = Field(default=Path(), exclude=True)
 
     def resolve(self, path: Path) -> Path:
         """Turn a configured relative path into an absolute one under the repo root."""
@@ -282,9 +281,3 @@ def load_settings(path: Path | str | None = None) -> Settings:
     # The repo root is the parent of config/, which is where relative paths hang off.
     raw["root"] = config_file.resolve().parent.parent
     return Settings.model_validate(raw)
-
-
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    """Process-wide cached settings for callers that do not want to thread them."""
-    return load_settings()

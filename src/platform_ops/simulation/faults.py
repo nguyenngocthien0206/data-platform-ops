@@ -53,6 +53,7 @@ class Fault:
 # pairs on different tables, so one targeted run covers two faults: dbt time,
 # not data volume, is what the demo budget is spent on (ADR 0008). Two faults
 # never target the same table while both could be active; the scenario checks.
+# fmt: off
 CATALOGUE: tuple[Fault, ...] = (
     Fault("F1", "null_spike", "orders", 2, "customer_id",
           expected_check="not_null on stg_orders.customer_id"),
@@ -70,7 +71,8 @@ CATALOGUE: tuple[Fault, ...] = (
           expected_check="model error on stg_marketing_campaigns"),
     Fault("F8", "invalid_category", "payments", 14, "status", "chargeback",
           expected_check="accepted_values on stg_payments.payment_status"),
-)  # fmt: skip
+)
+# fmt: on
 
 GROUND_TRUTH_DDL = """
     fault_id VARCHAR PRIMARY KEY,

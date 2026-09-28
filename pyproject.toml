@@ -69,7 +69,10 @@ target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+# Beyond the basics: bugbear, simplifications, ruff's own checks (including
+# suppression comments that do nothing), performance, return style,
+# comprehensions and pathlib. Enabled in Phase 6 so the cleanup does not erode.
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "PERF", "PIE", "RET", "C4", "PTH"]
 
 [tool.mypy]
 python_version = "3.11"

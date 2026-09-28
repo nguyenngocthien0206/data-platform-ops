@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 import duckdb
 
-from platform_ops.common.db import OPS_SCHEMA, insert_rows, transaction
+from platform_ops.common.db import replace_table
 from platform_ops.metadata.manifest import Node
 from platform_ops.metadata.registry import Registry, Resolution
 
@@ -69,21 +69,15 @@ def attribute(
 
 
 def persist(connection: duckdb.DuckDBPyConnection, attributions: list[Attribution]) -> int:
-    connection.execute(
-        f"""CREATE OR REPLACE TABLE {OPS_SCHEMA}.query_attribution (
-                query_id VARCHAR PRIMARY KEY,
-                cost_kind VARCHAR NOT NULL,
-                team VARCHAR NOT NULL,
-                owner VARCHAR NOT NULL,
-                subject VARCHAR
-            )"""
-    )
     rows = [(a.query_id, a.cost_kind, a.team, a.owner, a.subject) for a in attributions]
-    with transaction(connection):
-        insert_rows(
-            connection,
-            f"{OPS_SCHEMA}.query_attribution",
-            ("query_id", "cost_kind", "team", "owner", "subject"),
-            rows,
-        )
-    return len(rows)
+    return replace_table(
+        connection,
+        "query_attribution",
+        """query_id VARCHAR PRIMARY KEY,
+           cost_kind VARCHAR NOT NULL,
+           team VARCHAR NOT NULL,
+           owner VARCHAR NOT NULL,
+           subject VARCHAR""",
+        ("query_id", "cost_kind", "team", "owner", "subject"),
+        rows,
+    )

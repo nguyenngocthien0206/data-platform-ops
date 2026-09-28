@@ -76,8 +76,7 @@ with unused_tab:
         lookback = st.radio(
             "Unused for at least", [30, 90], format_func=lambda d: f"{d} days", horizontal=True
         )
-        st.dataframe(unused[unused["lookback_days"] == lookback], hide_index=True,
-                     width="stretch")  # fmt: skip
+        st.dataframe(unused[unused["lookback_days"] == lookback], hide_index=True, width="stretch")
 with hotspot_tab:
     hotspots = page.frame("hotspots")
     if hotspots is not None:

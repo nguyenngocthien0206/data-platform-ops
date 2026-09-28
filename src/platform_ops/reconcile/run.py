@@ -25,7 +25,7 @@ import duckdb
 import pyarrow as pa
 
 from platform_ops.common.config import Engine, Settings
-from platform_ops.common.db import OPS_SCHEMA, open_connection, transaction
+from platform_ops.common.db import open_connection, replace_table_from_arrow, transaction
 from platform_ops.reconcile import legacy
 from platform_ops.reconcile.canonical import Rule, rules_for
 from platform_ops.reconcile.classify import classify
@@ -39,7 +39,6 @@ from platform_ops.reconcile.connectors import (
 from platform_ops.reconcile.diff import TableDiff, diff_table
 from platform_ops.reconcile.metrics import Discrepancy, Grade, TableVerdict, grade, verdict
 from platform_ops.reconcile.migrate import (
-    TruthCell,
     data_files,
     migrate,
     namespace_for,
@@ -48,7 +47,9 @@ from platform_ops.reconcile.migrate import (
 )
 from platform_ops.reconcile.schema import TABLES, TABLES_BY_NAME, TableSpec
 from platform_ops.simulation import migration_faults
+from platform_ops.simulation.migration_faults import TruthCell
 
+KEYS = {spec.name: spec.key for spec in TABLES}
 PASSES: tuple[tuple[str, bool], ...] = (("as_delivered", False), ("fixed", True))
 
 
@@ -89,16 +90,18 @@ def _legacy_connector(engine: Engine, settings: Settings) -> Any:
     if engine == "duckdb":
         return DuckDBConnector(duckdb.connect(), local_zone=r.legacy_timezone)
     if engine == "postgres":
+        import psycopg
+
         params = postgres_params(env_file)
         try:
             return PostgresConnector(params, local_zone=r.legacy_timezone)
-        except Exception as error:  # noqa: BLE001 - reported with the fix
+        except (psycopg.Error, OSError) as error:
             raise ReconcileError(
                 f"Postgres is not reachable at {params.host}:{params.port} "
                 f"({type(error).__name__}). Start it with `make up`."
             ) from error
     try:
-        import pymssql  # noqa: F401
+        import pymssql
     except ImportError as error:
         raise ReconcileError(
             "SQL Server needs the optional driver: `uv sync --extra sqlserver`."
@@ -110,7 +113,7 @@ def _legacy_connector(engine: Engine, settings: Settings) -> Any:
             local_zone=r.legacy_timezone,
             zone_names={r.legacy_timezone: r.legacy_timezone_windows},
         )
-    except Exception as error:  # noqa: BLE001 - reported with the fix
+    except (pymssql.Error, OSError) as error:
         raise ReconcileError(
             f"SQL Server is not reachable at {mssql.host}:{mssql.port} "
             f"({type(error).__name__}). Start it with `docker compose --profile sqlserver up -d`."
@@ -155,11 +158,16 @@ def _discrepancies(diff: TableDiff, tolerance: Decimal) -> list[Discrepancy]:
     found = [Discrepancy(diff.table, k, "", "missing_in_target", "", "") for k in diff.missing]
     found += [Discrepancy(diff.table, k, "", "extra_in_target", "", "") for k in diff.extra]
     found += [
-        Discrepancy(diff.table, c.key, c.column,
-                    classify(spec.column(c.column), c.source, c.target, tolerance),
-                    c.source, c.target)
+        Discrepancy(
+            diff.table,
+            c.key,
+            c.column,
+            classify(spec.column(c.column), c.source, c.target, tolerance),
+            c.source,
+            c.target,
+        )
         for c in diff.cells
-    ]  # fmt: skip
+    ]
     return sorted(found, key=lambda d: (d.key, d.column))
 
 
@@ -185,17 +193,25 @@ def run_reconcile(settings: Settings, engines: Sequence[Engine] | None = None) -
             rules = result.rules[engine]
             for name, fixed in PASSES:
                 with tempfile.TemporaryDirectory() as work:
-                    migration = migrate(exports, catalog, engine, r.legacy_timezone, Path(work),
-                                        fixed=fixed)  # fmt: skip
+                    migration = migrate(
+                        exports, catalog, engine, r.legacy_timezone, Path(work), fixed=fixed
+                    )
                 truth = migration.truth + migration_faults.inject(
-                    migration.tables, migration.truth, settings.seed
+                    migration.tables, KEYS, migration.truth, settings.seed
                 )
                 target = _target(catalog, namespace_for(engine, fixed))
                 diffs = {
-                    spec.name: diff_table(spec, store, target, rules[spec.name], fanout=r.fanout,
-                                          leaf_width=r.leaf_width, zone_names=zone_names)
+                    spec.name: diff_table(
+                        spec,
+                        store,
+                        target,
+                        rules[spec.name],
+                        fanout=r.fanout,
+                        leaf_width=r.leaf_width,
+                        zone_names=zone_names,
+                    )
                     for spec in TABLES
-                }  # fmt: skip
+                }
                 target.connection.close()
                 found = [d for diff in diffs.values() for d in _discrepancies(diff, tolerance)]
                 result.passes.append(
@@ -223,13 +239,6 @@ def run_reconcile(settings: Settings, engines: Sequence[Engine] | None = None) -
 # -- persistence -----------------------------------------------------------------------
 
 
-def _replace(connection: duckdb.DuckDBPyConnection, name: str, table: pa.Table) -> None:
-    """Replace ``ops.<name>`` with ``table``. Arrow, because these run to 400k rows."""
-    connection.register("_rows", table)
-    connection.execute(f"CREATE OR REPLACE TABLE {OPS_SCHEMA}.{name} AS SELECT * FROM _rows")
-    connection.unregister("_rows")
-
-
 def _columns(
     rows: list[tuple[Any, ...]], names: Sequence[str], types: Sequence[pa.DataType]
 ) -> pa.Table:
@@ -241,21 +250,39 @@ def persist(connection: duckdb.DuckDBPyConnection, result: ReconcileResult) -> N
     s, i, f, b = pa.string(), pa.int64(), pa.float64(), pa.bool_()
     truth, found, tables, segments, metrics = [], [], [], [], []
     for p in result.passes:
-        truth += [(p.engine, p.name, c.table, c.key, c.column, c.klass, c.source, c.label)
-                  for c in p.truth]  # fmt: skip
-        found += [(p.engine, p.name, d.table, d.key, d.column, d.klass, d.source_value,
-                   d.target_value) for d in p.discrepancies]  # fmt: skip
+        truth += [
+            (p.engine, p.name, c.table, c.key, c.column, c.klass, c.source, c.label)
+            for c in p.truth
+        ]
+        found += [
+            (p.engine, p.name, d.table, d.key, d.column, d.klass, d.source_value, d.target_value)
+            for d in p.discrepancies
+        ]
         for name, diff in p.diffs.items():
             v = p.verdicts[name]
-            tables.append((p.engine, p.name, name, diff.source_rows, diff.target_rows,
-                           v.row_match_rate, v.passed, diff.summary_rows, diff.fetched_rows,
-                           diff.naive_transferred, diff.queries))  # fmt: skip
+            tables.append(
+                (
+                    p.engine,
+                    p.name,
+                    name,
+                    diff.source_rows,
+                    diff.target_rows,
+                    v.row_match_rate,
+                    v.passed,
+                    diff.summary_rows,
+                    diff.fetched_rows,
+                    diff.naive_transferred,
+                    diff.queries,
+                )
+            )
             segments += [
                 (p.engine, p.name, name, level, width, compared, differing)
                 for level, (width, compared, differing) in enumerate(diff.levels)
             ]
-            metrics += [(p.engine, p.name, "column_match_rate", f"{name}.{c}", rate)
-                        for c, rate in v.column_match_rates.items()]  # fmt: skip
+            metrics += [
+                (p.engine, p.name, "column_match_rate", f"{name}.{c}", rate)
+                for c, rate in v.column_match_rates.items()
+            ]
         g = p.grade
         metrics += [
             (p.engine, p.name, "recall", "all", g.recall),
@@ -265,24 +292,73 @@ def persist(connection: duckdb.DuckDBPyConnection, result: ReconcileResult) -> N
             (p.engine, p.name, "detected", "all", float(g.detected)),
             (p.engine, p.name, "equivalent_under_policy", "all", float(g.equivalent_under_policy)),
         ]
-        metrics += [(p.engine, p.name, "found_rate", label, found_n / planted if planted else 1.0)
-                    for label, (planted, found_n) in g.by_label.items()]  # fmt: skip
+        metrics += [
+            (p.engine, p.name, "found_rate", label, found_n / planted if planted else 1.0)
+            for label, (planted, found_n) in g.by_label.items()
+        ]
     with transaction(connection):
-        _replace(connection, "reconcile_ground_truth", _columns(truth,
-                 ("engine", "pass", "table_name", "key", "column_name", "class", "source", "label"),
-                 (s, s, s, i, s, s, s, s)))  # fmt: skip
-        _replace(connection, "reconcile_discrepancies", _columns(found,
-                 ("engine", "pass", "table_name", "key", "column_name", "class", "source_value",
-                  "target_value"), (s, s, s, i, s, s, s, s)))  # fmt: skip
-        _replace(connection, "reconcile_tables", _columns(tables,
-                 ("engine", "pass", "table_name", "source_rows", "target_rows", "row_match_rate",
-                  "passed", "summary_rows", "fetched_rows", "naive_rows", "queries"),
-                 (s, s, s, i, i, f, b, i, i, i, i)))  # fmt: skip
-        _replace(connection, "reconcile_segments", _columns(segments,
-                 ("engine", "pass", "table_name", "level", "width", "segments", "differing"),
-                 (s, s, s, i, i, i, i)))  # fmt: skip
-        _replace(connection, "reconcile_metrics", _columns(metrics,
-                 ("engine", "pass", "metric", "dimension", "value"), (s, s, s, s, f)))  # fmt: skip
+        replace_table_from_arrow(
+            connection,
+            "reconcile_ground_truth",
+            _columns(
+                truth,
+                ("engine", "pass", "table_name", "key", "column_name", "class", "source", "label"),
+                (s, s, s, i, s, s, s, s),
+            ),
+        )
+        replace_table_from_arrow(
+            connection,
+            "reconcile_discrepancies",
+            _columns(
+                found,
+                (
+                    "engine",
+                    "pass",
+                    "table_name",
+                    "key",
+                    "column_name",
+                    "class",
+                    "source_value",
+                    "target_value",
+                ),
+                (s, s, s, i, s, s, s, s),
+            ),
+        )
+        replace_table_from_arrow(
+            connection,
+            "reconcile_tables",
+            _columns(
+                tables,
+                (
+                    "engine",
+                    "pass",
+                    "table_name",
+                    "source_rows",
+                    "target_rows",
+                    "row_match_rate",
+                    "passed",
+                    "summary_rows",
+                    "fetched_rows",
+                    "naive_rows",
+                    "queries",
+                ),
+                (s, s, s, i, i, f, b, i, i, i, i),
+            ),
+        )
+        replace_table_from_arrow(
+            connection,
+            "reconcile_segments",
+            _columns(
+                segments,
+                ("engine", "pass", "table_name", "level", "width", "segments", "differing"),
+                (s, s, s, i, i, i, i),
+            ),
+        )
+        replace_table_from_arrow(
+            connection,
+            "reconcile_metrics",
+            _columns(metrics, ("engine", "pass", "metric", "dimension", "value"), (s, s, s, s, f)),
+        )
 
 
 @dataclass(frozen=True)

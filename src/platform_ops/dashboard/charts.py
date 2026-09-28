@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
 
 import altair as alt
 import pandas as pd
@@ -47,7 +46,7 @@ LIGHT = Palette(
         "#008300",
         "#4a3aa7",
         "#e34948",
-    ),  # fmt: skip
+    ),
     accent="#2a78d6",
     muted="#898781",
     before="#86b6ef",
@@ -64,7 +63,7 @@ DARK = Palette(
         "#008300",
         "#9085e9",
         "#e66767",
-    ),  # fmt: skip
+    ),
     accent="#3987e5",
     muted="#898781",
     before="#184f95",
@@ -104,16 +103,21 @@ def stacked_share(
         .encode(
             y=alt.Y(f"{category}:N", sort="-x", title=None),
             x=alt.X("sum(value):Q", title=None, axis=alt.Axis(format=value_format)),
-            color=alt.Color("part:N", scale=alt.Scale(domain=order,
-                            range=list(colors.categorical[: len(order)])),
-                            legend=alt.Legend(title=None, orient="top")),
+            color=alt.Color(
+                "part:N",
+                scale=alt.Scale(domain=order, range=list(colors.categorical[: len(order)])),
+                legend=alt.Legend(title=None, orient="top"),
+            ),
             order=alt.Order("part_order:Q"),
-            tooltip=[alt.Tooltip(f"{category}:N"), alt.Tooltip("part:N"),
-                     alt.Tooltip("value:Q", format=value_format)],
+            tooltip=[
+                alt.Tooltip(f"{category}:N"),
+                alt.Tooltip("part:N"),
+                alt.Tooltip("value:Q", format=value_format),
+            ],
         )
         .transform_calculate(part_order=f"indexof({order!r}, datum.part)")
         .properties(height=alt.Step(28))
-    )  # fmt: skip
+    )
     return chart
 
 
@@ -135,7 +139,7 @@ def single_bars(
             tooltip=[alt.Tooltip(f"{category}:N"), alt.Tooltip(f"{value}:Q", format=value_format)],
         )
         .properties(height=alt.Step(28))
-    )  # fmt: skip
+    )
     return chart
 
 
@@ -147,9 +151,12 @@ def team_lines(
         x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%b %Y")),
         y=alt.Y(f"{value}:Q", title=None, axis=alt.Axis(format=value_format)),
         color=alt.Color(f"{team}:N", scale=scale, legend=alt.Legend(title=None, orient="top")),
-        tooltip=[alt.Tooltip(f"{team}:N"), alt.Tooltip(f"{x}:T", format="%B %Y"),
-                 alt.Tooltip(f"{value}:Q", format=value_format)],
-    )  # fmt: skip
+        tooltip=[
+            alt.Tooltip(f"{team}:N"),
+            alt.Tooltip(f"{x}:T", format="%B %Y"),
+            alt.Tooltip(f"{value}:Q", format=value_format),
+        ],
+    )
     layered: alt.LayerChart = base.mark_line(strokeWidth=LINE_WIDTH) + base.mark_point(
         filled=True, size=POINT_SIZE
     )
@@ -165,8 +172,9 @@ def dumbbell(
     colors: Palette,
 ) -> alt.LayerChart:
     """Before and after per item: a thin rule between two dots, two shades of one hue."""
-    long = frame.melt(id_vars=[category], value_vars=[before, after], var_name="when",
-                      value_name="value")  # fmt: skip
+    long = frame.melt(
+        id_vars=[category], value_vars=[before, after], var_name="when", value_name="value"
+    )
     long["when"] = long["when"].map({before: labels[0], after: labels[1]})
     rule = (
         alt.Chart(frame)
@@ -179,13 +187,18 @@ def dumbbell(
         .encode(
             y=alt.Y(f"{category}:N", title=None),
             x=alt.X("value:Q", title=None),
-            color=alt.Color("when:N", scale=alt.Scale(domain=list(labels),
-                            range=[colors.before, colors.after]),
-                            legend=alt.Legend(title=None, orient="top")),
-            tooltip=[alt.Tooltip(f"{category}:N"), alt.Tooltip("when:N"),
-                     alt.Tooltip("value:Q", format=".1f")],
+            color=alt.Color(
+                "when:N",
+                scale=alt.Scale(domain=list(labels), range=[colors.before, colors.after]),
+                legend=alt.Legend(title=None, orient="top"),
+            ),
+            tooltip=[
+                alt.Tooltip(f"{category}:N"),
+                alt.Tooltip("when:N"),
+                alt.Tooltip("value:Q", format=".1f"),
+            ],
         )
-    )  # fmt: skip
+    )
     layered: alt.LayerChart = (rule + dots).properties(height=alt.Step(28))
     return layered
 
@@ -209,15 +222,21 @@ def spans(
             y=alt.Y(f"{label}:N", title=None, sort=None),
             x=alt.X(f"{start}:T", title=None),
             x2=f"{end}:T",
-            color=alt.Color(f"{level}:N", scale=alt.Scale(domain=list(levels), range=ramp),
-                            legend=alt.Legend(title=None, orient="top")),
-            tooltip=[alt.Tooltip(f"{label}:N"), alt.Tooltip(f"{level}:N"),
-                     alt.Tooltip(f"{start}:T", format="%Y-%m-%d %H:%M"),
-                     alt.Tooltip(f"{end}:T", format="%Y-%m-%d %H:%M"),
-                     *[alt.Tooltip(t) for t in tooltip]],
+            color=alt.Color(
+                f"{level}:N",
+                scale=alt.Scale(domain=list(levels), range=ramp),
+                legend=alt.Legend(title=None, orient="top"),
+            ),
+            tooltip=[
+                alt.Tooltip(f"{label}:N"),
+                alt.Tooltip(f"{level}:N"),
+                alt.Tooltip(f"{start}:T", format="%Y-%m-%d %H:%M"),
+                alt.Tooltip(f"{end}:T", format="%Y-%m-%d %H:%M"),
+                *[alt.Tooltip(t) for t in tooltip],
+            ],
         )
         .properties(height=alt.Step(24))
-    )  # fmt: skip
+    )
     return chart
 
 
@@ -231,8 +250,9 @@ def accent_against_grey(
     value_format: str = ",.0f",
 ) -> alt.Chart:
     """Two bars per item: the one that matters in the accent, its baseline in grey."""
-    long = frame.melt(id_vars=[category], value_vars=[accent, grey], var_name="series",
-                      value_name="value")  # fmt: skip
+    long = frame.melt(
+        id_vars=[category], value_vars=[accent, grey], var_name="series", value_name="value"
+    )
     long["series"] = long["series"].map({accent: labels[0], grey: labels[1]})
     chart: alt.Chart = (
         alt.Chart(long)
@@ -240,20 +260,20 @@ def accent_against_grey(
         .encode(
             y=alt.Y("series:N", title=None, axis=None, sort=list(labels)),
             x=alt.X("value:Q", title=None, axis=alt.Axis(format=value_format)),
-            row=alt.Row(f"{category}:N", title=None, header=alt.Header(labelAngle=0,
-                        labelAlign="left")),
-            color=alt.Color("series:N", scale=alt.Scale(domain=list(labels),
-                            range=[colors.accent, colors.muted]),
-                            legend=alt.Legend(title=None, orient="top")),
-            tooltip=[alt.Tooltip(f"{category}:N"), alt.Tooltip("series:N"),
-                     alt.Tooltip("value:Q", format=value_format)],
+            row=alt.Row(
+                f"{category}:N", title=None, header=alt.Header(labelAngle=0, labelAlign="left")
+            ),
+            color=alt.Color(
+                "series:N",
+                scale=alt.Scale(domain=list(labels), range=[colors.accent, colors.muted]),
+                legend=alt.Legend(title=None, orient="top"),
+            ),
+            tooltip=[
+                alt.Tooltip(f"{category}:N"),
+                alt.Tooltip("series:N"),
+                alt.Tooltip("value:Q", format=value_format),
+            ],
         )
         .properties(height=alt.Step(18))
-    )  # fmt: skip
+    )
     return chart
-
-
-def chart_spec(chart: Any) -> dict[str, Any]:
-    """The Vega-Lite spec of a chart, for tests."""
-    spec: dict[str, Any] = chart.to_dict()
-    return spec

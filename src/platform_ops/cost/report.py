@@ -9,7 +9,7 @@ so it lives in its own file (``cost_proxy_accuracy.md``) and never affects
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -17,6 +17,7 @@ import duckdb
 
 from platform_ops.common.config import Settings
 from platform_ops.common.db import OPS_SCHEMA
+from platform_ops.common.markdown import table
 from platform_ops.cost import recommend
 from platform_ops.metadata.manifest import Node
 from platform_ops.metadata.registry import Resolution
@@ -32,15 +33,6 @@ def usd(value: Decimal | float | int) -> str:
 
 def gigabytes(value: int | float) -> str:
     return f"{Decimal(str(value)) / Decimal(10**9):,.2f} GB"
-
-
-def table(
-    headers: Sequence[str], rows: Sequence[Sequence[object]], right: Sequence[int] = ()
-) -> str:
-    align = ["---:" if i in right else "---" for i in range(len(headers))]
-    lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(align) + "|"]
-    lines += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
-    return "\n".join(lines)
 
 
 @dataclass

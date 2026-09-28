@@ -1,6 +1,7 @@
 """End to end: simulate, then cost, through the real CLI (SPEC Phase 2 acceptance).
 
-One simulated week at scale 0.01, run twice in separate directories. Proves:
+Three simulated weeks at scale 0.01, run twice in separate directories: the
+shared ``full_warehouse`` and one independent run. Proves:
 
 - ``make simulate && make cost`` produce the report deterministically: two runs
   give byte-identical ``cost.md`` files;
@@ -33,7 +34,9 @@ runner = CliRunner()
 
 
 def _simulate_and_cost(root: Path, isolated_config: Callable[..., Path]) -> Settings:
-    settings_path = isolated_config(root, 0.01, weeks=1)
+    # Three weeks, like the shared warehouse: its first real dbt build is the
+    # same, and the extra replayed days cost almost nothing.
+    settings_path = isolated_config(root, 0.01, weeks=3)
     patch = pytest.MonkeyPatch()
     patch.setenv(CONFIG_PATH_ENV_VAR, str(settings_path))
     try:
@@ -47,11 +50,14 @@ def _simulate_and_cost(root: Path, isolated_config: Callable[..., Path]) -> Sett
 
 @pytest.fixture(scope="module")
 def runs(
-    tmp_path_factory: pytest.TempPathFactory, isolated_config: Callable[..., Path]
+    tmp_path_factory: pytest.TempPathFactory,
+    isolated_config: Callable[..., Path],
+    full_warehouse: Settings,
 ) -> Iterator[tuple[Settings, Settings]]:
-    first = _simulate_and_cost(tmp_path_factory.mktemp("cost_a"), isolated_config)
+    # The first run is the shared warehouse (simulate and cost through the CLI,
+    # then incidents and reconcile, which never touch the cost tables or report).
     second = _simulate_and_cost(tmp_path_factory.mktemp("cost_b"), isolated_config)
-    yield first, second
+    yield full_warehouse, second
 
 
 def _query(settings: Settings, sql: str) -> list[tuple[Any, ...]]:

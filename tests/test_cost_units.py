@@ -12,6 +12,7 @@ import pytest
 
 from platform_ops.common.config import Settings
 from platform_ops.common.db import connect
+from platform_ops.common.hashing import stable_hash
 from platform_ops.cost import attribution, growth, recommend, sizes
 from platform_ops.cost.collect import QueryLog, QueryRecord, _shape, read_dbt_run
 from platform_ops.cost.estimate import estimate
@@ -349,8 +350,9 @@ def test_dbt_run_order_is_dependency_order_whatever_dbt_reported(tmp_path: Path)
 
 
 def test_stable_hash_is_stable() -> None:
-    assert workload.stable_hash(1, "x", 2) == workload.stable_hash(1, "x", 2)
-    assert workload.stable_hash(1, "x", 2) != workload.stable_hash(1, "x", 3)
+    assert stable_hash(1, "x", 2) == stable_hash(1, "x", 2)
+    assert stable_hash(1, "x", 2) != stable_hash(1, "x", 3)
+    assert stable_hash(1, "x", 2) == 897146772116593929, "the same value on every machine"
 
 
 def test_dashboards_read_every_table_they_depend_on(settings: Settings) -> None:

@@ -1,1 +1,1 @@
-"""Cost attribution: collection, pricing, attribution, recommendations. Phase 2."""
+"""Cost attribution: collection, pricing, attribution, recommendations."""

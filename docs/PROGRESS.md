@@ -2,12 +2,12 @@
 
 Handoff file between sessions. Read this first, then `docs/SPEC.md`.
 
-Last updated: 2026-09-25
+Last updated: 2026-09-28
 
 ## Current phase
 
-Phase 5: Dashboards, documentation, polish. Implemented, awaiting review. All five phases are built.
-Branch: `phase-5-dashboards-docs` (off `main` at `a71f2e1`).
+Phase 6: Whole-repo review and cleanup. Implemented, awaiting review.
+Branch: `phase-6-review-cleanup` (off `main` at `93d74f4`).
 
 ## Done
 
@@ -19,15 +19,28 @@ Branch: `phase-5-dashboards-docs` (off `main` at `a71f2e1`).
 - Phase 4 implemented: `reconcile/` (schema, canonical rules and renderers, connectors for Postgres, SQL Server and DuckDB, legacy generator, migration job with four defects, segmented diff, classification, metrics, sign-off report) and `simulation/migration_faults.py`. `platform-ops reconcile run` is live, so every Makefile target is implemented. ADR 0009 and `src/platform_ops/reconcile/README.md` written.
 - Phase 4 merged (PR #6).
 - Phase 5 implemented: Streamlit dashboards (`dashboards/`, data layer and charts in `src/platform_ops/dashboard/`), `platform-ops dashboard`, BigQuery and Snowflake collectors (`cost/collectors/`) with generated fixtures and contract tests, `make readme-check`, ADR 0010, the root README, a dashboards README and a collectors section in the cost README.
+- Phase 5 merged (PR #7).
+- Phases 6 and 7 added to `docs/SPEC.md` by the owner's decision: Phase 6 is a whole-repo review and cleanup, Phase 7 is hardening and release (1.0.0).
+- Phase 6 implemented: broader lint rules on and clean; `# fmt: skip` noise removed; module boundaries fixed and pinned by `tests/test_architecture.py`; shared helpers in `common` (`markdown.table`, `db.replace_table`, `hashing.stable_hash`, `sandbox.write_isolated_config`); dead code removed; stale docstrings rewritten; new tests for the Slack post and the dashboard command; a shared `full_warehouse` test fixture. 22 findings recorded with decisions in `docs/review/phase-6-review.md`.
+- Phase 6 acceptance: a clean `make demo` wrote byte-identical reports to the baseline (excluding `cost_proxy_accuracy.md`, non-deterministic by design); `make readme-check` 178 of 178; test suite 9 min 50 s on `main` against 6 min 24 s on the branch, same machine and session (305 passed, 3 skipped). The 5-minute target was not reached; the floor is the independent runs the determinism tests need.
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
 - Phase 5 reference numbers: `make demo` from a clean state took 6 min 54 s and 9 min 1 s in two runs on the same laptop (slower machine state on the second: Docker Desktop just started, Smart App Control checking native modules), with identical reports. `make readme-check`: 178 numbers across the root and module READMEs, all found in the reports.
 - Phase 4 reference numbers at scale 1.0: `make reconcile` about 52 s, byte-identical `reconciliation.md` across two runs. As delivered: 199,465 planted discrepancies, 100% recall, precision and classification accuracy; not signed off. Job fixed: 44 planted, all found; the diff moves 0.6% to 9.6% of the rows a naive comparison would. `make demo` from a clean state: 6 min 54 s.
 
 ## In progress
 
-Nothing. Phase 5 is waiting for review.
+Nothing. Phase 6 is waiting for review.
 
 ## Decisions made
+
+### Phases 6 and 7 (owner, at planning)
+
+1. **Two more phases**: Phase 6 whole-repo review and cleanup, then Phase 7 hardening and release, so the release is cut on the cleaned code.
+2. **Release**: `CHANGELOG.md`, version 1.0.0, and the tag commands; the owner creates and pushes the tag and the GitHub release.
+3. **CI gets a Postgres job** (service container) in Phase 7; SQL Server stays optional and skipped in CI.
+4. **Phase 6 rule: no behaviour change.** `make demo` reports must be byte-identical before and after; a bug whose fix would change a reported number is raised with the owner, not fixed silently.
+
+Planned defaults for Phase 6: the review record is committed as `docs/review/phase-6-review.md`; the broader ruff rules stay on; `make test` target under 5 minutes, or the measured floor is reported.
 
 ### Phase 5 (owner, at planning)
 
@@ -116,14 +129,21 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 
 ## Known issues
 
+Kept on purpose (design limits, documented in the ADRs):
+
 - Replayed days price model reads on model sizes up to 4 weeks old, and dashboards read marts up to 4 weeks stale. Raw data is always current. Acceptable for quarterly cost attribution (ADR 0007).
-- The estimate ignores row-group pruning, so filtered queries are overestimated: ad hoc queries by about 2.3 times at scale 1.0, measured per run in `reports/cost_proxy_accuracy.md`. The accuracy note only covers queries that returned less than one page (500 rows), because DuckDB has no final row count for a result cut short, so dashboard accuracy there is measured on small rollup tables only.
+- The bytes estimate ignores row-group pruning, so filtered queries are overestimated; ad hoc queries by more than twice what DuckDB scanned, measured per run in `reports/cost_proxy_accuracy.md`. That file is not deterministic by design (profiler row counts depend on physical row order), so it is excluded when reports are compared byte for byte.
 - Filters written against a CTE or subquery column outside it are not traced to the base table for hotspot detection. The workload and dbt do not write filters that way.
-- `make incidents` at scale 1.0 ranged from 2 min 22 s to 2 min 56 s on this laptop, so it sometimes goes over the 2.5-minute target from the plan. With Phase 2 at about 5.3 min, the demo has roughly 1.5 to 2 min left for Phase 4 and setup.
-- The alert storm is modest: 18 failing checks for 8 faults. Most downstream tests check keys and row counts that a few bad values do not break. The volume drop is the one fault with a real cascade (5 checks).
-- The dashboards were checked by rendering every page with Streamlit's AppTest and by serving them headless (health check and page load), but not by eye: headless Chrome only captures Streamlit's loading skeleton, and no browser automation is installed. They should be looked at once in a browser.
-- `make demo` timing varies with machine state: 6 min 54 s and 9 min 1 s on the same laptop. Both are under the 10-minute budget, but the margin is thinner than the first run suggested.
+- The alert storm is modest: 18 failing checks for 8 faults. The volume drop is the one fault with a real cascade (5 checks).
 - Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0008).
+
+For Phase 7:
+
+- `make demo` timing varies with machine state: 6 min 54 s and 9 min 1 s in Phase 5, 10 min 34 s at the start of Phase 6 and 7 min 57 s at its end, on the same laptop. The spread comes from machine state; the baseline run was just over the 10-minute budget. Margin has to be restored and measured.
+- The dashboards have been rendered by AppTest and served headless, but never looked at in a browser.
+- The pandas and pyarrow caps were added for Windows Smart App Control, which the owner has since switched off on the development laptop (it had started blocking DuckDB 1.5.5 as well). Revisit the caps.
+- `core.autocrlf=true` turns LF-generated files into CRLF on checkout; a `.gitattributes` with `eol=lf` would stop phantom diffs on regenerated fixtures and docs.
+- The Postgres tests skip in CI (no service container yet); the SQL Server tests skip wherever the optional driver is not installed.
 
 ## Open questions for the owner
 
@@ -131,4 +151,4 @@ None open.
 
 ## Next step
 
-Owner reviews Phase 5 and opens the PR. The SPEC's five phases are then complete.
+Owner reviews Phase 6 and opens the PR. Then plan Phase 7 (hardening and release) on a new branch from `main`.

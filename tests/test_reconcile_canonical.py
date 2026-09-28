@@ -58,26 +58,80 @@ GOLDEN = TableSpec(
 )
 
 ROWS: list[dict[str, Any]] = [
-    {"id": 1, "t": "plain", "d2": Decimal("1.00"), "d6": Decimal("0.000001"), "b": True,
-     "lt": datetime(2025, 1, 15, 10, 0, 0, 500000), "ut": datetime(2025, 1, 15, 15, tzinfo=UTC)},
-    {"id": 2, "t": "", "d2": Decimal("-2.35"), "d6": Decimal("-123456789012.345678"), "b": False,
-     "lt": datetime(2025, 7, 1, 10, 0), "ut": datetime(2025, 7, 1, 14, 0, 0, 123456, tzinfo=UTC)},
+    {
+        "id": 1,
+        "t": "plain",
+        "d2": Decimal("1.00"),
+        "d6": Decimal("0.000001"),
+        "b": True,
+        "lt": datetime(2025, 1, 15, 10, 0, 0, 500000),
+        "ut": datetime(2025, 1, 15, 15, tzinfo=UTC),
+    },
+    {
+        "id": 2,
+        "t": "",
+        "d2": Decimal("-2.35"),
+        "d6": Decimal("-123456789012.345678"),
+        "b": False,
+        "lt": datetime(2025, 7, 1, 10, 0),
+        "ut": datetime(2025, 7, 1, 14, 0, 0, 123456, tzinfo=UTC),
+    },
     {"id": 3, "t": None, "d2": None, "d6": None, "b": None, "lt": None, "ut": None},
-    {"id": 4, "t": "trailing   ", "d2": Decimal("2.35"), "d6": Decimal("12345678901.234567"),
-     "b": True, "lt": datetime(2025, 3, 9, 6, 0), "ut": datetime(2025, 11, 2, 6, tzinfo=UTC)},
-    {"id": 5, "t": "MiXeD Case", "d2": Decimal("-0.04"), "d6": Decimal("0"), "b": False,
-     "lt": datetime(2025, 11, 2, 6, 0),
-     "ut": datetime(2024, 2, 29, 23, 59, 59, 999999, tzinfo=UTC)},
-    {"id": 6, "t": "pipe|and\\backslash", "d2": Decimal("0.05"), "d6": Decimal("-0.000999"),
-     "b": True, "lt": datetime(2025, 12, 31, 23, 59, 59, 999999), "ut": None},
-    {"id": 7, "t": "Nguyễn Zoë José Łukasz", "d2": Decimal("999.99"), "d6": Decimal("1.5"),
-     "b": None, "lt": datetime(2025, 6, 15, 12, 30),
-     "ut": datetime(2025, 6, 15, 16, 30, tzinfo=UTC)},
-    {"id": 8, "t": "\\N", "d2": Decimal("0.00"), "d6": Decimal("0.000000"), "b": False,
-     "lt": datetime(2025, 1, 1, 0, 0), "ut": datetime(2025, 1, 1, 5, tzinfo=UTC)},
-    {"id": 9, "t": "it's", "d2": Decimal("-999.95"), "d6": Decimal("-1"), "b": True,
-     "lt": datetime(2025, 4, 1, 9, 15, 0, 1), "ut": datetime(2025, 4, 1, 13, 15, 0, 1, tzinfo=UTC)},
-]  # fmt: skip
+    {
+        "id": 4,
+        "t": "trailing   ",
+        "d2": Decimal("2.35"),
+        "d6": Decimal("12345678901.234567"),
+        "b": True,
+        "lt": datetime(2025, 3, 9, 6, 0),
+        "ut": datetime(2025, 11, 2, 6, tzinfo=UTC),
+    },
+    {
+        "id": 5,
+        "t": "MiXeD Case",
+        "d2": Decimal("-0.04"),
+        "d6": Decimal("0"),
+        "b": False,
+        "lt": datetime(2025, 11, 2, 6, 0),
+        "ut": datetime(2024, 2, 29, 23, 59, 59, 999999, tzinfo=UTC),
+    },
+    {
+        "id": 6,
+        "t": "pipe|and\\backslash",
+        "d2": Decimal("0.05"),
+        "d6": Decimal("-0.000999"),
+        "b": True,
+        "lt": datetime(2025, 12, 31, 23, 59, 59, 999999),
+        "ut": None,
+    },
+    {
+        "id": 7,
+        "t": "Nguyễn Zoë José Łukasz",
+        "d2": Decimal("999.99"),
+        "d6": Decimal("1.5"),
+        "b": None,
+        "lt": datetime(2025, 6, 15, 12, 30),
+        "ut": datetime(2025, 6, 15, 16, 30, tzinfo=UTC),
+    },
+    {
+        "id": 8,
+        "t": "\\N",
+        "d2": Decimal("0.00"),
+        "d6": Decimal("0.000000"),
+        "b": False,
+        "lt": datetime(2025, 1, 1, 0, 0),
+        "ut": datetime(2025, 1, 1, 5, tzinfo=UTC),
+    },
+    {
+        "id": 9,
+        "t": "it's",
+        "d2": Decimal("-999.95"),
+        "d6": Decimal("-1"),
+        "b": True,
+        "lt": datetime(2025, 4, 1, 9, 15, 0, 1),
+        "ut": datetime(2025, 4, 1, 13, 15, 0, 1, tzinfo=UTC),
+    },
+]
 
 # Two policies: as stored, and the lenient one a case-insensitive legacy system
 # implies. d2 is re-rendered at scale 1 to exercise rounding half away from
@@ -92,11 +146,17 @@ POLICIES = {
 
 
 def _arrow() -> pa.Table:
-    schema = pa.schema([
-        ("id", pa.int64()), ("t", pa.string()), ("d2", pa.decimal128(12, 2)),
-        ("d6", pa.decimal128(20, 6)), ("b", pa.bool_()), ("lt", pa.timestamp("us")),
-        ("ut", pa.timestamp("us", tz="UTC")),
-    ])  # fmt: skip
+    schema = pa.schema(
+        [
+            ("id", pa.int64()),
+            ("t", pa.string()),
+            ("d2", pa.decimal128(12, 2)),
+            ("d6", pa.decimal128(20, 6)),
+            ("b", pa.bool_()),
+            ("lt", pa.timestamp("us")),
+            ("ut", pa.timestamp("us", tz="UTC")),
+        ]
+    )
     return pa.Table.from_pylist(ROWS, schema=schema)
 
 
@@ -168,7 +228,7 @@ def postgres() -> Iterator[PostgresConnector]:
         connector = PostgresConnector(
             postgres_params(REPO_ROOT / ".env"), local_zone=ZONE, schema="golden_check"
         )
-    except Exception as error:  # noqa: BLE001 - any failure to connect means skip
+    except Exception as error:
         pytest.skip(f"Postgres not reachable ({type(error).__name__}); run `make up`")
     connector.recreate({"golden": _arrow()}, [GOLDEN])
     yield connector
@@ -190,7 +250,7 @@ def sqlserver() -> Iterator[SqlServerConnector]:
             local_zone=ZONE,
             zone_names=ZONE_NAMES,
         )
-    except Exception as error:  # noqa: BLE001 - any failure to connect means skip
+    except Exception as error:
         pytest.skip(f"SQL Server not reachable ({type(error).__name__}); see the sqlserver profile")
     connector.recreate({"golden": _arrow()}, [GOLDEN])
     yield connector
