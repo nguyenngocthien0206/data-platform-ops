@@ -53,11 +53,8 @@ class Skipped:
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     """Recorded vendor rows, one JSON object per line."""
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            rows.append(json.loads(line))
-    return rows
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
 
 
 def utc_naive(value: str) -> datetime:

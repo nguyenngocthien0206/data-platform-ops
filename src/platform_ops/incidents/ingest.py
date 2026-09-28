@@ -96,28 +96,49 @@ def parse_run_results(
             skipped.append(unique_id)
         elif node.resource_type == "model" and status == "error":
             events.append(
-                CheckEvent(run_id, unique_id, "model", unique_id, status,
-                           _message(result.get("message")), detected_at)
-            )  # fmt: skip
+                CheckEvent(
+                    run_id,
+                    unique_id,
+                    "model",
+                    unique_id,
+                    status,
+                    _message(result.get("message")),
+                    detected_at,
+                )
+            )
         elif node.resource_type == "test" and status in FAILED_TEST_STATUSES:
             events.append(
-                CheckEvent(run_id, unique_id, "test", test_subject(node), status,
-                           _message(result.get("message")), detected_at)
-            )  # fmt: skip
+                CheckEvent(
+                    run_id,
+                    unique_id,
+                    "test",
+                    test_subject(node),
+                    status,
+                    _message(result.get("message")),
+                    detected_at,
+                )
+            )
     return RunOutcome(tuple(sorted(events)), tuple(sorted(skipped)), len(results))
 
 
 def parse_freshness(data: Mapping[str, Any], *, run_id: str, detected_at: datetime) -> RunOutcome:
     """Failures from one ``sources.json``. Only ``error`` counts; ``warn`` does not."""
     events = [
-        CheckEvent(run_id, f"freshness:{result['unique_id']}", "freshness",
-                   str(result["unique_id"]), str(result["status"]),
-                   _message(f"max_loaded_at {result.get('max_loaded_at')}, "
-                            f"age {float(result.get('age') or 0) / 3600:.1f} h"),
-                   detected_at)
+        CheckEvent(
+            run_id,
+            f"freshness:{result['unique_id']}",
+            "freshness",
+            str(result["unique_id"]),
+            str(result["status"]),
+            _message(
+                f"max_loaded_at {result.get('max_loaded_at')}, "
+                f"age {float(result.get('age') or 0) / 3600:.1f} h"
+            ),
+            detected_at,
+        )
         for result in data.get("results", [])
         if str(result.get("status")) in FAILED_FRESHNESS_STATUSES
-    ]  # fmt: skip
+    ]
     return RunOutcome(tuple(sorted(events)), (), len(data.get("results", [])))
 
 
@@ -144,9 +165,15 @@ CHECK_EVENTS_DDL = """
     incident_id VARCHAR"""
 
 CHECK_EVENT_COLUMNS = (
-    "run_id", "check_id", "check_type", "subject", "status", "message", "detected_at",
+    "run_id",
+    "check_id",
+    "check_type",
+    "subject",
+    "status",
+    "message",
+    "detected_at",
     "incident_id",
-)  # fmt: skip
+)
 
 
 def reset_check_events(connection: duckdb.DuckDBPyConnection) -> None:
@@ -158,8 +185,16 @@ def persist_events(
 ) -> int:
     """Append events, each tagged with the incident it was grouped into."""
     rows = [
-        (e.run_id, e.check_id, e.check_type, e.subject, e.status, e.message, e.detected_at,
-         incident_id)
+        (
+            e.run_id,
+            e.check_id,
+            e.check_type,
+            e.subject,
+            e.status,
+            e.message,
+            e.detected_at,
+            incident_id,
+        )
         for e, incident_id in events
-    ]  # fmt: skip
+    ]
     return insert_rows(connection, f"{OPS_SCHEMA}.check_events", CHECK_EVENT_COLUMNS, rows)

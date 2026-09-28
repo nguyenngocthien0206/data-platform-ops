@@ -236,9 +236,13 @@ class PostgresConnector(_SqlConnector):
         self.schema = schema
         self.local_zone = local_zone
         self.connection = psycopg.connect(
-            host=params.host, port=params.port, user=params.user, password=params.password,
-            dbname=params.dbname, autocommit=True,
-        )  # fmt: skip
+            host=params.host,
+            port=params.port,
+            user=params.user,
+            password=params.password,
+            dbname=params.dbname,
+            autocommit=True,
+        )
         self.connection.execute("SET TimeZone = 'UTC'")
 
     def close(self) -> None:
@@ -272,7 +276,10 @@ class PostgresConnector(_SqlConnector):
                 )
                 staging.unregister("_incoming")
                 copy_sql = f"COPY {self.relation(spec)} FROM STDIN (FORMAT csv)"
-                with self.connection.cursor().copy(copy_sql) as copy, open(path, "rb") as source:
+                with (
+                    self.connection.cursor().copy(copy_sql) as copy,
+                    Path(path).open("rb") as source,
+                ):
                     while chunk := source.read(1 << 20):
                         copy.write(chunk)
             staging.close()
@@ -286,7 +293,7 @@ class PostgresConnector(_SqlConnector):
             f"COPY (SELECT {columns} FROM {self.relation(table)} ORDER BY {table.key}) "
             "TO STDOUT (FORMAT csv, FORCE_QUOTE *)"
         )
-        with self.connection.cursor().copy(sql) as copy, open(path, "wb") as target:
+        with self.connection.cursor().copy(sql) as copy, path.open("wb") as target:
             for chunk in copy:
                 target.write(chunk)
         return read_export_csv(path, table)
@@ -332,9 +339,12 @@ class SqlServerConnector(_SqlConnector):
         self.zone_names = zone_names
         self.params = params
         self.connection = pymssql.connect(
-            server=params.host, port=str(params.port), user=params.user,
-            password=params.password, autocommit=True,
-        )  # fmt: skip
+            server=params.host,
+            port=str(params.port),
+            user=params.user,
+            password=params.password,
+            autocommit=True,
+        )
         self._use_database(create=False)
 
     def _use_database(self, *, create: bool) -> None:

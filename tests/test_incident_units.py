@@ -30,32 +30,39 @@ def _nodes() -> dict[str, Node]:
         MART: Node(MART, "model", "sales_fct_orders", depends_on=(STG,)),
         DASH: Node(DASH, "exposure", "sales_dashboard", depends_on=(MART,)),
         "test.company.not_null_stg_orders_id": Node(
-            "test.company.not_null_stg_orders_id", "test", "not_null_stg_orders_id",
-            depends_on=("macro.dbt.test_not_null", STG), attached_node=STG,
+            "test.company.not_null_stg_orders_id",
+            "test",
+            "not_null_stg_orders_id",
+            depends_on=("macro.dbt.test_not_null", STG),
+            attached_node=STG,
         ),
-        REL: Node(REL, "test", "relationships_items_orders", depends_on=(MART, STG),
-                  attached_node=MART),
-    }  # fmt: skip
+        REL: Node(
+            REL, "test", "relationships_items_orders", depends_on=(MART, STG), attached_node=MART
+        ),
+    }
 
 
 def _registry() -> Registry:
     return Registry(
         teams={
-            "platform": Team(id="platform", name="Platform", channel="#platform",
-                             members=["priya", "marco"]),
+            "platform": Team(
+                id="platform", name="Platform", channel="#platform", members=["priya", "marco"]
+            ),
             "sales": Team(id="sales", name="Sales", channel="#sales", members=["sam"]),
         },
         rules=(
-            DatasetRule(match="source.company.raw.*", owner="priya", team="platform",
-                        tier="critical"),
-            DatasetRule(match="model.company.stg_*", owner="marco", team="platform",
-                        tier="important"),
-            DatasetRule(match="model.company.sales_*", owner="sam", team="sales",
-                        tier="critical"),
-            DatasetRule(match="exposure.company.sales_*", owner="sam", team="sales",
-                        tier="important"),
+            DatasetRule(
+                match="source.company.raw.*", owner="priya", team="platform", tier="critical"
+            ),
+            DatasetRule(
+                match="model.company.stg_*", owner="marco", team="platform", tier="important"
+            ),
+            DatasetRule(match="model.company.sales_*", owner="sam", team="sales", tier="critical"),
+            DatasetRule(
+                match="exposure.company.sales_*", owner="sam", team="sales", tier="important"
+            ),
         ),
-    )  # fmt: skip
+    )
 
 
 # -- ingestion -------------------------------------------------------------------------
@@ -66,12 +73,15 @@ def test_run_results_keep_failures_and_skips_only() -> None:
         "results": [
             {"unique_id": STG, "status": "error", "message": "Binder Error:\n  column"},
             {"unique_id": MART, "status": "skipped", "message": None},
-            {"unique_id": "test.company.not_null_stg_orders_id", "status": "fail",
-             "message": "Got 3 results"},
+            {
+                "unique_id": "test.company.not_null_stg_orders_id",
+                "status": "fail",
+                "message": "Got 3 results",
+            },
             {"unique_id": REL, "status": "pass", "message": None},
             {"unique_id": "model.company.not_in_manifest", "status": "error", "message": ""},
         ]
-    }  # fmt: skip
+    }
     outcome = ingest.parse_run_results(data, _nodes(), run_id="r1", detected_at=AT)
     assert [(e.check_type, e.check_id, e.subject) for e in outcome.events] == [
         ("model", STG, STG),
@@ -103,10 +113,12 @@ def test_freshness_warn_is_not_an_alert() -> None:
 
 def test_merge_combines_run_test_and_freshness() -> None:
     event = ingest.CheckEvent("r1", STG, "model", STG, "error", "", AT)
-    merged = ingest.merge([
-        ingest.RunOutcome((event,), (MART,), 3),
-        ingest.RunOutcome((event,), (), 4),
-    ])  # fmt: skip
+    merged = ingest.merge(
+        [
+            ingest.RunOutcome((event,), (MART,), 3),
+            ingest.RunOutcome((event,), (), 4),
+        ]
+    )
     assert merged.events == (event,)
     assert merged.skipped == (MART,)
     assert merged.checks_run == 7
@@ -160,8 +172,9 @@ def test_severity_thresholds(repo_settings: Settings) -> None:
 def test_a_staging_root_pages_the_owner_of_its_source() -> None:
     nodes, registry = _nodes(), _registry()
     assert (route(STG, nodes, registry).owner, route(STG, nodes, registry).routed_via) == (
-        "priya", SRC,
-    )  # fmt: skip
+        "priya",
+        SRC,
+    )
     assert naive_route(STG, nodes, registry).owner == "marco"
 
 

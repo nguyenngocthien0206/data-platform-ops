@@ -44,14 +44,16 @@ if metrics is not None:
     page.chart(
         charts.dumbbell(
             per_person, "person", "before", "after", ("Before grouping", "After"), colors
-        ),  # fmt: skip
+        ),
         per_person,
     )
 
     severities = ["SEV1", "SEV2", "SEV3"]
     detect, resolve = st.columns(2)
-    for column, name, title in ((detect, "mttd_hours", "Time to detect (hours)"),
-                                (resolve, "mttr_hours", "Time to resolve (hours)")):  # fmt: skip
+    for column, name, title in (
+        (detect, "mttd_hours", "Time to detect (hours)"),
+        (resolve, "mttr_hours", "Time to resolve (hours)"),
+    ):
         with column:
             st.subheader(title)
             rows = metrics[(metrics["metric"] == name) & metrics["dimension"].isin(severities)]
@@ -64,11 +66,19 @@ incidents = page.frame("incidents")
 if incidents is not None:
     st.subheader("Timeline")
     page.chart(
-        charts.spans(incidents, "incident_id", "opened_at", "resolved_at", "severity",
-                     ["SEV1", "SEV2", "SEV3"], colors, tooltip=["owner:N", "root_node:N"]),
+        charts.spans(
+            incidents,
+            "incident_id",
+            "opened_at",
+            "resolved_at",
+            "severity",
+            ["SEV1", "SEV2", "SEV3"],
+            colors,
+            tooltip=["owner:N", "root_node:N"],
+        ),
         incidents,
         label="Incidents",
-    )  # fmt: skip
+    )
 
 kinds = page.frame("check_events_by_kind")
 runs = page.frame("incident_runs")

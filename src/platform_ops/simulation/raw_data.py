@@ -125,13 +125,47 @@ _PRIMARY_KEYS: dict[str, str] = {
 }
 
 _FIRST_NAMES = [
-    "Anna", "Ben", "Chloe", "David", "Emma", "Felix", "Grace", "Hugo", "Ines", "Jack",
-    "Kai", "Lina", "Minh", "Nora", "Omar", "Paula", "Quinn", "Rosa", "Sven", "Thao",
-]  # fmt: skip
+    "Anna",
+    "Ben",
+    "Chloe",
+    "David",
+    "Emma",
+    "Felix",
+    "Grace",
+    "Hugo",
+    "Ines",
+    "Jack",
+    "Kai",
+    "Lina",
+    "Minh",
+    "Nora",
+    "Omar",
+    "Paula",
+    "Quinn",
+    "Rosa",
+    "Sven",
+    "Thao",
+]
 _LAST_NAMES = [
-    "Nguyen", "Smith", "Muller", "Garcia", "Tanaka", "Silva", "Kowalski", "Brown", "Rossi",
-    "Dubois", "Kim", "Patel", "Jensen", "Novak", "Tran", "Lopez", "Weber", "Moreau",
-]  # fmt: skip
+    "Nguyen",
+    "Smith",
+    "Muller",
+    "Garcia",
+    "Tanaka",
+    "Silva",
+    "Kowalski",
+    "Brown",
+    "Rossi",
+    "Dubois",
+    "Kim",
+    "Patel",
+    "Jensen",
+    "Novak",
+    "Tran",
+    "Lopez",
+    "Weber",
+    "Moreau",
+]
 _DOMAINS = ["example.com", "mail.test", "inbox.test", "post.test"]
 _COUNTRIES = ["US", "GB", "DE", "FR", "VN", "JP", "CA", "AU", "BR", "IN"]
 _CATEGORIES = ["apparel", "electronics", "home", "beauty", "sports", "toys", "books", "garden"]
@@ -306,8 +340,10 @@ def load_window(
 def _ddl_columns(table: str) -> list[tuple[str, str]]:
     """(name, type) pairs from ``_DDL``, splitting on commas outside parentheses."""
     parts = re.split(r",(?![^(]*\))", _DDL[table])
-    return [(name, data_type.strip()) for name, _, data_type in
-            (part.strip().partition(" ") for part in parts)]  # fmt: skip
+    return [
+        (name, data_type.strip())
+        for name, _, data_type in (part.strip().partition(" ") for part in parts)
+    ]
 
 
 def generated_columns(table: str) -> list[str]:

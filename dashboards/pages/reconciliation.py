@@ -54,17 +54,21 @@ if tables is not None:
         below = columns[columns["match_rate"] < 1]
         if not below.empty:
             with st.expander(f"{len(below)} columns below 100%"):
-                st.dataframe(below.style.format({"match_rate": "{:.3%}"}), hide_index=True,
-                             width="stretch")  # fmt: skip
+                st.dataframe(
+                    below.style.format({"match_rate": "{:.3%}"}), hide_index=True, width="stretch"
+                )
 
     classes = page.frame("discrepancies_by_class")
     if classes is not None:
         st.subheader("Discrepancies by class")
         mine_classes = classes[(classes["engine"] == engine) & (classes["pass"] == chosen_pass)]
         pivot = mine_classes.pivot_table(
-            index="class", columns="table_name", values="discrepancies", fill_value=0,
+            index="class",
+            columns="table_name",
+            values="discrepancies",
+            fill_value=0,
             aggfunc="sum",
-        )  # fmt: skip
+        )
         st.dataframe(pivot, width="stretch")
 
     samples = page.frame("discrepancy_samples")
@@ -84,11 +88,25 @@ if tables is not None:
         "much as a full copy. Once the job is fixed, only the few differing segments are opened."
     )
     page.chart(
-        charts.accent_against_grey(mine, "table_name", "segmented_rows", "naive_rows",
-                                   ("Segmented diff", "Naive copy"), colors),
-        mine[["table_name", "summary_rows", "fetched_rows", "segmented_rows", "naive_rows",
-              "queries"]],
-    )  # fmt: skip
+        charts.accent_against_grey(
+            mine,
+            "table_name",
+            "segmented_rows",
+            "naive_rows",
+            ("Segmented diff", "Naive copy"),
+            colors,
+        ),
+        mine[
+            [
+                "table_name",
+                "summary_rows",
+                "fetched_rows",
+                "segmented_rows",
+                "naive_rows",
+                "queries",
+            ]
+        ],
+    )
 
     segments = page.frame("reconcile_segments")
     if segments is not None:
