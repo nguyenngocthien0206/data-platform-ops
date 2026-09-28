@@ -21,8 +21,11 @@ data-platform-ops/
 │   ├── simulation/            # raw data generator, workload generator, fault injectors
 │   ├── cost/
 │   ├── incidents/
-│   └── reconcile/
+│   ├── reconcile/
+│   └── dashboard/             # read-only data layer and charts for the dashboards
 ├── dashboards/                # streamlit app, one page per module
+├── .streamlit/                # streamlit config (usage stats off)
+├── scripts/                   # vendor fixture generator, README number check
 ├── data/                      # generated DuckDB warehouse file, gitignored
 ├── warehouse/                 # local Iceberg warehouse, gitignored
 ├── reports/                   # generated markdown reports, gitignored
@@ -47,6 +50,7 @@ data-platform-ops/
 | `incidents` | inject faults, run dbt, detect and group incidents, write metrics |
 | `reconcile` | run the migration scenario and the diff, write the sign-off report |
 | `dashboard` | launch streamlit |
+| `readme-check` | check every README results number against `reports/` (after `demo`) |
 | `test` / `lint` | pytest, ruff, mypy |
 | `demo` | everything above end to end on a clean state |
 
@@ -243,6 +247,34 @@ For each mismatched key, compare column by column and classify: `missing_in_targ
 - Cloud-ready cost collectors: `BigQueryJobsCollector` and `SnowflakeQueryHistoryCollector` implementing the Phase 2 collection interface, verified only by contract tests against recorded fixture files under `tests/fixtures/` (a few hundred rows in each vendor's documented schema). No network access and no cloud account are involved.
 
 **Acceptance:** a fresh clone followed by `make setup && make up && make demo && make dashboard` works, and every number in the README matches the generated reports.
+
+## Phase 6: Whole-repo review and cleanup
+
+Five phases were built one after another under a time budget. Before the release, review the whole repository and pay down what that left behind, without changing what the toolkit does.
+
+- Enable a broader lint rule set permanently and fix what it finds. Remove formatter and lint suppressions that do nothing.
+- Remove duplication and cross-module shortcuts: shared helpers (Markdown report formatting, replacing an `ops` table, writing an isolated config) live in one place, and modules do not import each other's internals.
+- Review every module for correctness, dead code (checked against a coverage report), consistent naming and error messages, docstrings that no longer match the code, and missing tests. Record each finding in `docs/review/phase-6-review.md` with its location, severity and decision (fixed, accepted with a reason, or deferred to Phase 7).
+- Make the test suite faster without losing coverage, by sharing expensive warehouses between integration tests where a test does not need its own.
+- Bring the docs back in line with the code: `PROGRESS.md` known issues, module READMEs, ADRs.
+
+**Acceptance:** `make demo` writes byte-identical reports before and after the phase. `make readme-check`, `make test` and `make lint` (with the broader rules) pass. `make test` runs in under 5 minutes, or the review record states the measured floor and why. Every finding in the review record has a decision.
+
+---
+
+## Phase 7: Hardening and release
+
+Make the reviewed codebase dependable on machines other than the one it was built on, and release it as 1.0.0.
+
+- A second CI job with a Postgres service container runs the Postgres golden-row and reconciliation end-to-end tests, so they no longer skip in CI. SQL Server stays optional and skipped in CI.
+- Revisit the dependency caps added for Windows Smart App Control (pandas, pyarrow) and document the policy for raising them.
+- Restore margin on the 10-minute `make demo` budget, measured on real runs.
+- Check the dashboards in a real browser, and fix what that shows.
+- `CHANGELOG.md` covering Phases 0 to 7, version 1.0.0 in `pyproject.toml` and `platform-ops version`, and the exact commands for the owner to create and push the `v1.0.0` tag and GitHub release.
+
+**Acceptance:** both CI jobs pass on a pull request. A fresh clone followed by `make setup && make up && make demo && make readme-check && make dashboard` works. `make demo` finishes in under 10 minutes with the margin stated in PROGRESS. `CHANGELOG.md` and the version agree.
+
+---
 
 ## Out of scope
 

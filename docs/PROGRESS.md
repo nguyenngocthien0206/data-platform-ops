@@ -2,12 +2,12 @@
 
 Handoff file between sessions. Read this first, then `docs/SPEC.md`.
 
-Last updated: 2026-09-25
+Last updated: 2026-09-28
 
 ## Current phase
 
-Phase 5: Dashboards, documentation, polish. Implemented, awaiting review. All five phases are built.
-Branch: `phase-5-dashboards-docs` (off `main` at `a71f2e1`).
+Phase 6: Whole-repo review and cleanup. Planned and approved, not yet implemented.
+Branch: `phase-6-review-cleanup` (off `main` at `93d74f4`).
 
 ## Done
 
@@ -19,15 +19,26 @@ Branch: `phase-5-dashboards-docs` (off `main` at `a71f2e1`).
 - Phase 4 implemented: `reconcile/` (schema, canonical rules and renderers, connectors for Postgres, SQL Server and DuckDB, legacy generator, migration job with four defects, segmented diff, classification, metrics, sign-off report) and `simulation/migration_faults.py`. `platform-ops reconcile run` is live, so every Makefile target is implemented. ADR 0009 and `src/platform_ops/reconcile/README.md` written.
 - Phase 4 merged (PR #6).
 - Phase 5 implemented: Streamlit dashboards (`dashboards/`, data layer and charts in `src/platform_ops/dashboard/`), `platform-ops dashboard`, BigQuery and Snowflake collectors (`cost/collectors/`) with generated fixtures and contract tests, `make readme-check`, ADR 0010, the root README, a dashboards README and a collectors section in the cost README.
+- Phase 5 merged (PR #7).
+- Phases 6 and 7 added to `docs/SPEC.md` by the owner's decision: Phase 6 is a whole-repo review and cleanup, Phase 7 is hardening and release (1.0.0).
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
 - Phase 5 reference numbers: `make demo` from a clean state took 6 min 54 s and 9 min 1 s in two runs on the same laptop (slower machine state on the second: Docker Desktop just started, Smart App Control checking native modules), with identical reports. `make readme-check`: 178 numbers across the root and module READMEs, all found in the reports.
 - Phase 4 reference numbers at scale 1.0: `make reconcile` about 52 s, byte-identical `reconciliation.md` across two runs. As delivered: 199,465 planted discrepancies, 100% recall, precision and classification accuracy; not signed off. Job fixed: 44 planted, all found; the diff moves 0.6% to 9.6% of the rows a naive comparison would. `make demo` from a clean state: 6 min 54 s.
 
 ## In progress
 
-Nothing. Phase 5 is waiting for review.
+Phase 6 plan approved; waiting for the go-ahead to implement.
 
 ## Decisions made
+
+### Phases 6 and 7 (owner, at planning)
+
+1. **Two more phases**: Phase 6 whole-repo review and cleanup, then Phase 7 hardening and release, so the release is cut on the cleaned code.
+2. **Release**: `CHANGELOG.md`, version 1.0.0, and the tag commands; the owner creates and pushes the tag and the GitHub release.
+3. **CI gets a Postgres job** (service container) in Phase 7; SQL Server stays optional and skipped in CI.
+4. **Phase 6 rule: no behaviour change.** `make demo` reports must be byte-identical before and after; a bug whose fix would change a reported number is raised with the owner, not fixed silently.
+
+Planned defaults for Phase 6: the review record is committed as `docs/review/phase-6-review.md`; the broader ruff rules stay on; `make test` target under 5 minutes, or the measured floor is reported.
 
 ### Phase 5 (owner, at planning)
 
@@ -131,4 +142,4 @@ None open.
 
 ## Next step
 
-Owner reviews Phase 5 and opens the PR. The SPEC's five phases are then complete.
+Implement Phase 6 on `phase-6-review-cleanup`: baseline (report hashes, test durations, coverage); broader lint rules and suppression cleanup; shared helpers (Markdown report formatting, replacing an `ops` table, isolated config); module-by-module review recorded in `docs/review/phase-6-review.md`; faster test suite; docs drift. Then plan Phase 7.
