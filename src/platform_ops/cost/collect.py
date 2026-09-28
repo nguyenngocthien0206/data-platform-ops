@@ -4,9 +4,9 @@ Collection is kept apart from pricing. A collector only produces
 :class:`QueryRecord` rows; pricing and attribution never care where a record
 came from. The two local collectors here are the :class:`LoggedConnection`
 wrapper, for dashboards and ad hoc users, and :func:`dbt_run_records`, which
-reads a dbt run. A BigQuery or Snowflake collector (Phase 5) implements the
-same :class:`QueryCollector` protocol against the vendor's query history, and
-nothing downstream changes.
+reads a dbt run. The BigQuery and Snowflake collectors in
+:mod:`platform_ops.cost.collectors` implement the same :class:`QueryCollector`
+protocol against the vendor's query history, and nothing downstream changes.
 """
 
 from __future__ import annotations

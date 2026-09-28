@@ -1,1 +1,1 @@
-"""Segmented cross-engine diff, canonicalization, sign-off report. Built in Phase 4."""
+"""Migration reconciliation: canonicalization, segmented cross-engine diff, sign-off."""
