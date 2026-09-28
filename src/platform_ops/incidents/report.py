@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from platform_ops.cost.report import table
+from platform_ops.common.markdown import table
 from platform_ops.incidents.metrics import Accuracy, IncidentMetrics
 from platform_ops.incidents.scenario import Incident, ScenarioResult
 from platform_ops.simulation.faults import CATALOGUE
@@ -57,25 +57,39 @@ def render(result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int)
         t = outcome.truth
         found = [by_id[i] for i in outcome.incident_ids]
         first = found[0] if found else None
-        fault_rows.append((
-            t.fault_id,
-            FAULT_TYPE_LABEL.get(t.fault_type, t.fault_type),
-            t.target,
-            when(t.injected_at),
-            ", ".join(outcome.incident_ids) or "**none**",
-            short(first.root) if first else "",
-            first.severity if first else "",
-            hours(first.opened_at - t.injected_at) if first else "",
-            f"{first.owner} ({'ok' if first.owner == t.owner else 'wrong'})" if first else "",
-        ))  # fmt: skip
+        fault_rows.append(
+            (
+                t.fault_id,
+                FAULT_TYPE_LABEL.get(t.fault_type, t.fault_type),
+                t.target,
+                when(t.injected_at),
+                ", ".join(outcome.incident_ids) or "**none**",
+                short(first.root) if first else "",
+                first.severity if first else "",
+                hours(first.opened_at - t.injected_at) if first else "",
+                f"{first.owner} ({'ok' if first.owner == t.owner else 'wrong'})" if first else "",
+            )
+        )
 
     incident_rows = [
-        (i.incident_id, short(i.root), i.severity, i.score, i.owner, when(i.opened_at),
-         when(i.acknowledged_at), when(i.resolved_at), hours(i.resolved_at - i.opened_at),
-         len(i.run_ids), i.checks, len(i.consumers), len(i.skipped),
-         i.previous_incident_id or "")
+        (
+            i.incident_id,
+            short(i.root),
+            i.severity,
+            i.score,
+            i.owner,
+            when(i.opened_at),
+            when(i.acknowledged_at),
+            when(i.resolved_at),
+            hours(i.resolved_at - i.opened_at),
+            len(i.run_ids),
+            i.checks,
+            len(i.consumers),
+            len(i.skipped),
+            i.previous_incident_id or "",
+        )
         for i in result.incidents
-    ]  # fmt: skip
+    ]
 
     people = sorted(set(metrics.alerts_before) | set(metrics.alerts_after))
     load_rows = []
@@ -95,17 +109,26 @@ def render(result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int)
     owner_rows = [(o, n, ok, naive) for o, (n, ok, naive) in sorted(per_owner.items())]
 
     severity_rows = [
-        (sev, sum(1 for i in result.incidents if sev in ("all", i.severity)),
-         f"{metrics.mttd_hours[sev]:.1f}" if sev in metrics.mttd_hours else "",
-         f"{metrics.mttr_hours[sev]:.1f}" if sev in metrics.mttr_hours else "")
+        (
+            sev,
+            sum(1 for i in result.incidents if sev in ("all", i.severity)),
+            f"{metrics.mttd_hours[sev]:.1f}" if sev in metrics.mttd_hours else "",
+            f"{metrics.mttr_hours[sev]:.1f}" if sev in metrics.mttr_hours else "",
+        )
         for sev in ("SEV1", "SEV2", "SEV3", "all")
-    ]  # fmt: skip
+    ]
 
     run_rows = [
-        (r.run_id.removeprefix("run:"), ", ".join(r.selected_sources), r.checks_run, r.failures,
-         r.opened, r.appended)
+        (
+            r.run_id.removeprefix("run:"),
+            ", ".join(r.selected_sources),
+            r.checks_run,
+            r.failures,
+            r.opened,
+            r.appended,
+        )
         for r in result.runs
-    ]  # fmt: skip
+    ]
     run_days = len(result.runs)
 
     check_types = Counter(event.check_type for event, _ in result.events)
@@ -139,7 +162,7 @@ def render(result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int)
                     sum(1 for n in result.notifications if n.kind == "update"),
                 ),
                 ("Pages avoided by grouping", f"{reduction:.0%}"),
-            ],  # fmt: skip
+            ],
             right=[1],
         ),
         "",
@@ -161,7 +184,7 @@ def render(result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int)
             ],
             fault_rows,
             right=[7],
-        ),  # fmt: skip
+        ),
         "",
         "## Routing accuracy",
         "",
@@ -177,14 +200,14 @@ def render(result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int)
                     pct(metrics.routing_team),
                 ),
                 ("Page the root node's owner", pct(metrics.naive_person), pct(metrics.naive_team)),
-            ],  # fmt: skip
+            ],
         ),
         "",
         table(
             ["Faulted source owner", "Incidents", "Routed right", "Naive right"],
             owner_rows,
             right=[1, 2, 3],
-        ),  # fmt: skip
+        ),
         "",
         "## Time to detect and to resolve",
         "",
@@ -195,7 +218,7 @@ def render(result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int)
             ["Severity", "Incidents", "Mean MTTD (h)", "Mean MTTR (h)"],
             severity_rows,
             right=[1, 2, 3],
-        ),  # fmt: skip
+        ),
         "",
         "## Alerts per person",
         "",
@@ -206,7 +229,7 @@ def render(result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int)
             ["Person", "Before", "Before per week", "After", "After per week"],
             load_rows,
             right=[1, 2, 3, 4],
-        ),  # fmt: skip
+        ),
         "",
         "## Incidents",
         "",
@@ -229,7 +252,7 @@ def render(result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int)
             ],
             incident_rows,
             right=[3, 8, 9, 10, 11, 12],
-        ),  # fmt: skip
+        ),
         "",
         "## Runs",
         "",
@@ -237,7 +260,7 @@ def render(result: ScenarioResult, metrics: IncidentMetrics, scenario_days: int)
             ["Run", "Faulted sources", "Checks run", "Failing", "Opened", "Appended"],
             run_rows,
             right=[2, 3, 4, 5],
-        ),  # fmt: skip
+        ),
         "",
     ]
     if metrics.unmatched_incidents:
@@ -291,7 +314,7 @@ def postmortem(incident: Incident, metrics: IncidentMetrics, events: Sequence[st
             + "."
             if truth
             else "_Unknown: no injected fault matches this incident._"
-        ),  # fmt: skip
+        ),
         "",
         "## Detection",
         "",

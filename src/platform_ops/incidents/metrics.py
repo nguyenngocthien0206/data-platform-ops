@@ -22,7 +22,7 @@ import duckdb
 import networkx as nx
 
 from platform_ops.common.config import SEVERITIES
-from platform_ops.common.db import OPS_SCHEMA, insert_rows
+from platform_ops.common.db import OPS_SCHEMA, replace_table
 from platform_ops.incidents.routing import UNOWNED
 from platform_ops.incidents.scenario import Incident, ScenarioResult
 from platform_ops.incidents.severity import dataset_of
@@ -105,9 +105,18 @@ def read_ground_truth(
         source_id = source_of[target]
         rule = registry.resolve(source_id).rule
         truths.append(
-            FaultTruth(fault_id, fault_type, target, source_id, expected, injected_at, repaired_at,
-                       rule.owner if rule else UNOWNED, rule.team if rule else UNOWNED)
-        )  # fmt: skip
+            FaultTruth(
+                fault_id,
+                fault_type,
+                target,
+                source_id,
+                expected,
+                injected_at,
+                repaired_at,
+                rule.owner if rule else UNOWNED,
+                rule.team if rule else UNOWNED,
+            )
+        )
     return truths
 
 
@@ -142,10 +151,11 @@ def compute(
 ) -> IncidentMetrics:
     end = result.end or max(i.resolved_at for i in result.incidents)
     faults = tuple(
-        FaultOutcome(t, tuple(i.incident_id for i in result.incidents
-                              if _caused_by(i, t, graph, end)))
+        FaultOutcome(
+            t, tuple(i.incident_id for i in result.incidents if _caused_by(i, t, graph, end))
+        )
         for t in truths
-    )  # fmt: skip
+    )
     matched = {i for f in faults for i in f.incident_ids}
     unmatched = tuple(i.incident_id for i in result.incidents if i.incident_id not in matched)
 
@@ -209,21 +219,29 @@ def metric_rows(metrics: IncidentMetrics) -> list[tuple[str, str, float]]:
                 round(metrics.alerts_before.get(person, 0) / metrics.weeks, 2),
             )
         )
-        rows.append(("alerts_per_week_after", person,
-                     round(metrics.alerts_after.get(person, 0) / metrics.weeks, 2)))  # fmt: skip
+        rows.append(
+            (
+                "alerts_per_week_after",
+                person,
+                round(metrics.alerts_after.get(person, 0) / metrics.weeks, 2),
+            )
+        )
     return rows
 
 
 def persist(connection: duckdb.DuckDBPyConnection, metrics: IncidentMetrics) -> None:
-    connection.execute(
-        f"""CREATE OR REPLACE TABLE {OPS_SCHEMA}.incident_metrics (
-                metric VARCHAR NOT NULL, dimension VARCHAR NOT NULL, value DOUBLE NOT NULL)"""
-    )
-    insert_rows(connection, f"{OPS_SCHEMA}.incident_metrics", ("metric", "dimension", "value"),
-                metric_rows(metrics))  # fmt: skip
-    connection.execute(
-        f"""CREATE OR REPLACE TABLE {OPS_SCHEMA}.fault_incidents (
-                fault_id VARCHAR NOT NULL, incident_id VARCHAR NOT NULL)"""
+    replace_table(
+        connection,
+        "incident_metrics",
+        "metric VARCHAR NOT NULL, dimension VARCHAR NOT NULL, value DOUBLE NOT NULL",
+        ("metric", "dimension", "value"),
+        metric_rows(metrics),
     )
     pairs = [(f.truth.fault_id, i) for f in metrics.faults for i in f.incident_ids]
-    insert_rows(connection, f"{OPS_SCHEMA}.fault_incidents", ("fault_id", "incident_id"), pairs)
+    replace_table(
+        connection,
+        "fault_incidents",
+        "fault_id VARCHAR NOT NULL, incident_id VARCHAR NOT NULL",
+        ("fault_id", "incident_id"),
+        pairs,
+    )

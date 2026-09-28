@@ -20,7 +20,6 @@ workload.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -30,6 +29,7 @@ from platform_ops.common.clock import SimulatedClock
 from platform_ops.common.config import ActorType, Settings
 from platform_ops.common.db import begin, commit, connect, in_transaction
 from platform_ops.common.dbt_invoke import invocation_from_settings, run_dbt
+from platform_ops.common.hashing import stable_hash
 from platform_ops.common.logging import get_logger, log_event
 from platform_ops.cost import growth, sizes
 from platform_ops.cost.collect import (
@@ -48,12 +48,6 @@ from platform_ops.simulation import raw_data
 
 MODEL_SCHEMAS = ("staging", "intermediate", "marts")
 _DATE_TYPES = ("DATE", "TIMESTAMP")
-
-
-def stable_hash(*parts: object) -> int:
-    """A 64-bit hash that is the same in every process and on every machine."""
-    digest = hashlib.sha256(":".join(str(p) for p in parts).encode("utf-8")).digest()
-    return int.from_bytes(digest[:8], "big")
 
 
 # --- ad hoc queries --------------------------------------------------------------

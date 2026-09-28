@@ -11,11 +11,18 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import duckdb
 
-from platform_ops.common.config import Settings
-from platform_ops.common.db import OPS_SCHEMA, insert_rows, open_connection, transaction
+from platform_ops.common.config import ActorType, Settings
+from platform_ops.common.db import (
+    OPS_SCHEMA,
+    insert_rows,
+    open_connection,
+    replace_table,
+    transaction,
+)
 from platform_ops.common.dbt_invoke import invocation_from_settings
 from platform_ops.cost import attribution, growth, recommend, report
 from platform_ops.cost.estimate import estimate
@@ -49,7 +56,9 @@ def _estimated_queries(connection: duckdb.DuckDBPyConnection) -> list[EstimatedQ
             ORDER BY e.query_id"""
     ).fetchall()
     return [
-        EstimatedQuery(str(q), str(a), s, int(ms), tuple(int(b) for b in (tb or ())))  # type: ignore[arg-type]
+        EstimatedQuery(
+            str(q), cast(ActorType, str(a)), s, int(ms), tuple(int(b) for b in (tb or ()))
+        )
         for q, a, s, ms, tb in rows
     ]
 
@@ -97,18 +106,6 @@ def _cost_by_team(connection: duckdb.DuckDBPyConnection) -> None:
             GROUP BY ALL
             ORDER BY month, team, pricing_model"""
     )
-
-
-def _write_table(
-    connection: duckdb.DuckDBPyConnection,
-    name: str,
-    ddl: str,
-    columns: tuple[str, ...],
-    rows: list[tuple[object, ...]],
-) -> None:
-    connection.execute(f"CREATE OR REPLACE TABLE {OPS_SCHEMA}.{name} ({ddl})")
-    with transaction(connection):
-        insert_rows(connection, f"{OPS_SCHEMA}.{name}", columns, rows)
 
 
 def run_cost(settings: Settings) -> CostSummary:
@@ -184,7 +181,7 @@ def run_cost(settings: Settings) -> CostSummary:
         data = report.gather(connection, settings, nodes, check.resolutions, window_days)
         _write_report_tables(connection, data, unused, spots, incremental)
         accuracy = report.proxy_accuracy(connection)
-        _write_table(
+        replace_table(
             connection,
             "cost_proxy_accuracy",
             "actor_type VARCHAR, queries BIGINT, proxy_rows HUGEINT, scanned_rows HUGEINT, "
@@ -220,7 +217,7 @@ def _write_report_tables(
     incremental: list[recommend.IncrementalCandidate],
 ) -> None:
     money = "DECIMAL(38, 12)"
-    _write_table(
+    replace_table(
         connection,
         "cost_report_showback",
         f"team VARCHAR, pricing_model VARCHAR, production_usd {money}, "
@@ -228,7 +225,7 @@ def _write_report_tables(
         ("team", "pricing_model", "production_usd", "consumption_usd", "total_usd"),
         [tuple(r) for r in data.showback],
     )
-    _write_table(
+    replace_table(
         connection,
         "cost_report_models",
         f"rank INTEGER, unique_id VARCHAR, relation VARCHAR, team VARCHAR, "
@@ -236,7 +233,7 @@ def _write_report_tables(
         ("rank", "unique_id", "relation", "team", "scan_usd", "compute_usd"),
         [tuple(r) for r in data.top_models],
     )
-    _write_table(
+    replace_table(
         connection,
         "cost_report_unused",
         f"lookback_days INTEGER, unique_id VARCHAR, relation VARCHAR, team VARCHAR, "
@@ -263,7 +260,7 @@ def _write_report_tables(
             for u in unused
         ],
     )
-    _write_table(
+    replace_table(
         connection,
         "cost_report_hotspots",
         f"table_name VARCHAR, column_name VARCHAR, reads BIGINT, table_bytes BIGINT, "
@@ -271,7 +268,7 @@ def _write_report_tables(
         ("table_name", "column_name", "reads", "table_bytes", "bytes_scanned", "scan_usd"),
         [(h.table, h.column, h.reads, h.table_bytes, h.bytes_scanned, h.scan_usd) for h in spots],
     )
-    _write_table(
+    replace_table(
         connection,
         "cost_report_incremental",
         f"unique_id VARCHAR, relation VARCHAR, team VARCHAR, scan_usd {money}, "
@@ -300,7 +297,7 @@ def _write_report_tables(
             for c in incremental
         ],
     )
-    _write_table(
+    replace_table(
         connection,
         "cost_report_pricing",
         f"workload VARCHAR, scan_usd {money}, compute_usd {money}, bytes_scanned HUGEINT, "

@@ -9,7 +9,7 @@ from pathlib import Path
 import duckdb
 
 from platform_ops.common.config import Settings
-from platform_ops.common.db import OPS_SCHEMA, insert_rows, open_connection, transaction
+from platform_ops.common.db import open_connection, replace_table, transaction
 from platform_ops.incidents import ingest, metrics, notify
 from platform_ops.incidents.metrics import IncidentMetrics
 from platform_ops.incidents.report import write_reports
@@ -50,10 +50,25 @@ INCIDENTS_DDL = """
     previous_incident_id VARCHAR"""
 
 INCIDENT_COLUMNS = (
-    "incident_id", "root_node", "dataset", "severity", "score", "root_tier", "owner", "team",
-    "naive_owner", "naive_team", "routed_via", "opened_at", "acknowledged_at", "resolved_at",
-    "last_seen_at", "runs", "failing_checks", "previous_incident_id",
-)  # fmt: skip
+    "incident_id",
+    "root_node",
+    "dataset",
+    "severity",
+    "score",
+    "root_tier",
+    "owner",
+    "team",
+    "naive_owner",
+    "naive_team",
+    "routed_via",
+    "opened_at",
+    "acknowledged_at",
+    "resolved_at",
+    "last_seen_at",
+    "runs",
+    "failing_checks",
+    "previous_incident_id",
+)
 
 IMPACT_DDL = """
     incident_id VARCHAR NOT NULL,
@@ -72,45 +87,80 @@ RUNS_DDL = """
     appended INTEGER NOT NULL"""
 
 
-def _create(connection: duckdb.DuckDBPyConnection, name: str, ddl: str) -> None:
-    connection.execute(f"CREATE OR REPLACE TABLE {OPS_SCHEMA}.{name} ({ddl})")
-
-
 def persist(
     connection: duckdb.DuckDBPyConnection, result: ScenarioResult, local: notify.LocalNotifier
 ) -> None:
     """Replace every scenario table with this run's contents."""
-    _create(connection, "incidents", INCIDENTS_DDL)
-    _create(connection, "incident_impact", IMPACT_DDL)
-    _create(connection, "incident_runs", RUNS_DDL)
     ingest.reset_check_events(connection)
     notify.reset_notifications(connection)
 
     incident_rows = [
-        (i.incident_id, i.root, i.dataset, i.severity, i.score, i.root_tier, i.owner, i.team,
-         i.naive_owner, i.naive_team, i.routed_via, i.opened_at, i.acknowledged_at,
-         i.resolved_at, i.last_seen_at, len(i.run_ids), i.checks, i.previous_incident_id)
+        (
+            i.incident_id,
+            i.root,
+            i.dataset,
+            i.severity,
+            i.score,
+            i.root_tier,
+            i.owner,
+            i.team,
+            i.naive_owner,
+            i.naive_team,
+            i.routed_via,
+            i.opened_at,
+            i.acknowledged_at,
+            i.resolved_at,
+            i.last_seen_at,
+            len(i.run_ids),
+            i.checks,
+            i.previous_incident_id,
+        )
         for i in result.incidents
-    ]  # fmt: skip
-    insert_rows(connection, f"{OPS_SCHEMA}.incidents", INCIDENT_COLUMNS, incident_rows)
+    ]
+    replace_table(connection, "incidents", INCIDENTS_DDL, INCIDENT_COLUMNS, incident_rows)
 
     impact: list[tuple[str, str, str, str | None, int | None]] = []
     for i in result.incidents:
         impact += [(i.incident_id, node, "failed", None, None) for node in sorted(i.failed_nodes)]
         impact += [(i.incident_id, node, "skipped", None, None) for node in sorted(i.skipped)]
-        impact += [(i.incident_id, c.unique_id, "downstream", c.tier, c.weight)
-                   for c in i.consumers]  # fmt: skip
-    insert_rows(connection, f"{OPS_SCHEMA}.incident_impact",
-                ("incident_id", "node_id", "role", "tier", "weight"), impact)  # fmt: skip
+        impact += [
+            (i.incident_id, c.unique_id, "downstream", c.tier, c.weight) for c in i.consumers
+        ]
+    replace_table(
+        connection,
+        "incident_impact",
+        IMPACT_DDL,
+        ("incident_id", "node_id", "role", "tier", "weight"),
+        impact,
+    )
 
     runs = [
-        (r.run_id, r.run_at, ",".join(r.selected_sources), r.checks_run, r.failures, r.opened,
-         r.appended)
+        (
+            r.run_id,
+            r.run_at,
+            ",".join(r.selected_sources),
+            r.checks_run,
+            r.failures,
+            r.opened,
+            r.appended,
+        )
         for r in result.runs
-    ]  # fmt: skip
-    insert_rows(connection, f"{OPS_SCHEMA}.incident_runs",
-                ("run_id", "run_at", "selected_sources", "checks_run", "failing_checks", "opened",
-                 "appended"), runs)  # fmt: skip
+    ]
+    replace_table(
+        connection,
+        "incident_runs",
+        RUNS_DDL,
+        (
+            "run_id",
+            "run_at",
+            "selected_sources",
+            "checks_run",
+            "failing_checks",
+            "opened",
+            "appended",
+        ),
+        runs,
+    )
 
     ingest.persist_events(connection, result.events)
     local.flush(connection)
@@ -125,8 +175,9 @@ def run_incidents(
     with open_connection(settings) as connection, transaction(connection):
         persist(connection, result, scenario.local)
         truths = metrics.read_ground_truth(connection, scenario.nodes, scenario.registry)
-        graded = metrics.compute(result, truths, scenario.graph, scenario.nodes,
-                                 scenario.registry, days)  # fmt: skip
+        graded = metrics.compute(
+            result, truths, scenario.graph, scenario.nodes, scenario.registry, days
+        )
         metrics.persist(connection, graded)
     report_path, postmortems = write_reports(
         settings.resolve(settings.paths.reports), result, graded, days
