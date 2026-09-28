@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from platform_ops.common.config import DISCREPANCY_CLASSES, Settings
-from platform_ops.cost.report import table
+from platform_ops.common.markdown import table
 from platform_ops.reconcile.canonical import NULL
 from platform_ops.reconcile.run import PassResult, ReconcileResult
 from platform_ops.reconcile.schema import TABLES
@@ -54,8 +54,14 @@ def _verdict_rows(result: ReconcileResult) -> list[tuple[str, ...]]:
     rows = []
     for p in result.passes:
         cells = ["PASS" if p.verdicts[t.name].passed else "FAIL" for t in TABLES]
-        rows.append((ENGINE_LABEL.get(p.engine, p.engine), PASS_LABEL[p.name], *cells,
-                     "**PASS**" if p.passed else "**FAIL**"))  # fmt: skip
+        rows.append(
+            (
+                ENGINE_LABEL.get(p.engine, p.engine),
+                PASS_LABEL[p.name],
+                *cells,
+                "**PASS**" if p.passed else "**FAIL**",
+            )
+        )
     return rows
 
 
@@ -63,9 +69,17 @@ def _match_section(p: PassResult) -> list[str]:
     rows = []
     for spec in TABLES:
         d, v = p.diffs[spec.name], p.verdicts[spec.name]
-        rows.append((spec.name, f"{d.source_rows:,}", f"{d.target_rows:,}",
-                     f"{len(d.missing):,}", f"{len(d.extra):,}", f"{d.rows_with_cell_diffs:,}",
-                     pct(v.row_match_rate)))  # fmt: skip
+        rows.append(
+            (
+                spec.name,
+                f"{d.source_rows:,}",
+                f"{d.target_rows:,}",
+                f"{len(d.missing):,}",
+                f"{len(d.extra):,}",
+                f"{d.rows_with_cell_diffs:,}",
+                pct(v.row_match_rate),
+            )
+        )
     columns = [
         (f"{spec.name}.{name}", pct(rate))
         for spec in TABLES
@@ -85,7 +99,7 @@ def _match_section(p: PassResult) -> list[str]:
             ],
             rows,
             right=[1, 2, 3, 4, 5, 6],
-        ),  # fmt: skip
+        ),
         "",
     ]
     if columns:
@@ -113,8 +127,16 @@ def _sample_section(p: PassResult) -> list[str]:
         picked = [d for d in p.discrepancies if d.klass == klass][:SAMPLES_PER_CLASS]
         for d in picked:
             if d.column:
-                rows.append((klass, d.table, str(d.key), d.column, shown(d.source_value),
-                             shown(d.target_value)))  # fmt: skip
+                rows.append(
+                    (
+                        klass,
+                        d.table,
+                        str(d.key),
+                        d.column,
+                        shown(d.source_value),
+                        shown(d.target_value),
+                    )
+                )
             else:
                 where = "legacy only" if klass == "missing_in_target" else "target only"
                 rows.append((klass, d.table, str(d.key), "(whole row)", where, ""))
@@ -130,7 +152,7 @@ def _sample_section(p: PassResult) -> list[str]:
 
 def _grade_section(p: PassResult) -> list[str]:
     g = p.grade
-    lines = [
+    return [
         table(
             ["Measure", "Value"],
             [
@@ -149,12 +171,11 @@ def _grade_section(p: PassResult) -> list[str]:
             [
                 (label, LABELS.get(label, label), f"{planted:,}", f"{found:,}")
                 for label, (planted, found) in g.by_label.items()
-            ],  # fmt: skip
+            ],
             right=[2, 3],
         ),
         "",
     ]
-    return lines
 
 
 def _benchmark_section(p: PassResult) -> list[str]:
@@ -163,8 +184,17 @@ def _benchmark_section(p: PassResult) -> list[str]:
         d = p.diffs[spec.name]
         levels = ", ".join(f"{w:,}: {diff}/{compared}" for w, compared, diff in d.levels)
         saving = 1 - d.transferred / d.naive_transferred if d.naive_transferred else 0.0
-        rows.append((spec.name, levels, f"{d.summary_rows:,}", f"{d.fetched_rows:,}",
-                     f"{d.transferred:,}", f"{d.naive_transferred:,}", pct(saving)))  # fmt: skip
+        rows.append(
+            (
+                spec.name,
+                levels,
+                f"{d.summary_rows:,}",
+                f"{d.fetched_rows:,}",
+                f"{d.transferred:,}",
+                f"{d.naive_transferred:,}",
+                pct(saving),
+            )
+        )
     return [
         "Rows moved from the engines to the comparer, both sides together. Levels read "
         "`segment width: differing/compared`.",
@@ -181,7 +211,7 @@ def _benchmark_section(p: PassResult) -> list[str]:
             ],
             rows,
             right=[2, 3, 4, 5, 6],
-        ),  # fmt: skip
+        ),
         "",
     ]
 
@@ -206,8 +236,9 @@ def _policy_section(settings: Settings, result: ReconcileResult) -> list[str]:
                     detail = "rendered as UTC"
                 else:
                     continue
-                rows.append((ENGINE_LABEL.get(engine, engine), f"{spec.name}.{column.name}",
-                             detail))  # fmt: skip
+                rows.append(
+                    (ENGINE_LABEL.get(engine, engine), f"{spec.name}.{column.name}", detail)
+                )
     return [
         "Both sides of a comparison are rendered with the legacy engine's rules before hashing "
         "(ADR 0009). Decimals round half away from zero; timestamps are UTC with microseconds; "
@@ -247,7 +278,7 @@ def render(settings: Settings, result: ReconcileResult) -> str:
             + [
                 (f"`{klass}` discrepancies", f"at most {limit:,}")
                 for klass, limit in t.max_discrepancies.items()
-            ],  # fmt: skip
+            ],
         ),
         "",
         "## Verdict",
@@ -256,7 +287,7 @@ def render(settings: Settings, result: ReconcileResult) -> str:
             "**Signed off.** The migration as delivered meets every threshold."
             if signed
             else "**Not signed off.** The migration as delivered fails the thresholds below."
-        ),  # fmt: skip
+        ),
         "",
         table(["Engine", "Run", *[s.name for s in TABLES], "Overall"], _verdict_rows(result)),
         "",

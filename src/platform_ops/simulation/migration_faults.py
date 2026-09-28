@@ -9,7 +9,7 @@ in the ground truth has exactly one cause and one expected class.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 import duckdb
@@ -17,8 +17,18 @@ import pyarrow as pa
 from pyiceberg.table import Table
 
 from platform_ops.common.config import DiscrepancyClass
-from platform_ops.reconcile.migrate import TruthCell
-from platform_ops.reconcile.schema import TABLES_BY_NAME
+
+
+@dataclass(frozen=True)
+class TruthCell:
+    """One cell (or, with ``column`` empty, one whole row) that should differ."""
+
+    table: str
+    key: int
+    column: str
+    klass: DiscrepancyClass
+    source: str  # "migration_defect" or "injected"
+    label: str
 
 
 @dataclass(frozen=True)
@@ -43,7 +53,9 @@ CATALOGUE: tuple[TargetFault, ...] = (
 )
 
 
-def inject(tables: dict[str, Table], truth: Iterable[TruthCell], seed: int) -> list[TruthCell]:
+def inject(
+    tables: dict[str, Table], key_columns: Mapping[str, str], truth: Iterable[TruthCell], seed: int
+) -> list[TruthCell]:
     """Apply every fault to the Iceberg tables and return their ground truth."""
     touched: dict[str, set[int]] = {}
     for cell in truth:
@@ -53,8 +65,7 @@ def inject(tables: dict[str, Table], truth: Iterable[TruthCell], seed: int) -> l
     con.execute("SET TimeZone = 'UTC'")
     try:
         for table_name in sorted({f.table for f in CATALOGUE}):
-            spec = TABLES_BY_NAME[table_name]
-            key = spec.key
+            key = key_columns[table_name]
             data: pa.Table = tables[table_name].scan().to_arrow()
             con.register("current", data)
             con.execute("CREATE OR REPLACE TABLE work AS SELECT * FROM current")

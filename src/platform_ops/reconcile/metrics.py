@@ -19,8 +19,8 @@ from dataclasses import dataclass, field
 from platform_ops.common.config import DISCREPANCY_CLASSES, DiscrepancyClass, Thresholds
 from platform_ops.reconcile.canonical import Rule
 from platform_ops.reconcile.diff import TableDiff
-from platform_ops.reconcile.migrate import TruthCell
 from platform_ops.reconcile.schema import TableSpec
+from platform_ops.simulation.migration_faults import TruthCell
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ def verdict(
     thresholds: Thresholds,
 ) -> TableVerdict:
     mine = [d for d in discrepancies if d.table == spec.name]
-    by_class: dict[DiscrepancyClass, int] = {k: 0 for k in DISCREPANCY_CLASSES}
+    by_class: dict[DiscrepancyClass, int] = dict.fromkeys(DISCREPANCY_CLASSES, 0)
     for d in mine:
         by_class[d.klass] += 1
     in_both = diff.source_rows - len(diff.missing)
@@ -94,8 +94,9 @@ def verdict(
         c.name: 1 - per_column.get(c.name, 0) / in_both if in_both else 1.0
         for c in spec.value_columns
     }
-    result = TableVerdict(spec.name, diff.source_rows, diff.target_rows, row_rate, column_rates,
-                          by_class)  # fmt: skip
+    result = TableVerdict(
+        spec.name, diff.source_rows, diff.target_rows, row_rate, column_rates, by_class
+    )
     if row_rate < thresholds.min_row_match_rate:
         result.failures.append(
             f"row match rate {row_rate:.4%} is below {thresholds.min_row_match_rate:.2%}"

@@ -37,22 +37,11 @@ from pyiceberg.table import Table
 from platform_ops.common.config import DiscrepancyClass
 from platform_ops.reconcile.connectors import LegacyStore
 from platform_ops.reconcile.schema import TABLES, TableSpec
+from platform_ops.simulation.migration_faults import TruthCell
 
 BATCH_ROWS = 25_000
 # What the job believes the legacy zone's offset is: the winter one.
 ASSUMED_OFFSET_HOURS = 5
-
-
-@dataclass(frozen=True)
-class TruthCell:
-    """One cell (or, with ``column`` empty, one whole row) that should differ."""
-
-    table: str
-    key: int
-    column: str
-    klass: DiscrepancyClass
-    source: str  # "migration_defect" or "injected"
-    label: str
 
 
 def open_catalog(warehouse: Path) -> SqlCatalog:
@@ -110,20 +99,36 @@ def _transform_sql(table: TableSpec, zone: str) -> str:
 def _truth_sql(table: TableSpec, zone: str) -> list[tuple[str, str, DiscrepancyClass, str]]:
     """(label, SQL selecting affected keys, class, column) for each defect on ``table``."""
     if table.name == "customers":
-        return [("D3", "SELECT customer_id FROM src WHERE company_name <> rtrim(company_name)",
-                 "whitespace", "company_name")]  # fmt: skip
+        return [
+            (
+                "D3",
+                "SELECT customer_id FROM src WHERE company_name <> rtrim(company_name)",
+                "whitespace",
+                "company_name",
+            )
+        ]
     if table.name == "orders":
         kept = f"(order_id - (SELECT min(order_id) FROM src)) % {BATCH_ROWS} <> 0"
         return [
             ("D4", f"SELECT order_id FROM src WHERE NOT ({kept})", "missing_in_target", ""),
-            ("D2", f"""SELECT order_id FROM src WHERE {kept}
+            (
+                "D2",
+                f"""SELECT order_id FROM src WHERE {kept}
                        AND CAST(CAST(amount AS DOUBLE) AS DECIMAL(38, 6)) <> amount""",
-             "rounding", "amount"),
-        ]  # fmt: skip
-    return [("D1", f"""SELECT payment_id FROM src
+                "rounding",
+                "amount",
+            ),
+        ]
+    return [
+        (
+            "D1",
+            f"""SELECT payment_id FROM src
                        WHERE (paid_local + INTERVAL {ASSUMED_OFFSET_HOURS} HOUR) AT TIME ZONE 'UTC'
                              <> paid_local AT TIME ZONE '{zone}'""",
-             "timezone_shift", "paid_local")]  # fmt: skip
+            "timezone_shift",
+            "paid_local",
+        )
+    ]
 
 
 @dataclass(frozen=True)
@@ -161,8 +166,9 @@ def migrate(
             migrated: pa.Table = con.execute(transform).to_arrow_table()
             for label, sql, klass, column in [] if fixed else _truth_sql(spec, zone):
                 for (key,) in con.execute(sql + " ORDER BY 1").fetchall():
-                    truth.append(TruthCell(spec.name, int(key), column, klass,
-                                           "migration_defect", label))  # fmt: skip
+                    truth.append(
+                        TruthCell(spec.name, int(key), column, klass, "migration_defect", label)
+                    )
             con.unregister("src")
             identifier = f"{namespace}.{spec.name}"
             if catalog.table_exists(identifier):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from itertools import pairwise
 
 import duckdb
 import pyarrow as pa
@@ -15,8 +16,8 @@ from platform_ops.reconcile.classify import classify
 from platform_ops.reconcile.connectors import DuckDBConnector
 from platform_ops.reconcile.diff import diff_table, widths
 from platform_ops.reconcile.metrics import Discrepancy, grade, neutralized_by_policy, verdict
-from platform_ops.reconcile.migrate import TruthCell
 from platform_ops.reconcile.schema import Column, TableSpec
+from platform_ops.simulation.migration_faults import TruthCell
 
 SPEC = TableSpec(
     "items",
@@ -39,12 +40,14 @@ def _connector(rows: list[tuple[int, str | None, str | None]]) -> DuckDBConnecto
         {
             "id": pa.array([r[0] for r in rows], pa.int64()),
             "name": pa.array([r[1] for r in rows], pa.string()),
-            "price": pa.array([None if r[2] is None else Decimal(r[2]) for r in rows],
-                              pa.decimal128(10, 2)),
-            "seen": pa.array([datetime(2025, 1, 1, r[0] % 24) for r in rows],
-                             pa.timestamp("us", tz="UTC")),
+            "price": pa.array(
+                [None if r[2] is None else Decimal(r[2]) for r in rows], pa.decimal128(10, 2)
+            ),
+            "seen": pa.array(
+                [datetime(2025, 1, 1, r[0] % 24) for r in rows], pa.timestamp("us", tz="UTC")
+            ),
         }
-    )  # fmt: skip
+    )
     connector.recreate({"items": table}, [SPEC])
     return connector
 
@@ -58,7 +61,7 @@ def test_widths_nest_from_the_top_down_to_the_leaf() -> None:
     assert widths(5000, 16, 256) == [4096, 256]
     assert widths(300_000, 16, 256) == [65536, 4096, 256]
     for level in (widths(10**7, 8, 100),):
-        assert all(a == b * 8 for a, b in zip(level, level[1:], strict=False))
+        assert all(a == b * 8 for a, b in pairwise(level))
 
 
 def test_identical_tables_stop_at_the_first_level() -> None:
@@ -133,8 +136,10 @@ def test_verdict_fails_on_rates_and_class_limits(repo_settings: Settings) -> Non
     left = _rows(1000)
     right = [(r[0], r[1], "0.00" if r[0] <= 5 else r[2]) for r in left]
     diff = diff_table(SPEC, _connector(left), _connector(right), RULES, fanout=16, leaf_width=16)
-    found = [Discrepancy("items", c.key, c.column, "value_mismatch", c.source, c.target)
-             for c in diff.cells]  # fmt: skip
+    found = [
+        Discrepancy("items", c.key, c.column, "value_mismatch", c.source, c.target)
+        for c in diff.cells
+    ]
     result = verdict(SPEC, diff, found, repo_settings.reconcile.thresholds)
     assert result.row_match_rate == pytest.approx(0.995)
     assert result.column_match_rates["price"] == pytest.approx(0.995)

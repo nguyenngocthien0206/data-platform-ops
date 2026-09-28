@@ -32,6 +32,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from platform_ops.common.config import Engine, ReconcileSettings
@@ -76,9 +77,7 @@ def escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace(SEPARATOR, "\\|")
 
 
-def canonical_value(
-    column: Column, value: object, rule: Rule, local_zone: str | None = None
-) -> str:
+def canonical_value(column: Column, value: Any, rule: Rule, local_zone: str | None = None) -> str:
     """The canonical text of one value, exactly as the SQL renderers produce it.
 
     ``local_zone`` is the zone a ``local_ts`` value was recorded in on this
@@ -88,9 +87,9 @@ def canonical_value(
         return NULL
     kind = column.kind
     if kind == "int":
-        return str(int(value))  # type: ignore[call-overload]
+        return str(int(value))
     if kind == "decimal":
-        number = value if isinstance(value, Decimal) else Decimal(value)  # type: ignore[arg-type]
+        number = value if isinstance(value, Decimal) else Decimal(value)
         quantum = Decimal(1).scaleb(-rule.scale)
         rounded = number.quantize(quantum, rounding=ROUND_HALF_UP)
         if rounded == 0:
@@ -100,10 +99,11 @@ def canonical_value(
         return "true" if value else "false"
     if kind in ("local_ts", "utc_ts"):
         assert isinstance(value, datetime)
-        if value.tzinfo is None:
+        moment: datetime = value
+        if moment.tzinfo is None:
             zone = ZoneInfo(local_zone) if kind == "local_ts" and local_zone else UTC
-            value = value.replace(tzinfo=zone)
-        return value.astimezone(UTC).strftime(TIMESTAMP_FORMAT)
+            moment = moment.replace(tzinfo=zone)
+        return moment.astimezone(UTC).strftime(TIMESTAMP_FORMAT)
     text = str(value)
     if rule.rtrim:
         text = text.rstrip(" ")
@@ -117,7 +117,7 @@ def row_string(values: list[str]) -> str:
 
 
 def row_hash(row: str) -> tuple[int, int]:
-    digest = hashlib.md5(row.encode("utf-8")).hexdigest()  # noqa: S324 - a checksum, not security
+    digest = hashlib.md5(row.encode("utf-8")).hexdigest()
     return int(digest[:8], 16), int(digest[8:16], 16)
 
 
