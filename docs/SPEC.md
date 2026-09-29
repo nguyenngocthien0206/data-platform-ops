@@ -2,14 +2,19 @@
 
 This document is the source of truth for what to build. Work through the phases in order. Each phase ends with acceptance criteria; stop after each phase for review.
 
+Status: Phases 0 to 9 make up release 1.0.0, the reference toolkit on the simulated company. Phases 10 to 12 plan its adoption inside the company. `docs/PROGRESS.md` records where each phase stands.
+
 ## Target repository layout
 
 ```
 data-platform-ops/
 ├── Makefile
 ├── pyproject.toml
-├── docker-compose.yml
+├── Dockerfile                 # the toolkit image (Phase 7)
+├── docker-compose.yml         # legacy databases, the toolkit, dashboards, browser check
 ├── .env.example
+├── CHANGELOG.md               # release notes, one section per version (Phase 8)
+├── .github/workflows/         # CI, the on-demand SQL Server job, the release (Phase 8)
 ├── config/
 │   ├── settings.yaml          # scale factor, paths, simulated time window, pricing rates
 │   ├── teams.yaml             # teams and their notification channels
@@ -25,7 +30,7 @@ data-platform-ops/
 │   └── dashboard/             # read-only data layer and charts for the dashboards
 ├── dashboards/                # streamlit app, one page per module
 ├── .streamlit/                # streamlit config (usage stats off)
-├── scripts/                   # vendor fixture generator, README number check
+├── scripts/                   # vendor fixtures, README check, dashboard browser check, release notes
 ├── data/                      # generated DuckDB warehouse file, gitignored
 ├── warehouse/                 # local Iceberg warehouse, gitignored
 ├── reports/                   # generated markdown reports, gitignored
@@ -34,7 +39,8 @@ data-platform-ops/
     ├── CLAUDE.md
     ├── PROGRESS.md
     ├── SPEC.md
-    └── adr/
+    ├── review/                # the Phase 6 review record
+    └── adr/                   # decision records, indexed in adr/README.md
 ```
 
 ## Makefile targets (final state)
@@ -51,8 +57,26 @@ data-platform-ops/
 | `reconcile` | run the migration scenario and the diff, write the sign-off report |
 | `dashboard` | launch streamlit |
 | `readme-check` | check every README results number against `reports/` (after `demo`) |
-| `test` / `lint` | pytest, ruff, mypy |
-| `demo` | everything above end to end on a clean state |
+| `test` / `lint` / `fmt` | pytest (extra flags in `PYTEST_ARGS`), ruff, mypy; `fmt` formats and applies safe fixes |
+| `clean` | remove generated data, reports and build artifacts |
+| `pipeline` | `simulate`, `cost`, `incidents` and `reconcile` in order, on the current state |
+| `demo` | `clean`, `setup`, `up`, then `pipeline`: everything end to end on a clean state |
+
+In the container (Phase 7 onwards), with only Docker and GNU make on the host:
+
+| Target | Purpose |
+|---|---|
+| `docker-build` | build the toolkit image |
+| `docker-up` | start the legacy engines named in `DOCKER_ENGINES` (default Postgres and SQL Server) |
+| `docker-demo` | `clean` and `pipeline` inside the container |
+| `docker-test` / `docker-lint` | the tests (skips listed with their reason) and lint, as CI runs them |
+| `docker-metadata-check` | the ownership check |
+| `docker-readme-check` | `readme-check` inside the container |
+| `docker-dashboard` | serve the dashboards on `localhost:8501` |
+| `docker-browser-check` | load every dashboard page in headless Chromium, screenshots to `reports/screenshots/` |
+| `docker-shell` / `docker-clean` | a shell in the toolkit container; remove its volumes and the reports |
+
+`TOOLKIT_IMAGE` runs a published image instead of the local build.
 
 ---
 
