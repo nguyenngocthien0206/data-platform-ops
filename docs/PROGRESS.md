@@ -6,7 +6,7 @@ Last updated: 2026-09-29
 
 ## Current phase
 
-Phase 7: Containerized rerun and verification. Defined in the SPEC, not yet planned in detail.
+Phase 7: Containerized rerun and verification. Implemented, waiting for owner review.
 Branch: `phase-7-containerized-rerun` (off `main` at `360f0aa`).
 
 ## Done
@@ -22,6 +22,16 @@ Branch: `phase-7-containerized-rerun` (off `main` at `360f0aa`).
 - Phase 5 merged (PR #7).
 - Phases 6 and 7 added to `docs/SPEC.md` by the owner's decision: Phase 6 is a whole-repo review and cleanup, Phase 7 is hardening and release (1.0.0).
 - Phase 6 merged (PR #8).
+- Phase 7 implemented: the toolkit in a container (`Dockerfile`, `.dockerignore`), `app`, `dashboard` and `browser-check` services in Compose behind profiles, `docker-*` make targets next to the host ones (`demo` now runs `clean setup up pipeline`, and `pipeline` is every module in order), a headless Chromium check of every dashboard page (`scripts/check_dashboards.py`), `.gitattributes` with `eol=lf`, and the pandas and pyarrow caps lifted (pandas 3.0.6, pyarrow 25.0.1).
+- Phase 7 acceptance, from a fresh clone of the branch plus the uncommitted Phase 7 files, with the working copy's `.env` (the Postgres volume already had its password): `make docker-build`, `make docker-demo`, `make docker-test`, `make docker-lint`, `make docker-readme-check` and `make docker-browser-check` all passed. Two clean container runs wrote byte-identical reports, identical to the native Windows run and to the Phase 6 baseline (excluding `cost_proxy_accuracy.md`). Tests in the container: 308 passed, 0 skipped (the SQL Server golden rows and e2e run there). `readme-check` 178 of 178. Browser check 8 of 8 page loads (4 pages, light and dark), screenshots reviewed.
+- Phase 7 reference numbers, same laptop (16 CPUs, Docker Desktop with 14 GB), first on pandas 2.3.3 and pyarrow 21.0.0, then after the caps lift:
+  - Image: first build with no cache 3 min 27 s, 1.58 GB on disk (364 MB compressed); rebuild after a code change 12 s; rebuild after a lock change 2 min 5 s.
+  - `make docker-demo` from a clean state: 8 min 41 s (includes starting SQL Server). Per step, run 2: simulate 256 s, cost 16 s, incidents 189 s, reconcile 65 s (8 min 48 s). After the caps lift: 220 s, 12 s, 140 s, 56 s (7 min 16 s).
+  - Native `make demo` on this branch: 8 min 2 s, and 7 min 49 s after the caps lift.
+  - `make docker-test`: 7 min 48 s (pytest 7 min 40 s), 6 min 43 s after the caps lift (pytest 6 min 35 s). Native `make test` after the lift: 6 min 48 s, 305 passed and 3 skipped (no `pymssql` in the native venv).
+  - `make docker-lint`: 4 min 32 s, 3 min 48 s after the lift. mypy dominates: it is built from source (`no-binary-package`) and starts without a cache in every fresh container.
+  - `make docker-readme-check` 3 s; `make docker-browser-check` 30 s once both images exist (the first Playwright image pull took about 7 min).
+  - Full-scale reconcile against Postgres and SQL Server in the container (`reconcile run --engine postgres --engine sqlserver`): 9 min 14 s, SQL Server about 8 of it. SQL Server as delivered: 94.984%, 99.516% and 34.836% row match, 100% recall and classification accuracy, not signed off, with the same classes and counts as Postgres.
 - Phase 6 implemented: broader lint rules on and clean; `# fmt: skip` noise removed; module boundaries fixed and pinned by `tests/test_architecture.py`; shared helpers in `common` (`markdown.table`, `db.replace_table`, `hashing.stable_hash`, `sandbox.write_isolated_config`); dead code removed; stale docstrings rewritten; new tests for the Slack post and the dashboard command; a shared `full_warehouse` test fixture. 22 findings recorded with decisions in `docs/review/phase-6-review.md`.
 - Phase 6 acceptance: a clean `make demo` wrote byte-identical reports to the baseline (excluding `cost_proxy_accuracy.md`, non-deterministic by design); `make readme-check` 178 of 178; test suite 9 min 50 s on `main` against 6 min 24 s on the branch, same machine and session (305 passed, 3 skipped). The 5-minute target was not reached; the floor is the independent runs the determinism tests need.
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
@@ -30,9 +40,26 @@ Branch: `phase-7-containerized-rerun` (off `main` at `360f0aa`).
 
 ## In progress
 
-Nothing. Waiting for the go-ahead to plan Phase 7.
+Nothing. Phase 7 is waiting for the owner's review.
 
 ## Decisions made
+
+### Phase 7 (owner, at planning)
+
+1. **The pandas and pyarrow caps are lifted only after the container is verified on the current lock**, in their own commit, and kept only if the reports stay byte-identical and everything passes. They did, in the container and natively, so the lift stays.
+2. **The dashboards are checked in a real browser automatically**: Playwright and headless Chromium in their own image (`browser-check`), against the dashboards served from the toolkit container, with screenshots for a human look.
+
+Planned defaults: work continues on `phase-7-containerized-rerun`; the code is baked into the image and generated state lives on named volumes, with only `reports/` bind-mounted; `.env` never enters the image; host targets keep working; the Docker section of the README waits for Phase 9.
+
+### Phase 7, made during implementation
+
+38. **Service addresses come from the environment, no code change.** The connectors already read `POSTGRES_HOST`, `POSTGRES_PORT`, `MSSQL_HOST` and `MSSQL_PORT`, and an environment variable wins over `.env`; Compose sets them to the service names and container ports. Streamlit's `localhost` binding in `.streamlit/config.toml` is overridden by `STREAMLIT_SERVER_ADDRESS=0.0.0.0` in the container.
+39. **`make clean` empties the generated directories instead of removing them**, because inside the container they are volume mount points. On the host the effect is the same.
+40. **The Playwright image ships the browsers but not the Python package**, so `browser-check` is built from it with `playwright` pinned to the image's version (an inline Dockerfile in Compose, context `scripts/`).
+41. **The browser check waits on Streamlit's own script state** (`data-test-script-state="notRunning"` on the app root), then on every Vega chart having drawn. Watching the status widget let the first page pass before it had rendered. On a deep link such as `/cost` the frontend probes `/cost/_stcore/health` and `host-config`, gets a 404 and falls back to the root; those two probes are expected and ignored, and every other failed request fails the check.
+42. **Screenshots grow the viewport to the content.** Streamlit scrolls an inner container, so a "full page" screenshot stops at the viewport.
+43. **pandas 3 no longer installs `tzdata` on Linux** (only on Windows). The image has Debian's system time zone data, which `zoneinfo` reads first anyway, so nothing changed; the reconciliation's daylight saving cases still match.
+44. **DuckDB's `icu`, `json` and `parquet` extensions are built into the wheel**, so nothing is downloaded at run time in the container either.
 
 ### Phases 7 to 9 (owner, after Phase 6)
 
@@ -144,17 +171,21 @@ Kept on purpose (design limits, documented in the ADRs):
 - The alert storm is modest: 18 failing checks for 8 faults. The volume drop is the one fault with a real cascade (5 checks).
 - Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0008).
 
-For Phase 7 (containerized rerun):
+Found by the Phase 7 browser check, not fixed (presentation only; reports are unaffected):
 
-- `make demo` timing varies with machine state: 6 min 54 s and 9 min 1 s in Phase 5, 10 min 34 s at the start of Phase 6 and 7 min 57 s at its end, on the same laptop. There is no budget any more; the container run's times get recorded.
-- The dashboards have been rendered by AppTest and served headless, but never looked at in a browser.
-- The pandas and pyarrow caps were added for Windows Smart App Control, which the owner has since switched off on the development laptop (it had started blocking DuckDB 1.5.5 as well). Decide on the caps.
-- `core.autocrlf=true` turns LF-generated files into CRLF on checkout; a `.gitattributes` with `eol=lf` would stop phantom diffs on regenerated fixtures and docs.
-- The SQL Server tests skip wherever the optional driver or the Compose profile is missing; inside the container both are available.
+- Cost page, "By month": the x axis repeats month labels (two ticks per month), and the last point is April, of which the 13-week window from 5 January covers only a few days, so every line drops at the end without saying why.
+- Incidents page, "Timeline": every x-axis tick reads "12 PM"; the dates are only in the tooltips.
+- Overview "Ownership" and Incidents "Nights dbt ran": narrow columns cut off the last table column (coverage, failing checks); it is reachable by scrolling the table.
 
 For Phase 8 (CI and release):
 
-- The Postgres tests skip in CI (no service container yet).
+- The Postgres tests skip in CI (no service container yet). In the container, with Postgres and SQL Server up, nothing skips.
+- `make docker-lint` spends most of its 4 minutes in mypy built from source with no cache. CI can cache `.mypy_cache`; the `no-binary-package` setting only exists for locked-down Windows machines.
+- `make docker-browser-check` pulls a Playwright image of about 2 GB; decide in Phase 8 or 9 whether CI runs it.
+
+For Phase 9 (documentation):
+
+- The SPEC's Makefile table, the root README and an ADR do not yet cover the container: code in the image and state on named volumes, the `docker-*` targets, the Playwright sidecar and the lifted caps.
 
 ## Open questions for the owner
 
@@ -162,4 +193,4 @@ None open.
 
 ## Next step
 
-Plan Phase 7 (containerized rerun and verification) on `phase-7-containerized-rerun`: the Dockerfile and `app` service, make targets that run inside the container, and the rerun and verification of everything with Postgres and SQL Server up.
+Owner reviews Phase 7 on `phase-7-containerized-rerun` and merges it; then plan Phase 8 (CI and release).
