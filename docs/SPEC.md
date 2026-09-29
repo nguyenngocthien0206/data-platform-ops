@@ -262,17 +262,44 @@ Five phases were built one after another under a time budget. Before the release
 
 ---
 
-## Phase 7: Hardening and release
+## Phase 7: Containerized rerun and verification
 
-Make the reviewed codebase dependable on machines other than the one it was built on, and release it as 1.0.0.
+Package the toolkit in a container and rerun everything through Docker Compose, so the project runs the same way on any machine with Docker and no longer depends on the host's Python, uv or security policies. There is no time budget for `make demo` from this phase on; the measured times are recorded instead.
 
-- A second CI job with a Postgres service container runs the Postgres golden-row and reconciliation end-to-end tests, so they no longer skip in CI. SQL Server stays optional and skipped in CI.
-- Revisit the dependency caps added for Windows Smart App Control (pandas, pyarrow) and document the policy for raising them.
-- Restore margin on the 10-minute `make demo` budget, measured on real runs.
-- Check the dashboards in a real browser, and fix what that shows.
-- `CHANGELOG.md` covering Phases 0 to 7, version 1.0.0 in `pyproject.toml` and `platform-ops version`, and the exact commands for the owner to create and push the `v1.0.0` tag and GitHub release.
+- A `Dockerfile` for the toolkit (Python 3.11, dependencies installed from `uv.lock`, including the optional SQL Server driver) and an `app` service in `docker-compose.yml` next to Postgres and the SQL Server profile. Generated data, the Iceberg warehouse and reports live on volumes or bind mounts so they survive the container.
+- Make targets to run the toolkit inside the container (demo, test, lint, readme-check, dashboard with its port published), next to the existing host targets.
+- Rerun everything inside the container on a clean state: `make demo`, the full test suite with Postgres and SQL Server both up (so nothing skips), `make readme-check`, and the dashboards, checked in a real browser.
+- Verify the results: two container runs write byte-identical reports; any difference from the native Windows run is explained or fixed; every number the READMEs quote still holds.
+- Carry over the Phase 6 deferrals that belong here: `.gitattributes` with `eol=lf`, and a decision on the pandas and pyarrow caps added for Windows Smart App Control.
+- Record the measured duration of every step in `PROGRESS.md`.
 
-**Acceptance:** both CI jobs pass on a pull request. A fresh clone followed by `make setup && make up && make demo && make readme-check && make dashboard` works. `make demo` finishes in under 10 minutes with the margin stated in PROGRESS. `CHANGELOG.md` and the version agree.
+**Acceptance:** from a fresh clone, building the image and running the demo, the full test suite (no skips) and `readme-check` inside Docker Compose all pass. Two container runs write byte-identical reports. The dashboards served from the container have been checked in a browser. Measured times are recorded.
+
+---
+
+## Phase 8: CI and release
+
+Automate the checks and publish the toolkit as 1.0.0.
+
+- CI on every pull request and push to `main`: lint, type check, the full test suite and `metadata check`, run in the toolkit's container with a Postgres service. SQL Server runs in a separate job that can be triggered on demand, because its image is large and slow to start.
+- On a pushed version tag (`v*`): build the image, push it to GitHub Container Registry, and create a GitHub Release whose notes come from `CHANGELOG.md`. Nothing is published on ordinary pushes.
+- `CHANGELOG.md` covering Phases 0 to 8, version 1.0.0 in `pyproject.toml` and `platform-ops version`, and the exact commands for the owner to create and push the `v1.0.0` tag. The owner creates and pushes the tag.
+
+**Acceptance:** CI passes on a pull request. After the owner pushes the tag, the image can be pulled from GHCR and runs the demo, and the GitHub Release exists with the changelog notes. `CHANGELOG.md`, the version and the tag agree.
+
+---
+
+## Phase 9: Documentation
+
+Bring every document in line with the final, containerized, released toolkit.
+
+- Root `README.md`: the Docker quickstart first (pull or build, then run), the native path second, results from a real run of the released version, and the Mermaid architecture diagram updated for the container and CI.
+- Module READMEs and the dashboards README checked against the code and the latest reports.
+- ADRs: new ones for the decisions of Phases 6 to 8 (containerization, CI and release), and an index of all ADRs. Earlier ADRs are not rewritten; where a later phase changed their context (for example the lifted 10-minute budget), a short note points to the newer decision.
+- `docs/PROGRESS.md` and `docs/SPEC.md` closed out: every phase marked done, open questions resolved, known issues either fixed or stated as limits.
+- A documentation check in CI: `readme-check` against the reports of the CI run, and every relative link in the docs resolving.
+
+**Acceptance:** a reader can go from a fresh clone to the dashboards by following the README alone. `make readme-check` passes against a fresh run of the released version. Every relative link in the docs resolves. Every ADR is listed in the index.
 
 ---
 

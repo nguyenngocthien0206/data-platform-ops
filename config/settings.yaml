@@ -6,8 +6,8 @@
 # from anywhere else.
 seed: 20260923
 
-# Single knob controlling dataset size. 1.0 is the default and must keep
-# `make demo` under 10 minutes on a 16 GB laptop.
+# Single knob controlling dataset size. 1.0 is the default; the measured time of
+# `make demo` at this scale is recorded in docs/PROGRESS.md.
 scale_factor: 1.0
 
 paths:
@@ -81,8 +81,9 @@ recommendations:
 workload:
   # dbt runs for real every N simulated days and is replayed from the latest
   # real build on the days in between (see docs/adr/0007). A real build takes
-  # about 26 s at scale 1.0, so every 28 days (4 builds in 13 weeks) keeps
-  # `make simulate` inside the 10-minute `make demo` budget.
+  # about 26 s at scale 1.0; every 28 days (4 builds in 13 weeks) was chosen to
+  # fit the original 10-minute `make demo` budget, since lifted. Changing it
+  # changes the cost report.
   real_build_every_days: 28
   # How often each dashboard refreshes, by exposure maturity.
   dashboard_refresh_hours:

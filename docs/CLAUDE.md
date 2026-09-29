@@ -15,7 +15,7 @@ The full specification and the phased build plan live in `docs/SPEC.md`. Read it
 - Everything must run on a laptop with 16 GB RAM, offline after setup. No cloud accounts, no paid services, no API keys.
 - One command brings the stack up (`make up`), one command runs the full demo (`make demo`).
 - All randomness uses fixed seeds. Two runs of `make demo` on a clean checkout must produce identical reports.
-- Dataset size is controlled by a single scale factor in `config/settings.yaml`. Default scale must finish `make demo` in under 10 minutes.
+- Dataset size is controlled by a single scale factor in `config/settings.yaml`. There is no fixed time budget for `make demo` (the original 10-minute limit was lifted by the owner before Phase 7); the measured duration of each step is recorded in `docs/PROGRESS.md` and stated wherever a README quotes it.
 - Work one phase at a time as defined in `docs/SPEC.md`. At the end of each phase, stop, summarize what was built, show how to verify the acceptance criteria, and wait for review before continuing.
 
 ## Stack

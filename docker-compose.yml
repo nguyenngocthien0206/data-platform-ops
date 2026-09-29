@@ -1,4 +1,5 @@
-# Legacy sources for the Phase 4 migration reconciliation.
+# Legacy sources for the Phase 4 migration reconciliation, and the toolkit
+# itself in a container.
 #
 # Postgres is the default and always starts. SQL Server sits behind a profile
 # because its official image is x86_64 only: on Apple Silicon it runs under
@@ -6,10 +7,86 @@
 # contributor on a Mac can still run the full reconcile path against Postgres,
 # so the migration work is never gated on one person's hardware.
 # See docs/adr/0001-postgres-as-default-legacy-source.md.
+#
+# The toolkit services sit behind profiles too, so a plain `docker compose up`
+# still starts only Postgres. Use the docker-* make targets to run them.
 
 name: data-platform-ops
 
+# Shared by every container that runs the toolkit image. Generated state lives
+# on named volumes (fast disk inside the Docker VM, where a bind mount from a
+# Windows or macOS host would be slow for a DuckDB file); reports/ is bind-mounted
+# so the reports show up on the host. Service addresses are the Compose service
+# names and container ports; a real environment variable wins over .env.
+x-toolkit: &toolkit
+  build: .
+  image: data-platform-ops:local
+  env_file: .env
+  environment:
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    MSSQL_HOST: sqlserver
+    MSSQL_PORT: "1433"
+    # .streamlit/config.toml binds to localhost for the native run; inside the
+    # container the dashboards must answer on the published port.
+    STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+  volumes:
+    - app_data:/app/data
+    - app_warehouse:/app/warehouse
+    - app_dbt_target:/app/dbt/target
+    - app_dbt_logs:/app/dbt/logs
+    - ./reports:/app/reports
+  depends_on:
+    postgres:
+      condition: service_healthy
+
 services:
+  # One-shot runner: `docker compose run --rm app <command>`.
+  app:
+    <<: *toolkit
+    profiles: ["app"]
+
+  dashboard:
+    <<: *toolkit
+    profiles: ["dashboard", "browser"]
+    command: ["platform-ops", "dashboard", "--headless"]
+    ports:
+      - "${DASHBOARD_PORT:-8501}:8501"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  # Loads every dashboard page in headless Chromium and saves screenshots to
+  # reports/screenshots. Playwright stays in its own image, so the toolkit image
+  # and uv.lock carry no browser. The official image ships the browsers but not
+  # the Python package, which must match the image's version.
+  browser-check:
+    build:
+      context: scripts
+      dockerfile_inline: |
+        FROM mcr.microsoft.com/playwright/python:v1.63.0-noble
+        RUN pip install --no-cache-dir --break-system-packages playwright==1.63.0
+    image: data-platform-ops-browser-check:local
+    pull_policy: build
+    profiles: ["browser"]
+    working_dir: /work
+    command: ["python", "scripts/check_dashboards.py", "--url", "http://dashboard:8501"]
+    volumes:
+      - ./scripts:/work/scripts:ro
+      - ./reports:/work/reports
+    depends_on:
+      dashboard:
+        condition: service_healthy
+
   postgres:
     image: postgres:16
     container_name: dpo-postgres
@@ -54,3 +131,7 @@ services:
 volumes:
   postgres_data:
   sqlserver_data:
+  app_data:
+  app_warehouse:
+  app_dbt_target:
+  app_dbt_logs:

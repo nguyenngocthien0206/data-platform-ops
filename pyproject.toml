@@ -18,13 +18,11 @@ dependencies = [
     "pyiceberg[sql-sqlite]>=0.7",
     "psycopg[binary]>=3.1",
     "streamlit>=1.36",
-    # Capped below releases too new to have built download reputation. Windows
-    # Smart App Control refuses to load unsigned native modules without it, and
-    # on the development laptop it blocked pandas 3.0.6 and pyarrow 25.0.1 while
-    # pandas 2.3.3 and pyarrow 21.0.0 load. Streamlit needs both; PyIceberg and
-    # the reconciliation need pyarrow. Raise the caps once newer wheels load.
-    "pandas>=2.2,<3",
-    "pyarrow>=18,<22",
+    # Streamlit needs both; PyIceberg and the reconciliation need pyarrow. The
+    # Phase 5 caps (<3 and <22, for Windows Smart App Control) were lifted in
+    # Phase 7 after the container and native runs matched on the newer releases.
+    "pandas>=2.2",
+    "pyarrow>=18",
 ]
 
 [project.scripts]

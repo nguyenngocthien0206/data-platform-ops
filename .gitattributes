@@ -1,0 +1,11 @@
+# Every text file is stored and checked out with LF, whatever core.autocrlf says.
+# The toolkit runs in a Linux container built from this working tree, where a
+# CRLF Makefile or script breaks, and generated files (vendor fixtures, dbt
+# models) are compared byte for byte.
+* text=auto eol=lf
+
+# Binary outputs that may land next to the sources.
+*.png binary
+*.duckdb binary
+*.parquet binary
+*.sqlite binary
