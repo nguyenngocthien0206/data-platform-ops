@@ -1,6 +1,6 @@
 [project]
 name = "platform-ops"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local-first toolkit for operating a multi-team data platform: cost, incidents, reconciliation"
 # No readme key on purpose: the root README.md is a Phase 5 deliverable and must
 # contain real numbers from an actual `make demo` run, so it is not stubbed here.
