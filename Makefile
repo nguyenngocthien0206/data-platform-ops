@@ -13,12 +13,17 @@ UV ?= uv
 RUN := $(UV) run
 COMPOSE ?= docker compose
 
+PYTEST_ARGS ?=
+
 .PHONY: help setup up down seed build simulate cost incidents reconcile \
-        dashboard readme-check test lint fmt clean demo
+        dashboard readme-check test lint fmt clean pipeline demo check-env \
+        docker-build docker-up docker-demo docker-test docker-lint \
+        docker-readme-check docker-dashboard docker-browser-check docker-shell \
+        docker-clean
 
 help: ## Show the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 setup: ## Install Python dependencies and dbt packages
 	$(UV) sync
@@ -31,7 +36,7 @@ up: ## Start Docker services (postgres)
 	$(COMPOSE) up -d --wait postgres
 
 down: ## Stop Docker services
-	$(COMPOSE) --profile sqlserver down
+	$(COMPOSE) --profile sqlserver --profile app --profile dashboard --profile browser down
 
 seed: ## Generate raw data for the simulated company
 	$(RUN) platform-ops seed
@@ -59,8 +64,8 @@ dashboard: ## Launch the Streamlit dashboards (read-only over the ops schema)
 readme-check: ## Check every README results number against reports/ (after make demo)
 	$(RUN) python scripts/check_readme.py
 
-test: ## Run the unit and integration tests
-	$(RUN) pytest
+test: ## Run the unit and integration tests (extra flags in PYTEST_ARGS)
+	$(RUN) pytest $(PYTEST_ARGS)
 
 # mypy runs as a module rather than through the generated mypy.exe shim, because
 # some managed Windows machines refuse to launch unsigned shim executables.
@@ -73,12 +78,60 @@ fmt: ## Auto-format and apply safe lint fixes
 	$(RUN) ruff format .
 	$(RUN) ruff check --fix .
 
+# Empties the generated directories rather than removing them: inside the
+# container they are volume mount points, which cannot be removed.
 clean: ## Remove generated data, reports and build artifacts
-	rm -rf data/*.duckdb data/*.duckdb.wal warehouse dbt/target dbt/logs
+	rm -rf data/*.duckdb data/*.duckdb.wal
+	find warehouse dbt/target dbt/logs -mindepth 1 -delete 2>/dev/null || true
 	rm -rf .pytest_cache .ruff_cache .mypy_cache
 	find reports -type f ! -name .gitkeep -delete 2>/dev/null || true
 
 # `simulate` re-seeds and builds on its first simulated day, so `demo` needs no
 # separate `seed` and `build` steps.
-demo: clean setup up simulate cost incidents reconcile ## Full end to end run
-	@echo "demo complete. Reports are in reports/."
+pipeline: simulate cost incidents reconcile ## Every module in order, on the current state
+	@echo "pipeline complete. Reports are in reports/."
+
+demo: clean setup up pipeline ## Full end to end run on a clean state
+
+# -- in the container ------------------------------------------------------------
+#
+# The same work inside the toolkit image (Dockerfile), next to Postgres and SQL
+# Server in Compose. No Python, uv or make on the host beyond this Makefile.
+# Code changes need `make docker-build`; generated state lives on volumes.
+
+check-env:
+	@if [ ! -f .env ]; then \
+		echo "error: .env is missing. Run: cp .env.example .env"; exit 1; fi
+
+docker-build: check-env ## Build the toolkit image
+	$(COMPOSE) build app
+
+docker-up: check-env ## Start Postgres and SQL Server for the container
+	$(COMPOSE) --profile sqlserver up -d --wait postgres sqlserver
+
+docker-demo: docker-up ## Full end to end run in the container on a clean state
+	$(COMPOSE) run --rm app make clean pipeline
+
+docker-test: docker-up ## Run the tests in the container, both engines up, skips listed
+	$(COMPOSE) run --rm app make test PYTEST_ARGS=-rs
+
+docker-lint: check-env ## Lint, check formatting, and type check in the container
+	$(COMPOSE) run --rm app make lint
+
+docker-readme-check: check-env ## Check README numbers against reports/ in the container
+	$(COMPOSE) run --rm app make readme-check
+
+docker-dashboard: check-env ## Serve the dashboards from the container on localhost:8501
+	$(COMPOSE) --profile dashboard up dashboard
+
+docker-browser-check: check-env ## Load every dashboard page in headless Chromium
+	$(COMPOSE) --profile browser run --rm browser-check; \
+	status=$$?; $(COMPOSE) --profile browser stop dashboard; exit $$status
+
+docker-shell: check-env ## Open a shell in the toolkit container
+	$(COMPOSE) run --rm app bash
+
+docker-clean: check-env ## Remove the container's generated state and the reports
+	$(COMPOSE) --profile app --profile dashboard --profile browser rm --force --stop
+	docker volume rm --force $(addprefix data-platform-ops_,app_data app_warehouse app_dbt_target app_dbt_logs)
+	find reports -type f ! -name .gitkeep -delete 2>/dev/null || true
