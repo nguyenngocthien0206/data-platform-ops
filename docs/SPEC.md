@@ -2,14 +2,19 @@
 
 This document is the source of truth for what to build. Work through the phases in order. Each phase ends with acceptance criteria; stop after each phase for review.
 
+Status: Phases 0 to 9 make up release 1.0.0, the reference toolkit on the simulated company. Phases 10 to 12 plan its adoption inside the company. `docs/PROGRESS.md` records where each phase stands.
+
 ## Target repository layout
 
 ```
 data-platform-ops/
 ├── Makefile
 ├── pyproject.toml
-├── docker-compose.yml
+├── Dockerfile                 # the toolkit image (Phase 7)
+├── docker-compose.yml         # legacy databases, the toolkit, dashboards, browser check
 ├── .env.example
+├── CHANGELOG.md               # release notes, one section per version (Phase 8)
+├── .github/workflows/         # CI, the on-demand SQL Server job, the release (Phase 8)
 ├── config/
 │   ├── settings.yaml          # scale factor, paths, simulated time window, pricing rates
 │   ├── teams.yaml             # teams and their notification channels
@@ -25,7 +30,7 @@ data-platform-ops/
 │   └── dashboard/             # read-only data layer and charts for the dashboards
 ├── dashboards/                # streamlit app, one page per module
 ├── .streamlit/                # streamlit config (usage stats off)
-├── scripts/                   # vendor fixture generator, README number check
+├── scripts/                   # vendor fixtures, README check, dashboard browser check, release notes
 ├── data/                      # generated DuckDB warehouse file, gitignored
 ├── warehouse/                 # local Iceberg warehouse, gitignored
 ├── reports/                   # generated markdown reports, gitignored
@@ -34,7 +39,8 @@ data-platform-ops/
     ├── CLAUDE.md
     ├── PROGRESS.md
     ├── SPEC.md
-    └── adr/
+    ├── review/                # the Phase 6 review record
+    └── adr/                   # decision records, indexed in adr/README.md
 ```
 
 ## Makefile targets (final state)
@@ -51,8 +57,26 @@ data-platform-ops/
 | `reconcile` | run the migration scenario and the diff, write the sign-off report |
 | `dashboard` | launch streamlit |
 | `readme-check` | check every README results number against `reports/` (after `demo`) |
-| `test` / `lint` | pytest, ruff, mypy |
-| `demo` | everything above end to end on a clean state |
+| `test` / `lint` / `fmt` | pytest (extra flags in `PYTEST_ARGS`), ruff, mypy; `fmt` formats and applies safe fixes |
+| `clean` | remove generated data, reports and build artifacts |
+| `pipeline` | `simulate`, `cost`, `incidents` and `reconcile` in order, on the current state |
+| `demo` | `clean`, `setup`, `up`, then `pipeline`: everything end to end on a clean state |
+
+In the container (Phase 7 onwards), with only Docker and GNU make on the host:
+
+| Target | Purpose |
+|---|---|
+| `docker-build` | build the toolkit image |
+| `docker-up` | start the legacy engines named in `DOCKER_ENGINES` (default Postgres and SQL Server) |
+| `docker-demo` | `clean` and `pipeline` inside the container |
+| `docker-test` / `docker-lint` | the tests (skips listed with their reason) and lint, as CI runs them |
+| `docker-metadata-check` | the ownership check |
+| `docker-readme-check` | `readme-check` inside the container |
+| `docker-dashboard` | serve the dashboards on `localhost:8501` |
+| `docker-browser-check` | load every dashboard page in headless Chromium, screenshots to `reports/screenshots/` |
+| `docker-shell` / `docker-clean` | a shell in the toolkit container; remove its volumes and the reports |
+
+`TOOLKIT_IMAGE` runs a published image instead of the local build.
 
 ---
 
@@ -290,20 +314,79 @@ Automate the checks and publish the toolkit as 1.0.0.
 
 ---
 
-## Phase 9: Documentation
+## Phase 9: Documentation for 1.0.0
 
-Bring every document in line with the final, containerized, released toolkit.
+Close out 1.0.0 as the reference release: the demo, its reports and its decisions documented as they are. Trimmed by the owner after Phase 8, because the toolkit now heads for internal use; documentation for colleagues is written with each module in Phases 10 to 12.
 
-- Root `README.md`: the Docker quickstart first (pull or build, then run), the native path second, results from a real run of the released version, and the Mermaid architecture diagram updated for the container and CI.
-- Module READMEs and the dashboards README checked against the code and the latest reports.
-- ADRs: new ones for the decisions of Phases 6 to 8 (containerization, CI and release), and an index of all ADRs. Earlier ADRs are not rewritten; where a later phase changed their context (for example the lifted 10-minute budget), a short note points to the newer decision.
-- `docs/PROGRESS.md` and `docs/SPEC.md` closed out: every phase marked done, open questions resolved, known issues either fixed or stated as limits.
-- A documentation check in CI: `readme-check` against the reports of the CI run, and every relative link in the docs resolving.
+- Root `README.md`: a short "Run it in Docker" section (build or pull the image, `make docker-demo`, the dashboards) next to the native quickstart, and every stated time taken from a real run.
+- ADRs for the decisions of Phases 6 to 8 (the container, CI and release), and an index of all ADRs. Earlier ADRs are not rewritten; where a later phase changed their context (the lifted 10-minute budget, the lifted pandas and pyarrow caps in ADR 0010), a short note points to the newer decision.
+- The SPEC's Makefile table lists the `pipeline` and `docker-*` targets.
+- Fix what the docs state wrongly; module READMEs and the dashboards README are checked against the code and the latest reports.
+- `docs/PROGRESS.md` and `docs/SPEC.md` closed out for 1.0.0: Phases 0 to 9 marked done, known issues either fixed or stated as limits.
 
-**Acceptance:** a reader can go from a fresh clone to the dashboards by following the README alone. `make readme-check` passes against a fresh run of the released version. Every relative link in the docs resolves. Every ADR is listed in the index.
+Not in this phase: a Docker-first rewrite of the README for outside readers, and a documentation check in CI.
+
+**Acceptance:** following the README's Docker section from a fresh clone runs the demo and serves the dashboards. `make readme-check` passes. Every relative link in the docs resolves (checked once, locally). Every ADR is listed in the index.
+
+---
+
+## Internal use (Phases 10 to 12)
+
+From here the toolkit is adopted by the teams inside the company. The owner's decisions after Phase 8:
+
+- **Internal only, not open source.** Only the company's stack is supported: Snowflake, BigQuery or ClickHouse as the warehouse, dbt run from Airflow and from Dagster, alerts to Slack or Telegram.
+- **One module per phase, lowest integration cost first:** ownership, then incidents, then cost for one engine. Reconciliation waits until the company has a migration.
+- **Shared state lives in one Postgres database** for the toolkit, the same whatever the warehouse.
+- **Airflow and Dagster are supported through thin, optional integrations** in this repo (`platform-ops[airflow]`, `platform-ops[dagster]`). The core stays a CLI and a Python API, and the toolkit never becomes an orchestrator.
+
+The simulated company, `make demo` and the test suite stay local, offline and deterministic. They remain the regression test for every module, and nothing in Phases 10 to 12 may change their reports. Code that talks to company systems sits behind the existing interfaces, is never needed by `make demo` or `make test`, and reads credentials only from the environment.
+
+Each phase starts with a pilot team chosen by the owner and a measure taken before the module is switched on, so the phase can end with a before-and-after number rather than a demo.
+
+---
+
+## Phase 10: Ownership in the company's dbt CI
+
+Make every company dbt model, source and exposure have exactly one owner before it merges. This is the foundation the incidents and cost modules route on.
+
+- `platform-ops metadata check` runs against any dbt project, not only the bundled one: the project directory, `ownership.yaml` and `teams.yaml` are given by path or environment, and the check works from a `manifest.json` (or `--parse`) whatever the dbt adapter (Snowflake, BigQuery, ClickHouse).
+- `teams.yaml` gains notification targets per team: a Slack channel and a Telegram chat, used from Phase 11.
+- Output a CI reviewer can act on: every unowned or ambiguously owned node, the rule that matched, and the file to edit. Exit codes suitable for a required CI check.
+- A documented CI step for the company's dbt repositories, using the published image, with an example for the company's CI system.
+- Tested against at least one dbt project other than the bundled one (a small fixture project with a different adapter and layout).
+
+**Acceptance:** the check passes and fails correctly on the fixture project and on the bundled one, from the published image, with no access to any warehouse. The pilot repository runs it as a CI step (the owner wires it). The bundled demo's reports are unchanged.
+
+---
+
+## Phase 11: Incidents on real dbt runs
+
+Turn the company's failing dbt checks into one incident per root cause, routed to the right owner, instead of one alert per failure.
+
+- `platform-ops incidents ingest` reads the artifacts of one dbt invocation (`run_results.json`, `sources.json`, `manifest.json`) from any adapter, and runs the existing ingestion, grouping, severity and routing.
+- Incident state in the shared Postgres database (open incidents, appends, pages sent), safe when several Airflow or Dagster workers ingest at the same time, with its schema versioned.
+- Lifecycle for real runs: open on a new root failure, append when it fails again, resolve automatically when a later run passes the root's checks. Acknowledgement stays optional.
+- Notifiers: the existing Slack webhook, and Telegram (bot token and chat from the environment), chosen per team from `teams.yaml`.
+- Integrations as optional extras: for Airflow, a callback or operator to add after the dbt task; for Dagster, a sensor or hook after the dbt assets run. Both call the same ingest.
+- The simulated 21-day scenario keeps running through the same code path and stays the regression test, with its ground truth.
+
+**Acceptance:** fixture artifacts from Snowflake, BigQuery and ClickHouse dbt runs ingest into the same incidents the grouping rules predict. An example Airflow DAG and an example Dagster job ingest a failing run end to end against a local Postgres. Slack and Telegram messages are rendered and sent through a test double. `make demo` reports are byte-identical. The pilot team runs it; the pages per person per week before and after are recorded.
+
+---
+
+## Phase 12: Cost for the first engine
+
+Attribute one warehouse's real query cost to the owning teams. The engine (Snowflake, BigQuery or ClickHouse) is chosen at planning, by where the largest bill is.
+
+- A collector for that engine reading its query history with a read-only role (the Phase 5 collector for BigQuery or Snowflake, verified against a real account; or a new one for ClickHouse's `system.query_log`), with a pricing model that matches how the company is billed.
+- Query text handled as sensitive: the toolkit stores what attribution needs, can redact literals, and keeps raw text out of reports.
+- Attribution and showback through the existing core, with results in the shared Postgres database, run on a schedule from Airflow or Dagster.
+- The access and data handling are reviewed with whoever owns security or data governance before the first run against production.
+
+**Acceptance:** a showback for the pilot's warehouse over a real window, reconciled against the vendor's own bill for the same window within a stated tolerance. Contract tests for the collector. `make demo` reports are byte-identical.
 
 ---
 
 ## Out of scope
 
-Authentication, multi-user deployment, cloud emulators, and running against real cloud accounts (the collector interfaces must be ready for it, but everything runs on local Docker), orchestration frameworks, and any UI beyond the Streamlit dashboards.
+Open-source distribution and outside support; warehouses beyond Snowflake, BigQuery and ClickHouse; replacing or running as an orchestrator (Airflow and Dagster are supported only through the thin integrations of Phase 11); authentication and multi-user deployment of the dashboards; cloud emulators; and any UI beyond the Streamlit dashboards. Migration reconciliation for company systems waits for a real migration.

@@ -52,3 +52,7 @@ The rule for the phase was no behaviour change: `make demo` had to write the sam
 `cost_proxy_accuracy.md` is left out of the byte comparison on purpose: it reports DuckDB profiler row counts, which depend on physical row order and are not guaranteed identical between runs (Phase 2).
 
 The 5-minute target for `make test` was not reached. The remaining time is dominated by work the tests exist to do: the shared warehouse (a 3-week simulation, pricing, the incident scenario and the reconciliation), the independent incident run with a full dbt run and test added on four fault nights, and the independent cost run. Cutting further would mean dropping one of those checks, which the phase ruled out.
+
+## Follow-up
+
+The findings deferred to Phase 7 were closed there. Finding 19: `.gitattributes` with `eol=lf` stores and checks out every text file with LF. Finding 20: the pandas and pyarrow caps were lifted once Smart App Control was off and the reports stayed byte-identical, and mypy's source build followed in Phase 8. Finding 21: the time budget was lifted by the owner; measured times are recorded in `docs/PROGRESS.md` instead (ADR 0012).

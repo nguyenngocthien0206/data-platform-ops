@@ -8,11 +8,13 @@
 2. `incidents`: turns raw data test failures into root-cause incidents routed to owners.
 3. `reconcile`: verifies a legacy-to-lakehouse migration with a segmented checksum diff.
 
+Version 1.0.0 is the reference release built on the simulated company. From Phase 10 the toolkit is adopted by the teams inside the company (not open source): their dbt projects on Snowflake, BigQuery or ClickHouse, run from Airflow and Dagster, with alerts to Slack or Telegram. The simulated company stays as the demo and the regression test.
+
 The full specification and the phased build plan live in `docs/SPEC.md`. Read it before starting any phase.
 
 ## Hard constraints
 
-- Everything must run on a laptop with 16 GB RAM, offline after setup. No cloud accounts, no paid services, no API keys.
+- The demo and the test suite run on a laptop with 16 GB RAM, offline after setup, with no cloud accounts, paid services or API keys. From Phase 10 the toolkit also connects to company systems (warehouses, a shared Postgres, Slack, Telegram, Airflow, Dagster); that code sits behind the existing interfaces, is optional, is never needed by `make demo` or `make test`, and reads credentials only from the environment.
 - One command brings the stack up (`make up`), one command runs the full demo (`make demo`).
 - All randomness uses fixed seeds. Two runs of `make demo` on a clean checkout must produce identical reports.
 - Dataset size is controlled by a single scale factor in `config/settings.yaml`. There is no fixed time budget for `make demo` (the original 10-minute limit was lifted by the owner before Phase 7); the measured duration of each step is recorded in `docs/PROGRESS.md` and stated wherever a README quotes it.
@@ -26,15 +28,16 @@ The full specification and the phased build plan live in `docs/SPEC.md`. Read it
 - Iceberg via PyIceberg with a SQLite catalog and a local filesystem warehouse.
 - `sqlglot` for SQL parsing, `pydantic` for config and registry validation, `typer` for the CLI, `streamlit` for dashboards.
 - `pytest`, `ruff` (lint and format), `mypy` on the `src/` package.
+- From Phase 10, for internal use: Snowflake, BigQuery or ClickHouse as company warehouses (read-only), one shared Postgres database for the toolkit's state, and optional Airflow and Dagster integrations.
 
-Do not add orchestrators (Airflow, Dagster, Prefect) or heavy services. The Makefile plus the Python CLI is the orchestration layer.
+Do not add an orchestrator to the toolkit or make it depend on one, and do not add heavy services. The Makefile plus the Python CLI orchestrates the demo; Airflow and Dagster are supported only through the thin, optional integrations of Phase 11, which call the same CLI or Python API.
 
 ## Code conventions
 
 - Package layout: `src/platform_ops/{metadata,simulation,cost,incidents,reconcile,common}`.
 - Every external system sits behind a small interface with a local default implementation (for example `PricingModel`, `Notifier`, `SourceConnector`). This keeps the core logic vendor-neutral so a cloud adapter can be added later without touching it.
 - Type hints everywhere. Pydantic models for anything read from YAML or written as a report.
-- Module outputs (facts, incidents, diff results) are stored as tables in DuckDB under an `ops` schema, never only in memory.
+- Module outputs (facts, incidents, diff results) are stored as tables, never only in memory: in DuckDB under an `ops` schema for the demo, and in the shared Postgres database for company runs from Phase 11.
 - Prefer pushing computation into the database (SQL) over pulling rows into Python, especially in `reconcile`.
 - Before relying on a library or DuckDB feature (profiling settings, extension functions, PyIceberg catalog options), verify it against the installed version with a quick check or test. Do not assume API names from memory.
 - Each module has unit tests for its core logic plus one integration test that runs against the simulated company.

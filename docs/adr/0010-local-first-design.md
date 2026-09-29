@@ -40,3 +40,8 @@ Anyone with Docker and 16 GB of memory can check every claim in the READMEs by r
 Running on a laptop also means running under whatever the laptop enforces. On the development machine, Windows Smart App Control started refusing freshly released native wheels during Phase 5 (pandas 3.0.6 and pyarrow 25.0.1), so both are capped at versions that load. That is a cost of the local-first choice worth stating: a managed laptop is an environment with its own policies, and the toolkit has to live within them rather than ask people to switch them off.
 
 Adding a real system is additive. A cloud collector, a vendor billing adapter or a paging notifier implements an existing interface and is chosen in configuration; the attribution, grouping and reconciliation logic, and the tests that pin it, stay as they are.
+
+## Later notes
+
+- **Phase 7:** the toolkit also runs in a container (ADR 0012), which removed the dependence on the host's security policy. With Smart App Control switched off on the development laptop, the pandas and pyarrow caps were lifted (pandas 3, pyarrow 25) after the reports stayed byte-identical; mypy's source build followed in Phase 8 (ADR 0013).
+- **After Phase 8:** the toolkit is adopted inside the company, against its own Snowflake, BigQuery or ClickHouse warehouses (Phases 10 to 12 of the SPEC). The local-first design holds for the demo and the tests, which stay offline; the interfaces in the table above are where the company adapters plug in.

@@ -22,3 +22,7 @@ Raw data, which grows every day, is always current. Model sizes only refresh whe
 Loading by window exposed a real defect. A payment could be stamped as loaded minutes before its order, so a load boundary falling in between dropped the payment for good. Payments are now never loaded before their order, and tests check both that invariant and that many unevenly spaced appends give exactly the same tables as a single load.
 
 If the budget tightens further, the lever is `workload.real_build_every_days`, not the data volume, since dbt's time barely depends on volume.
+
+## Later note
+
+Before Phase 7 the owner lifted the 10-minute budget for `make demo`. After Phase 7 the 28-day interval was reviewed and kept: it is documented here, the reports match across the native run, the container and the Phase 6 baseline, and moving it would change every cost figure for realism alone (`docs/PROGRESS.md`, "After Phase 7").

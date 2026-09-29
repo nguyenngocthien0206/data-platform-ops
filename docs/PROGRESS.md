@@ -6,8 +6,10 @@ Last updated: 2026-09-29
 
 ## Current phase
 
-Phase 8: CI and release. Implemented, waiting for owner review, the pull request's CI run and the `v1.0.0` tag.
-Branch: `phase-8-ci-release` (off `main` at `58da506`).
+Phase 9: Documentation for 1.0.0 (trimmed). Implemented, waiting for owner review.
+Branch: `phase-9-documentation` (off `main` at `882100e`).
+
+Phase 8 is merged but its last acceptance steps are the owner's: run `sqlserver.yml` and push the `v1.0.0` tag (see the next step).
 
 ## Done
 
@@ -46,6 +48,13 @@ Branch: `phase-8-ci-release` (off `main` at `58da506`).
   - CI job replay: image build 103 s (warm uv cache), lint 62 s, ownership check 13 s, tests against Postgres 6 min 37 s (309 passed, the 3 SQL Server cases skipped with their reason).
   - SQL Server job replay: 7 min 2 s, 312 passed, 0 skipped.
   - `make docker-clean docker-demo` with `TOOLKIT_IMAGE`: 7 min 8 s.
+- Phase 8 merged (PR #10). CI passed on the pull request in about 6 min 20 s on `ubuntu-latest`: image build 97 s, lint 44 s, ownership check 7 s, tests against Postgres 3 min 31 s (faster than the 16-core laptop).
+- Phase 9 implemented:
+  - Root `README.md`: a "Run it in Docker" section (build or `TOOLKIT_IMAGE`, `make docker-demo`, the dashboards, `docker-readme-check`, `docker-test`, `docker-browser-check`, `docker-clean`), the runtime line updated to the latest runs, the ADR table extended to 0013 with a link to the index, and the repository layout updated. The sentence claiming CI runs without Docker is gone.
+  - ADRs 0011 (module boundaries pinned by a test, and the review before the release), 0012 (the toolkit in a container) and 0013 (CI and release from the same container), and `docs/adr/README.md`, the index of all 13. Later notes on ADR 0007 and 0008 (the lifted budget, the designs kept) and 0010 (the caps and mypy, the container, internal use). A follow-up in `docs/review/phase-6-review.md` closes the three findings deferred to Phase 7.
+  - `docs/SPEC.md`: a status line, the repository layout with the Dockerfile, CHANGELOG, workflows and review record, and the Makefile table with `pipeline`, `fmt`, `clean` and every `docker-*` target.
+  - `dashboards/README.md`: the container command, the browser check, and the three presentation problems stated as known limits.
+- Phase 9 acceptance, from a fresh clone of the branch plus the uncommitted files, with the working copy's `.env`: following the README's Docker section, `make docker-clean`, `docker-build` (31 s with the dependency layer cached), `docker-demo` (7 min 20 s), `docker-readme-check` (178 of 178) and `docker-browser-check` (8 of 8 page loads) passed, and the reports were byte-identical to the Phase 7 baseline. `make docker-dashboard` answered on `localhost:8501` within 6 s. All 44 relative links in the 27 Markdown files resolve (a one-off local script, not committed). All 13 ADRs are in the index.
 - Phase 6 implemented: broader lint rules on and clean; `# fmt: skip` noise removed; module boundaries fixed and pinned by `tests/test_architecture.py`; shared helpers in `common` (`markdown.table`, `db.replace_table`, `hashing.stable_hash`, `sandbox.write_isolated_config`); dead code removed; stale docstrings rewritten; new tests for the Slack post and the dashboard command; a shared `full_warehouse` test fixture. 22 findings recorded with decisions in `docs/review/phase-6-review.md`.
 - Phase 6 acceptance: a clean `make demo` wrote byte-identical reports to the baseline (excluding `cost_proxy_accuracy.md`, non-deterministic by design); `make readme-check` 178 of 178; test suite 9 min 50 s on `main` against 6 min 24 s on the branch, same machine and session (305 passed, 3 skipped). The 5-minute target was not reached; the floor is the independent runs the determinism tests need.
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
@@ -54,9 +63,19 @@ Branch: `phase-8-ci-release` (off `main` at `58da506`).
 
 ## In progress
 
-Nothing. Phase 8 is waiting for the owner's review. The acceptance steps that need GitHub (CI on the pull request, the SQL Server job, the tag) are listed under the next step.
+Nothing. Phase 9 is waiting for the owner's review; the Phase 8 steps on GitHub (the SQL Server job and the tag) are still the owner's.
 
 ## Decisions made
+
+### After Phase 8: internal use (owner)
+
+1. **The toolkit goes to the teams inside the company, not open source.** Open source would mean supporting many engines and outside users. The company's stack: Snowflake, BigQuery or ClickHouse; dbt run from Airflow and from Dagster; alerts to Slack or Telegram; no migration under way.
+2. **One module per phase, lowest integration cost first**: Phase 10 ownership in the company's dbt CI (no warehouse access, and the other modules route on it), Phase 11 incidents on real dbt runs (engine-agnostic, since dbt artifacts look the same on every adapter, and the pain is daily), Phase 12 cost for the one engine with the largest bill (collectors are engine-specific and need read access and a data handling review). Reconciliation waits for a real migration.
+3. **Phase 9 is trimmed** to what 1.0.0 needs: a Docker section in the README, ADRs for Phases 6 to 8 with an index, notes on the ADRs whose context changed, the SPEC's Makefile table, and fixes to anything stated wrongly. The Docker-first rewrite and the docs check in CI are dropped.
+4. **Shared state for company runs lives in one Postgres database**, the same whatever the warehouse, rather than in each warehouse.
+5. **Airflow and Dagster integrations live in this repo as optional extras** (`platform-ops[airflow]`, `platform-ops[dagster]`), thin layers over the same CLI and Python API.
+
+`docs/CLAUDE.md` was updated to match: the demo and tests stay offline and deterministic; code for company systems is optional, sits behind the existing interfaces and reads credentials only from the environment; no orchestrator inside the toolkit.
 
 ### Phase 8 (owner, at planning)
 
@@ -208,7 +227,7 @@ Kept on purpose (design limits, documented in the ADRs):
 - The alert storm is modest: 18 failing checks for 8 faults. The volume drop is the one fault with a real cascade (5 checks).
 - Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0008).
 
-Found by the Phase 7 browser check, not fixed (presentation only; reports are unaffected):
+Found by the Phase 7 browser check, stated as known limits in `dashboards/README.md` and ADR 0012 (presentation only; reports are unaffected):
 
 - Cost page, "By month": the x axis repeats month labels (two ticks per month), and the last point is April, of which the 13-week window from 5 January covers only a few days, so every line drops at the end without saying why.
 - Incidents page, "Timeline": every x-axis tick reads "12 PM"; the dates are only in the tooltips.
@@ -216,15 +235,13 @@ Found by the Phase 7 browser check, not fixed (presentation only; reports are un
 
 From Phase 8, to confirm on GitHub:
 
-- CI's test time on a 4-vCPU runner is not measured yet (6 min 29 s on the 16-core laptop); the job allows 45 minutes.
-- `sqlserver.yml` can only be started once it is on `main`.
+- `sqlserver.yml` is on `main` but has not been run yet.
 - The GHCR package may be created private; if an anonymous `docker pull` fails, the owner makes it public once in the package settings.
-- The CI replay used the working copy's `.env`, because the local Postgres volume already had its password; CI itself starts from `.env.example` on fresh volumes.
-- `make docker-browser-check` stays out of CI (a Playwright image of about 2 GB); Phase 9 decides with the docs check.
+- `make docker-browser-check` and `readme-check` stay out of CI (the docs check in CI was dropped from Phase 9).
 
-For Phase 9 (documentation):
+From Phase 9:
 
-- The SPEC's Makefile table, the root README and an ADR do not yet cover the container: code in the image and state on named volumes, the `docker-*` targets, the Playwright sidecar and the lifted caps.
+- The README's `TOOLKIT_IMAGE` example names the 1.0.0 image, which exists only once the owner pushes the `v1.0.0` tag.
 
 ## Open questions for the owner
 
@@ -232,7 +249,7 @@ None open.
 
 ## Next step
 
-The owner pushes `phase-8-ci-release`, opens the pull request and checks that CI passes, then merges. After the merge, run `sqlserver.yml` from the Actions tab. Then tag from `main`:
+The owner reviews and merges Phase 9 (`phase-9-documentation`), and finishes Phase 8 on GitHub: run `sqlserver.yml` from the Actions tab, then tag from `main` after the Phase 9 merge, so the release carries the finished documentation:
 
 ```bash
 git switch main && git pull
@@ -240,4 +257,6 @@ git tag -a v1.0.0 -m "data-platform-ops 1.0.0"
 git push origin v1.0.0
 ```
 
-After the release workflow passes: make the GHCR package public if needed, then check `docker pull ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0` without logging in, run `TOOLKIT_IMAGE=ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0 make docker-clean docker-demo` against the Phase 7 report hashes, and open the GitHub Release. Then Phase 9 (documentation), when the owner says to start.
+After the release workflow passes: make the GHCR package public if needed, check `docker pull ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0` without logging in, run `TOOLKIT_IMAGE=ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0 make docker-clean docker-demo` against the Phase 7 report hashes, and open the GitHub Release.
+
+Then, when the owner says to start, plan Phase 10 (ownership in the company's dbt CI).

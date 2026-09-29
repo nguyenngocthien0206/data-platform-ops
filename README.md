@@ -59,15 +59,31 @@ make dashboard            # http://localhost:8501
 make readme-check         # every results number in the READMEs, against reports/
 ```
 
-`make demo` writes `reports/cost.md`, `reports/incidents.md` with a postmortem draft per SEV1 in `reports/postmortems/`, and `reports/reconciliation.md`. Two runs write byte-identical reports. `make test` and `make lint` run without Docker, as CI does.
+`make demo` writes `reports/cost.md`, `reports/incidents.md` with a postmortem draft per SEV1 in `reports/postmortems/`, and `reports/reconciliation.md`. Two runs write byte-identical reports. `make test` and `make lint` run natively too; without the databases up, the tests that need them skip.
 
 SQL Server is optional: `docker compose --profile sqlserver up -d`, `uv sync --extra sqlserver`, then `uv run --extra sqlserver platform-ops reconcile run --engine sqlserver`.
+
+## Run it in Docker
+
+The same demo with nothing on the host but Docker and GNU make: no Python, no uv, and no dependence on the host's security policies ([ADR 0012](docs/adr/0012-the-toolkit-in-a-container.md)).
+
+```bash
+cp .env.example .env
+make docker-build         # the toolkit image; the first build downloads the dependencies
+make docker-demo          # Postgres and SQL Server up, then all four steps from a clean state
+make docker-dashboard     # http://localhost:8501
+make docker-readme-check
+```
+
+To run the released image instead of building one, set `TOOLKIT_IMAGE`, for example `TOOLKIT_IMAGE=ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0 make docker-demo`.
+
+`make docker-test` runs the full suite with both databases up, so nothing skips, and `make docker-lint` runs the same checks as CI ([ADR 0013](docs/adr/0013-ci-and-release-from-the-same-container.md)). `make docker-browser-check` loads every dashboard page in headless Chromium, in the light and the dark theme, and saves screenshots to `reports/screenshots/`. Generated data lives on Docker volumes and the reports land in `reports/` on the host; `make docker-clean` removes both. `make help` lists every target.
 
 ## Results
 
 From `make demo` at the default scale, over a 91-day simulated window for cost, three simulated weeks for incidents, and a year of legacy data for the migration.
 
-The run took 6 minutes 54 seconds and 9 minutes 1 second on the same laptop in two clean runs. <!-- readme-check: runtime -->
+The latest clean runs took 7 minutes 49 seconds natively and 7 minutes 16 seconds in the container, on the same laptop, with byte-identical reports. <!-- readme-check: runtime -->
 
 **Cost: the bill is idle warehouses, not dead tables.** Thirteen weeks of dbt runs, dashboard refreshes and ad hoc SQL cost $296.02 under warehouse (compute) pricing and $3.35 under on-demand scan pricing. Dashboards alone are $167.90 against $0.6514, because every refresh wakes the BI warehouse for seconds of work and minutes of idling: 99% of its billed time is idle. The 12 abandoned models the project plants are found exactly, and together cost almost nothing. For a platform lead, that changes the conversation with the business teams from "delete your old tables" to "refresh your dashboards less often, or move them to a shared warehouse", and showback makes each team see its own share: platform, which builds every shared layer, is the cheapest team under compute pricing at $26.56 and the most expensive under scan pricing at $0.8314.
 
@@ -79,7 +95,7 @@ Detail, and what each number means, is in the module READMEs: [cost](src/platfor
 
 ## How the decisions were made
 
-Each choice that shapes a number is recorded, with what it costs:
+Each choice that shapes a number is recorded, with what it costs ([index](docs/adr/README.md)):
 
 | ADR | Decision |
 |---|---|
@@ -93,6 +109,9 @@ Each choice that shapes a number is recorded, with what it costs:
 | [0008](docs/adr/0008-incident-grouping-severity-and-routing.md) | Incident grouping, severity and routing |
 | [0009](docs/adr/0009-cross-engine-hashing-and-canonicalization.md) | Cross-engine hashing and canonicalization |
 | [0010](docs/adr/0010-local-first-design.md) | Local first, every external system behind an interface |
+| [0011](docs/adr/0011-module-boundaries-and-a-review-before-release.md) | Module boundaries pinned by a test, and a review before the release |
+| [0012](docs/adr/0012-the-toolkit-in-a-container.md) | The toolkit in a container, with its state on volumes |
+| [0013](docs/adr/0013-ci-and-release-from-the-same-container.md) | CI and release from the same container, the tag pushed by a person |
 
 ## Repository layout
 
@@ -101,9 +120,11 @@ config/            settings, teams and the ownership registry
 dbt/               the simulated company's dbt project
 src/platform_ops/  common, metadata, simulation, cost, incidents, reconcile, dashboard
 dashboards/        the Streamlit app
-scripts/           vendor fixture generator, README check
+scripts/           vendor fixtures, README check, dashboard browser check, release notes
 tests/             unit, integration and contract tests
-docs/              SPEC, PROGRESS and the ADRs
+docs/              SPEC, PROGRESS, the ADRs and the Phase 6 review record
+.github/workflows/ CI, the on-demand SQL Server job, and the release
+Dockerfile         the toolkit image; docker-compose.yml runs it next to the databases
 ```
 
-The build plan is in [docs/SPEC.md](docs/SPEC.md), and [docs/PROGRESS.md](docs/PROGRESS.md) records what was decided along the way and why.
+The build plan is in [docs/SPEC.md](docs/SPEC.md), [docs/PROGRESS.md](docs/PROGRESS.md) records what was decided along the way and why, and [CHANGELOG.md](CHANGELOG.md) lists what each release contains.
