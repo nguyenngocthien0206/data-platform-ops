@@ -2,12 +2,12 @@
 
 Handoff file between sessions. Read this first, then `docs/SPEC.md`.
 
-Last updated: 2026-09-28
+Last updated: 2026-09-29
 
 ## Current phase
 
-Phase 6: Whole-repo review and cleanup. Implemented, awaiting review.
-Branch: `phase-6-review-cleanup` (off `main` at `93d74f4`).
+Phase 7: Containerized rerun and verification. Defined in the SPEC, not yet planned in detail.
+Branch: `phase-7-containerized-rerun` (off `main` at `360f0aa`).
 
 ## Done
 
@@ -21,6 +21,7 @@ Branch: `phase-6-review-cleanup` (off `main` at `93d74f4`).
 - Phase 5 implemented: Streamlit dashboards (`dashboards/`, data layer and charts in `src/platform_ops/dashboard/`), `platform-ops dashboard`, BigQuery and Snowflake collectors (`cost/collectors/`) with generated fixtures and contract tests, `make readme-check`, ADR 0010, the root README, a dashboards README and a collectors section in the cost README.
 - Phase 5 merged (PR #7).
 - Phases 6 and 7 added to `docs/SPEC.md` by the owner's decision: Phase 6 is a whole-repo review and cleanup, Phase 7 is hardening and release (1.0.0).
+- Phase 6 merged (PR #8).
 - Phase 6 implemented: broader lint rules on and clean; `# fmt: skip` noise removed; module boundaries fixed and pinned by `tests/test_architecture.py`; shared helpers in `common` (`markdown.table`, `db.replace_table`, `hashing.stable_hash`, `sandbox.write_isolated_config`); dead code removed; stale docstrings rewritten; new tests for the Slack post and the dashboard command; a shared `full_warehouse` test fixture. 22 findings recorded with decisions in `docs/review/phase-6-review.md`.
 - Phase 6 acceptance: a clean `make demo` wrote byte-identical reports to the baseline (excluding `cost_proxy_accuracy.md`, non-deterministic by design); `make readme-check` 178 of 178; test suite 9 min 50 s on `main` against 6 min 24 s on the branch, same machine and session (305 passed, 3 skipped). The 5-minute target was not reached; the floor is the independent runs the determinism tests need.
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
@@ -29,11 +30,17 @@ Branch: `phase-6-review-cleanup` (off `main` at `93d74f4`).
 
 ## In progress
 
-Nothing. Phase 6 is waiting for review.
+Nothing. Waiting for the go-ahead to plan Phase 7.
 
 ## Decisions made
 
-### Phases 6 and 7 (owner, at planning)
+### Phases 7 to 9 (owner, after Phase 6)
+
+1. **The project now has ten phases (0 to 9).** Phase 7 packages the toolkit in a container and reruns and verifies everything through Docker Compose; Phase 8 is CI and release; Phase 9 is all documentation. This replaces the earlier single "hardening and release" Phase 7.
+2. **No time budget for `make demo` any more.** The 10-minute limit is lifted (`docs/CLAUDE.md` and the SPEC updated); measured times are recorded instead.
+3. **Release in Phase 8:** CI runs checks on every pull request and push to `main`; a pushed `v*` tag builds the image, pushes it to GitHub Container Registry, and creates a GitHub Release from `CHANGELOG.md`. Version 1.0.0 and the changelog belong to Phase 8. The owner creates and pushes the tag.
+
+### Phases 6 and 7 (owner, at planning, superseded above for Phase 7)
 
 1. **Two more phases**: Phase 6 whole-repo review and cleanup, then Phase 7 hardening and release, so the release is cut on the cleaned code.
 2. **Release**: `CHANGELOG.md`, version 1.0.0, and the tag commands; the owner creates and pushes the tag and the GitHub release.
@@ -137,13 +144,17 @@ Kept on purpose (design limits, documented in the ADRs):
 - The alert storm is modest: 18 failing checks for 8 faults. The volume drop is the one fault with a real cascade (5 checks).
 - Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0008).
 
-For Phase 7:
+For Phase 7 (containerized rerun):
 
-- `make demo` timing varies with machine state: 6 min 54 s and 9 min 1 s in Phase 5, 10 min 34 s at the start of Phase 6 and 7 min 57 s at its end, on the same laptop. The spread comes from machine state; the baseline run was just over the 10-minute budget. Margin has to be restored and measured.
+- `make demo` timing varies with machine state: 6 min 54 s and 9 min 1 s in Phase 5, 10 min 34 s at the start of Phase 6 and 7 min 57 s at its end, on the same laptop. There is no budget any more; the container run's times get recorded.
 - The dashboards have been rendered by AppTest and served headless, but never looked at in a browser.
-- The pandas and pyarrow caps were added for Windows Smart App Control, which the owner has since switched off on the development laptop (it had started blocking DuckDB 1.5.5 as well). Revisit the caps.
+- The pandas and pyarrow caps were added for Windows Smart App Control, which the owner has since switched off on the development laptop (it had started blocking DuckDB 1.5.5 as well). Decide on the caps.
 - `core.autocrlf=true` turns LF-generated files into CRLF on checkout; a `.gitattributes` with `eol=lf` would stop phantom diffs on regenerated fixtures and docs.
-- The Postgres tests skip in CI (no service container yet); the SQL Server tests skip wherever the optional driver is not installed.
+- The SQL Server tests skip wherever the optional driver or the Compose profile is missing; inside the container both are available.
+
+For Phase 8 (CI and release):
+
+- The Postgres tests skip in CI (no service container yet).
 
 ## Open questions for the owner
 
@@ -151,4 +162,4 @@ None open.
 
 ## Next step
 
-Owner reviews Phase 6 and opens the PR. Then plan Phase 7 (hardening and release) on a new branch from `main`.
+Plan Phase 7 (containerized rerun and verification) on `phase-7-containerized-rerun`: the Dockerfile and `app` service, make targets that run inside the container, and the rerun and verification of everything with Postgres and SQL Server up.
