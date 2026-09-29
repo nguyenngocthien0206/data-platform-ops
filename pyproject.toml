@@ -39,20 +39,14 @@ dev = [
     "pytest>=8.2",
     "pytest-cov>=5.0",
     "ruff>=0.5",
-    # Capped below 1.20, which added a native `librt` dependency. Together with
-    # the no-binary build below this keeps mypy pure Python, so it still runs on
-    # locked-down Windows machines where an Application Control policy refuses to
-    # load freshly downloaded, low-reputation native extensions.
-    "mypy>=1.10,<1.20",
+    # The compiled wheels. Until Phase 8 mypy was capped below 1.20 and built
+    # from source, because Windows Smart App Control refused its native modules
+    # on the development laptop; that policy is off, and the pure-Python build
+    # made a cold type check take minutes.
+    "mypy>=2.3",
     "types-PyYAML>=6.0",
     "types-networkx>=3.3",
 ]
-
-[tool.uv]
-# Build mypy from source rather than taking the mypyc-compiled wheel. Costs a few
-# seconds on first sync and makes `make lint` work in environments that will not
-# load unsigned binaries.
-no-binary-package = ["mypy"]
 
 [build-system]
 requires = ["hatchling"]
