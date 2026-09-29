@@ -1,0 +1,20 @@
+# Keep the build context to the sources. Secrets come in at run time through
+# Compose's env_file, and generated state lives on volumes, never in the image.
+.git
+.venv
+.env
+data/*.duckdb
+data/*.duckdb.wal
+warehouse
+reports/*
+!reports/.gitkeep
+dbt/target
+dbt/logs
+dbt/dbt_packages
+dbt/.user.yml
+**/__pycache__
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
