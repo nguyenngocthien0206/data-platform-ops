@@ -6,8 +6,8 @@ Last updated: 2026-09-29
 
 ## Current phase
 
-Phase 7: Containerized rerun and verification. Implemented, waiting for owner review.
-Branch: `phase-7-containerized-rerun` (off `main` at `360f0aa`).
+Phase 8: CI and release. Defined in the SPEC, not yet planned in detail.
+Branch: `phase-8-ci-release` (off `main` at `58da506`).
 
 ## Done
 
@@ -32,6 +32,7 @@ Branch: `phase-7-containerized-rerun` (off `main` at `360f0aa`).
   - `make docker-lint`: 4 min 32 s, 3 min 48 s after the lift. mypy dominates: it is built from source (`no-binary-package`) and starts without a cache in every fresh container.
   - `make docker-readme-check` 3 s; `make docker-browser-check` 30 s once both images exist (the first Playwright image pull took about 7 min).
   - Full-scale reconcile against Postgres and SQL Server in the container (`reconcile run --engine postgres --engine sqlserver`): 9 min 14 s, SQL Server about 8 of it. SQL Server as delivered: 94.984%, 99.516% and 34.836% row match, 100% recall and classification accuracy, not signed off, with the same classes and counts as Postgres.
+- Phase 7 merged (PR #9).
 - Phase 6 implemented: broader lint rules on and clean; `# fmt: skip` noise removed; module boundaries fixed and pinned by `tests/test_architecture.py`; shared helpers in `common` (`markdown.table`, `db.replace_table`, `hashing.stable_hash`, `sandbox.write_isolated_config`); dead code removed; stale docstrings rewritten; new tests for the Slack post and the dashboard command; a shared `full_warehouse` test fixture. 22 findings recorded with decisions in `docs/review/phase-6-review.md`.
 - Phase 6 acceptance: a clean `make demo` wrote byte-identical reports to the baseline (excluding `cost_proxy_accuracy.md`, non-deterministic by design); `make readme-check` 178 of 178; test suite 9 min 50 s on `main` against 6 min 24 s on the branch, same machine and session (305 passed, 3 skipped). The 5-minute target was not reached; the floor is the independent runs the determinism tests need.
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
@@ -40,9 +41,16 @@ Branch: `phase-7-containerized-rerun` (off `main` at `360f0aa`).
 
 ## In progress
 
-Nothing. Phase 7 is waiting for the owner's review.
+Nothing. Waiting for the owner's go-ahead to plan Phase 8.
 
 ## Decisions made
+
+### After Phase 7: constraints that no longer apply (owner)
+
+Smart App Control is off and the 10-minute budget is lifted, so what was built around them was reviewed once more.
+
+1. **mypy's cap and source build go in Phase 8** (added to the SPEC). They were the last Smart App Control workaround in the tooling, and they make `make docker-lint` take about 4 minutes, which CI would pay on every run. `python -m mypy` stays.
+2. **The budget-driven designs stay as they are.** The real dbt build every 28 days with daily replay (ADR 0007) and the incident scenario that runs dbt only on nights a fault is active (ADR 0008) are documented. Their reports match across the native run, the container and the Phase 6 baseline. Changing them would redo every reference number and README figure for realism alone. The pandas and pyarrow caps were already lifted in Phase 7.
 
 ### Phase 7 (owner, at planning)
 
@@ -159,7 +167,7 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 - Every model is a full-refresh table; abandoned models keep their team's default tier.
 - `run_dbt` releases dbt-duckdb's cached DuckDB handle after every invocation.
 - Freshness on simulated time; off for `products` and `marketing_campaigns`.
-- GNU make via winget; mypy pinned `<1.20`, built from source; CI runs lint, tests and `metadata check --parse`.
+- GNU make via winget; mypy pinned `<1.20`, built from source (to be lifted in Phase 8); CI runs lint, tests and `metadata check --parse`.
 
 ## Known issues
 
@@ -180,7 +188,7 @@ Found by the Phase 7 browser check, not fixed (presentation only; reports are un
 For Phase 8 (CI and release):
 
 - The Postgres tests skip in CI (no service container yet). In the container, with Postgres and SQL Server up, nothing skips.
-- `make docker-lint` spends most of its 4 minutes in mypy built from source with no cache. CI can cache `.mypy_cache`; the `no-binary-package` setting only exists for locked-down Windows machines.
+- `make docker-lint` spends most of its 4 minutes in mypy built from source with no cache. The cap and the source build go in Phase 8 (see the SPEC); CI can also cache `.mypy_cache`.
 - `make docker-browser-check` pulls a Playwright image of about 2 GB; decide in Phase 8 or 9 whether CI runs it.
 
 For Phase 9 (documentation):
@@ -193,4 +201,4 @@ None open.
 
 ## Next step
 
-Owner reviews Phase 7 on `phase-7-containerized-rerun` and merges it; then plan Phase 8 (CI and release).
+When the owner says to start, plan Phase 8 (CI and release) on `phase-8-ci-release`: CI in the toolkit container with a Postgres service, SQL Server on demand, lifting mypy's cap and source build, the tag-triggered image push to GHCR and GitHub Release, `CHANGELOG.md` and version 1.0.0.
