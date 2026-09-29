@@ -1,40 +1,58 @@
-# Lint, test and ownership check on every push and pull request.
+# Lint, type check, tests and the ownership check, in the toolkit's container.
 #
-# It calls the same make targets people run locally, so CI and a laptop cannot
-# drift apart. No Docker services are needed: the integration tests seed a tiny
-# DuckDB warehouse and run real dbt against it.
+# CI calls the same docker-* make targets people run locally, so CI and a laptop
+# cannot drift apart. Postgres comes from Compose; SQL Server runs in its own
+# on-demand workflow (sqlserver.yml), because its image is large and slow to
+# start. The release workflow calls this one before it publishes anything.
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v6
+      # Fresh volumes on every run, so the example credentials are the real ones.
+      - name: Local settings for Compose
+        run: cp .env.example .env
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Loaded under the tag Compose expects, so the make targets do not rebuild.
+      - name: Build the toolkit image
+        uses: docker/build-push-action@v7
         with:
-          python-version: "3.11"
-          enable-cache: true
+          context: .
+          load: true
+          tags: data-platform-ops:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Install dependencies
-        run: make setup
+      - name: Lint, format and type check
+        run: make docker-lint
 
-      - name: Lint and type check
-        run: make lint
-
-      - name: Tests
-        run: make test
-
-      # CODEOWNERS for data: every model, source and exposure must have exactly
-      # one valid owner. --parse builds the manifest without any data.
+      # CODEOWNERS for data: every model, source and exposure has one owner.
       - name: Ownership check
-        run: uv run platform-ops metadata check --parse
+        run: make docker-metadata-check
+
+      # The SQL Server cases skip here, with their reason listed.
+      - name: Tests against Postgres
+        run: make docker-test DOCKER_ENGINES=postgres
+
+      - name: Stop the services
+        if: always()
+        run: make down
