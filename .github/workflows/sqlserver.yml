@@ -1,0 +1,46 @@
+# The full test suite with both legacy engines up: Postgres and SQL Server.
+#
+# On demand only (Actions, "Run workflow"), because the SQL Server image is large
+# and slow to start. Every test must run here: a skip means an engine was not
+# reachable, and fails the job.
+name: sqlserver
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Local settings for Compose
+        run: cp .env.example .env
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the toolkit image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: data-platform-ops:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Tests against Postgres and SQL Server, nothing skipped
+        shell: bash
+        run: |
+          make docker-test | tee pytest.log
+          if grep -Eq '[0-9]+ skipped' pytest.log; then
+            echo "::error::tests were skipped; both engines should be reachable in this job"
+            exit 1
+          fi
+
+      - name: Stop the services
+        if: always()
+        run: make down

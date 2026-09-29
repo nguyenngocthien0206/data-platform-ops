@@ -18,9 +18,12 @@ name: data-platform-ops
 # Windows or macOS host would be slow for a DuckDB file); reports/ is bind-mounted
 # so the reports show up on the host. Service addresses are the Compose service
 # names and container ports; a real environment variable wins over .env.
+#
+# TOOLKIT_IMAGE runs a published image instead of the local build, for example
+# TOOLKIT_IMAGE=ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0 make docker-demo
 x-toolkit: &toolkit
   build: .
-  image: data-platform-ops:local
+  image: ${TOOLKIT_IMAGE:-data-platform-ops:local}
   env_file: .env
   environment:
     POSTGRES_HOST: postgres

@@ -1,0 +1,80 @@
+# Publish a release when a version tag is pushed (the owner pushes it).
+#
+# The full CI runs first. Then, only if the tag equals the version in
+# pyproject.toml and CHANGELOG.md has notes for it, the image goes to GitHub
+# Container Registry (amd64, like the SQL Server image) and a GitHub Release is
+# created with that version's changelog section as its notes. Nothing is
+# published on ordinary pushes.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: The tag matches the version and has release notes
+        id: version
+        shell: bash
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match version ${version} in pyproject.toml"
+            exit 1
+          fi
+          python3 scripts/release_notes.py "${version}" > "${RUNNER_TEMP}/notes.md"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      # 1.0.0, 1.0 and, for a stable version, latest (metadata-action's default).
+      # The OCI labels link the package to this repository on GHCR.
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: GitHub Release from the changelog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}"
+          --verify-tag
+          --title "data-platform-ops ${{ steps.version.outputs.version }}"
+          --notes-file "${RUNNER_TEMP}/notes.md"

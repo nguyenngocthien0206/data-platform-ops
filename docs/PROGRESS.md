@@ -6,8 +6,8 @@ Last updated: 2026-09-29
 
 ## Current phase
 
-Phase 7: Containerized rerun and verification. Implemented, waiting for owner review.
-Branch: `phase-7-containerized-rerun` (off `main` at `360f0aa`).
+Phase 8: CI and release. Implemented, waiting for owner review, the pull request's CI run and the `v1.0.0` tag.
+Branch: `phase-8-ci-release` (off `main` at `58da506`).
 
 ## Done
 
@@ -32,6 +32,20 @@ Branch: `phase-7-containerized-rerun` (off `main` at `360f0aa`).
   - `make docker-lint`: 4 min 32 s, 3 min 48 s after the lift. mypy dominates: it is built from source (`no-binary-package`) and starts without a cache in every fresh container.
   - `make docker-readme-check` 3 s; `make docker-browser-check` 30 s once both images exist (the first Playwright image pull took about 7 min).
   - Full-scale reconcile against Postgres and SQL Server in the container (`reconcile run --engine postgres --engine sqlserver`): 9 min 14 s, SQL Server about 8 of it. SQL Server as delivered: 94.984%, 99.516% and 34.836% row match, 100% recall and classification accuracy, not signed off, with the same classes and counts as Postgres.
+- Phase 7 merged (PR #9).
+- Phase 8 implemented:
+  - mypy moved to its compiled 2.x wheels (1.19.1 to 2.3.1, which adds `ast-serialize`); the `<1.20` cap and `no-binary-package` are gone. mypy 2 reported nothing new under the strict config.
+  - `.github/workflows/ci.yml` runs lint, the ownership check and the tests in the toolkit container with Postgres, on every pull request and push to `main`. The native `uv` job is gone.
+  - `.github/workflows/sqlserver.yml` runs the full suite with Postgres and SQL Server, on demand, and fails on any skip.
+  - `.github/workflows/release.yml` runs on a `v*` tag: it reuses `ci.yml`, checks that the tag equals the `pyproject.toml` version, pushes the amd64 image to `ghcr.io/nguyenngocthien0206/data-platform-ops` (`1.0.0`, `1.0`, `latest`), and creates a GitHub Release whose notes come from `CHANGELOG.md`.
+  - Version 1.0.0: `pyproject.toml` is the only place it is written; `platform_ops.__version__` reads the installed package metadata. `CHANGELOG.md` has one 1.0.0 entry covering Phases 0 to 8. `scripts/release_notes.py` extracts a version's notes, and `tests/test_release.py` keeps the version, the package and the changelog in agreement.
+  - Compose takes `TOOLKIT_IMAGE` to run a published image. The Makefile takes `DOCKER_ENGINES` (CI starts Postgres only) and has a new `docker-metadata-check` target.
+- Phase 8 verification, before push: actionlint (1.7.12) found 0 errors in the three workflows. From a fresh clone of the branch plus the uncommitted files, the CI job's steps replayed locally (`docker build` instead of buildx with the gha cache) all passed. The SQL Server job's steps passed with nothing skipped. `make docker-demo` with `TOOLKIT_IMAGE` set to a GHCR-style tag of the image wrote reports byte-identical to the Phase 7 hashes. `platform-ops version` prints 1.0.0 natively and in the container.
+- Phase 8 reference numbers, same laptop:
+  - Cold `make lint`: native 5 min 13 s before, 1 min 2 s after (warm 4 s); `make docker-lint` 3 min 48 s in Phase 7, 62 s now.
+  - CI job replay: image build 103 s (warm uv cache), lint 62 s, ownership check 13 s, tests against Postgres 6 min 37 s (309 passed, the 3 SQL Server cases skipped with their reason).
+  - SQL Server job replay: 7 min 2 s, 312 passed, 0 skipped.
+  - `make docker-clean docker-demo` with `TOOLKIT_IMAGE`: 7 min 8 s.
 - Phase 6 implemented: broader lint rules on and clean; `# fmt: skip` noise removed; module boundaries fixed and pinned by `tests/test_architecture.py`; shared helpers in `common` (`markdown.table`, `db.replace_table`, `hashing.stable_hash`, `sandbox.write_isolated_config`); dead code removed; stale docstrings rewritten; new tests for the Slack post and the dashboard command; a shared `full_warehouse` test fixture. 22 findings recorded with decisions in `docs/review/phase-6-review.md`.
 - Phase 6 acceptance: a clean `make demo` wrote byte-identical reports to the baseline (excluding `cost_proxy_accuracy.md`, non-deterministic by design); `make readme-check` 178 of 178; test suite 9 min 50 s on `main` against 6 min 24 s on the branch, same machine and session (305 passed, 3 skipped). The 5-minute target was not reached; the floor is the independent runs the determinism tests need.
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
@@ -40,9 +54,32 @@ Branch: `phase-7-containerized-rerun` (off `main` at `360f0aa`).
 
 ## In progress
 
-Nothing. Phase 7 is waiting for the owner's review.
+Nothing. Phase 8 is waiting for the owner's review. The acceptance steps that need GitHub (CI on the pull request, the SQL Server job, the tag) are listed under the next step.
 
 ## Decisions made
+
+### Phase 8 (owner, at planning)
+
+1. **The image is amd64 only**, like the SQL Server image. Apple Silicon runs it under emulation or builds it locally with `make docker-build`.
+2. **The on-demand job runs only the SQL Server tests** (the full suite, nothing may skip), from `workflow_dispatch`. A demo and `readme-check` in CI belong to Phase 9.
+3. **The release reruns the full CI first**, then publishes only if the tag equals the version and the changelog has notes for it.
+
+Planned defaults: CI calls the same `docker-*` make targets as a laptop, with Postgres from Compose; CI writes `.env` from `.env.example` on fresh volumes; the native `uv` CI job is dropped; the browser check stays out of CI.
+
+### Phase 8, made during implementation
+
+45. **The version is read from the package metadata**, so `pyproject.toml` is the only place it is written, and `uv lock` records it.
+46. **Release notes skip Keep a Changelog's link definitions** at the end of the file, and a missing section exits non-zero so a tag without notes never publishes.
+47. **The SQL Server job runs its step with `shell: bash`**, which gives `pipefail`, so `make docker-test | tee` still fails when the tests fail; a grep on the summary fails the job on any skip.
+48. **`latest` comes from `docker/metadata-action`'s default**, which adds it for stable semver tags only; the workflow lists the `{{version}}` and `{{major}}.{{minor}}` patterns.
+49. **No `.mypy_cache` in CI.** With compiled wheels a cold `make docker-lint` takes about a minute, so a cache is not worth its keys.
+
+### After Phase 7: constraints that no longer apply (owner)
+
+Smart App Control is off and the 10-minute budget is lifted, so what was built around them was reviewed once more.
+
+1. **mypy's cap and source build go in Phase 8** (added to the SPEC). They were the last Smart App Control workaround in the tooling, and they make `make docker-lint` take about 4 minutes, which CI would pay on every run. `python -m mypy` stays.
+2. **The budget-driven designs stay as they are.** The real dbt build every 28 days with daily replay (ADR 0007) and the incident scenario that runs dbt only on nights a fault is active (ADR 0008) are documented. Their reports match across the native run, the container and the Phase 6 baseline. Changing them would redo every reference number and README figure for realism alone. The pandas and pyarrow caps were already lifted in Phase 7.
 
 ### Phase 7 (owner, at planning)
 
@@ -159,7 +196,7 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 - Every model is a full-refresh table; abandoned models keep their team's default tier.
 - `run_dbt` releases dbt-duckdb's cached DuckDB handle after every invocation.
 - Freshness on simulated time; off for `products` and `marketing_campaigns`.
-- GNU make via winget; mypy pinned `<1.20`, built from source; CI runs lint, tests and `metadata check --parse`.
+- GNU make via winget; mypy on its compiled 2.x wheels since Phase 8, still run as `python -m mypy`; CI runs lint, tests and `metadata check --parse` in the container.
 
 ## Known issues
 
@@ -177,11 +214,13 @@ Found by the Phase 7 browser check, not fixed (presentation only; reports are un
 - Incidents page, "Timeline": every x-axis tick reads "12 PM"; the dates are only in the tooltips.
 - Overview "Ownership" and Incidents "Nights dbt ran": narrow columns cut off the last table column (coverage, failing checks); it is reachable by scrolling the table.
 
-For Phase 8 (CI and release):
+From Phase 8, to confirm on GitHub:
 
-- The Postgres tests skip in CI (no service container yet). In the container, with Postgres and SQL Server up, nothing skips.
-- `make docker-lint` spends most of its 4 minutes in mypy built from source with no cache. CI can cache `.mypy_cache`; the `no-binary-package` setting only exists for locked-down Windows machines.
-- `make docker-browser-check` pulls a Playwright image of about 2 GB; decide in Phase 8 or 9 whether CI runs it.
+- CI's test time on a 4-vCPU runner is not measured yet (6 min 29 s on the 16-core laptop); the job allows 45 minutes.
+- `sqlserver.yml` can only be started once it is on `main`.
+- The GHCR package may be created private; if an anonymous `docker pull` fails, the owner makes it public once in the package settings.
+- The CI replay used the working copy's `.env`, because the local Postgres volume already had its password; CI itself starts from `.env.example` on fresh volumes.
+- `make docker-browser-check` stays out of CI (a Playwright image of about 2 GB); Phase 9 decides with the docs check.
 
 For Phase 9 (documentation):
 
@@ -193,4 +232,12 @@ None open.
 
 ## Next step
 
-Owner reviews Phase 7 on `phase-7-containerized-rerun` and merges it; then plan Phase 8 (CI and release).
+The owner pushes `phase-8-ci-release`, opens the pull request and checks that CI passes, then merges. After the merge, run `sqlserver.yml` from the Actions tab. Then tag from `main`:
+
+```bash
+git switch main && git pull
+git tag -a v1.0.0 -m "data-platform-ops 1.0.0"
+git push origin v1.0.0
+```
+
+After the release workflow passes: make the GHCR package public if needed, then check `docker pull ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0` without logging in, run `TOOLKIT_IMAGE=ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0 make docker-clean docker-demo` against the Phase 7 report hashes, and open the GitHub Release. Then Phase 9 (documentation), when the owner says to start.

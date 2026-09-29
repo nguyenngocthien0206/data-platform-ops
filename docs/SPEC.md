@@ -283,9 +283,10 @@ Automate the checks and publish the toolkit as 1.0.0.
 
 - CI on every pull request and push to `main`: lint, type check, the full test suite and `metadata check`, run in the toolkit's container with a Postgres service. SQL Server runs in a separate job that can be triggered on demand, because its image is large and slow to start.
 - On a pushed version tag (`v*`): build the image, push it to GitHub Container Registry, and create a GitHub Release whose notes come from `CHANGELOG.md`. Nothing is published on ordinary pushes.
+- Remove the last tooling workaround left from Windows Smart App Control, now switched off: mypy's `<1.20` cap and its build from source (`no-binary-package`), so the type check runs on compiled wheels. Fix whatever a newer mypy reports. `make lint` keeps calling `python -m mypy`, which costs nothing and still suits managed machines. Measure `make docker-lint` before and after.
 - `CHANGELOG.md` covering Phases 0 to 8, version 1.0.0 in `pyproject.toml` and `platform-ops version`, and the exact commands for the owner to create and push the `v1.0.0` tag. The owner creates and pushes the tag.
 
-**Acceptance:** CI passes on a pull request. After the owner pushes the tag, the image can be pulled from GHCR and runs the demo, and the GitHub Release exists with the changelog notes. `CHANGELOG.md`, the version and the tag agree.
+**Acceptance:** CI passes on a pull request. `make lint` passes on an uncapped, compiled mypy, with the lint time before and after recorded. After the owner pushes the tag, the image can be pulled from GHCR and runs the demo, and the GitHub Release exists with the changelog notes. `CHANGELOG.md`, the version and the tag agree.
 
 ---
 

@@ -14,12 +14,15 @@ RUN := $(UV) run
 COMPOSE ?= docker compose
 
 PYTEST_ARGS ?=
+# Legacy engines the docker-* targets start. CI starts Postgres only and runs
+# SQL Server in its own on-demand job: make docker-test DOCKER_ENGINES=postgres
+DOCKER_ENGINES ?= postgres sqlserver
 
 .PHONY: help setup up down seed build simulate cost incidents reconcile \
         dashboard readme-check test lint fmt clean pipeline demo check-env \
         docker-build docker-up docker-demo docker-test docker-lint \
-        docker-readme-check docker-dashboard docker-browser-check docker-shell \
-        docker-clean
+        docker-metadata-check docker-readme-check docker-dashboard \
+        docker-browser-check docker-shell docker-clean
 
 help: ## Show the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -106,17 +109,22 @@ check-env:
 docker-build: check-env ## Build the toolkit image
 	$(COMPOSE) build app
 
-docker-up: check-env ## Start Postgres and SQL Server for the container
-	$(COMPOSE) --profile sqlserver up -d --wait postgres sqlserver
+docker-up: check-env ## Start the legacy engines for the container (DOCKER_ENGINES)
+	$(COMPOSE) --profile sqlserver up -d --wait $(DOCKER_ENGINES)
 
 docker-demo: docker-up ## Full end to end run in the container on a clean state
 	$(COMPOSE) run --rm app make clean pipeline
 
-docker-test: docker-up ## Run the tests in the container, both engines up, skips listed
+docker-test: docker-up ## Run the tests in the container, skips listed with their reason
 	$(COMPOSE) run --rm app make test PYTEST_ARGS=-rs
 
 docker-lint: check-env ## Lint, check formatting, and type check in the container
 	$(COMPOSE) run --rm app make lint
+
+# CODEOWNERS for data: every model, source and exposure has exactly one owner.
+# --parse builds the manifest without any data.
+docker-metadata-check: check-env ## Check dataset ownership in the container
+	$(COMPOSE) run --rm app platform-ops metadata check --parse
 
 docker-readme-check: check-env ## Check README numbers against reports/ in the container
 	$(COMPOSE) run --rm app make readme-check
