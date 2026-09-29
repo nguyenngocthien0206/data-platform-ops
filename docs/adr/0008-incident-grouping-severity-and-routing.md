@@ -41,3 +41,7 @@ The grouping is per run. Two unrelated faults that happen to fail the same downs
 Severity rewards breadth. A critical dataset with nothing downstream scores 30, which is SEV3. That is intended for a demo about blast radius, but a team whose most critical tables are leaves should add a floor per tier.
 
 Running only on fault nights means a check that would fail on a green night is never seen. The baseline build on day 0 has to be fully green or the scenario stops, which is what makes skipping green nights safe.
+
+## Later note
+
+The 10-minute budget mentioned above was lifted before Phase 7. The parse reuse and the fault pairing were reviewed after Phase 7 and kept: reusing the parse costs nothing in what the scenario shows, and spreading the faults out would move every incident figure for no gain in what the grouping proves.
