@@ -18,21 +18,53 @@ from platform_ops.metadata.manifest import OWNED_TYPES, Node
 from platform_ops.metadata.registry import Registry, Resolution
 
 
+@dataclass(frozen=True)
+class Finding:
+    """One problem, with what it is about and how to fix it.
+
+    ``node`` is the dataset's unique id and ``rule`` the ownership pattern, so
+    a report can point a reviewer at the right file and line.
+    """
+
+    message: str
+    node: str | None = None
+    rule: str | None = None
+    fix: str = ""
+
+
 @dataclass
 class CheckReport:
-    errors: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
+    error_findings: list[Finding] = field(default_factory=list)
+    warning_findings: list[Finding] = field(default_factory=list)
     resolutions: dict[str, Resolution] = field(default_factory=dict)
     coverage: dict[str, tuple[int, int]] = field(default_factory=dict)
 
     @property
+    def errors(self) -> list[str]:
+        return [finding.message for finding in self.error_findings]
+
+    @property
+    def warnings(self) -> list[str]:
+        return [finding.message for finding in self.warning_findings]
+
+    @property
     def passed(self) -> bool:
-        return not self.errors
+        return not self.error_findings
+
+
+def _suggested_rule(node: Node) -> str:
+    return (
+        f'add a rule to ownership.yaml, for example: - {{match: "{node.unique_id}", '
+        "owner: <owner>, team: <team>, tier: best_effort}"
+    )
 
 
 def run_check(registry: Registry, nodes: dict[str, Node]) -> CheckReport:
     report = CheckReport()
-    report.errors.extend(registry.problems())
+    for rule, message in registry.rule_problems():
+        report.error_findings.append(
+            Finding(message, rule=rule.match, fix="fix the rule, or the team in teams.yaml")
+        )
 
     owned_nodes = sorted(
         (node for node in nodes.values() if node.resource_type in OWNED_TYPES),
@@ -46,21 +78,39 @@ def run_check(registry: Registry, nodes: dict[str, Node]) -> CheckReport:
         matched_patterns.update(rule.match for rule in resolution.candidates)
 
         if resolution.rule is None:
-            report.errors.append(f"{node.unique_id} has no owner")
+            report.error_findings.append(
+                Finding(f"{node.unique_id} has no owner", node.unique_id, fix=_suggested_rule(node))
+            )
         elif resolution.ambiguous:
             tied = ", ".join(f"'{rule.match}'" for rule in resolution.candidates[:2])
-            report.errors.append(
-                f"{node.unique_id} has ambiguous ownership: {tied} are equally specific"
+            report.error_findings.append(
+                Finding(
+                    f"{node.unique_id} has ambiguous ownership: {tied} are equally specific",
+                    node.unique_id,
+                    resolution.rule.match,
+                    "make one rule more specific, or remove one of them",
+                )
             )
         elif node.resource_type == "exposure" and node.owner_name != resolution.rule.owner:
-            report.errors.append(
-                f"{node.unique_id} declares owner '{node.owner_name}' in dbt but the "
-                f"registry says '{resolution.rule.owner}'"
+            report.error_findings.append(
+                Finding(
+                    f"{node.unique_id} declares owner '{node.owner_name}' in dbt but the "
+                    f"registry says '{resolution.rule.owner}'",
+                    node.unique_id,
+                    resolution.rule.match,
+                    "change the exposure's owner in dbt or the rule's owner, so they agree",
+                )
             )
 
     for rule in registry.rules:
         if rule.match not in matched_patterns:
-            report.warnings.append(f"rule '{rule.match}' matches no model, source or exposure")
+            report.warning_findings.append(
+                Finding(
+                    f"rule '{rule.match}' matches no dataset",
+                    rule=rule.match,
+                    fix="remove the rule, or fix its pattern",
+                )
+            )
 
     for resource_type in OWNED_TYPES:
         of_type = [n for n in owned_nodes if n.resource_type == resource_type]

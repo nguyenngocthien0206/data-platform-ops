@@ -112,6 +112,7 @@ Each choice that shapes a number is recorded, with what it costs ([index](docs/a
 | [0011](docs/adr/0011-module-boundaries-and-a-review-before-release.md) | Module boundaries pinned by a test, and a review before the release |
 | [0012](docs/adr/0012-the-toolkit-in-a-container.md) | The toolkit in a container, with its state on volumes |
 | [0013](docs/adr/0013-ci-and-release-from-the-same-container.md) | CI and release from the same container, the tag pushed by a person |
+| [0014](docs/adr/0014-the-ownership-gate-in-the-consuming-repository.md) | The ownership gate runs in the consuming repository, on its manifest |
 
 ## Repository layout
 
@@ -122,6 +123,7 @@ src/platform_ops/  common, metadata, simulation, cost, incidents, reconcile, das
 dashboards/        the Streamlit app
 scripts/           vendor fixtures, README check, dashboard browser check, release notes
 tests/             unit, integration and contract tests
+examples/          a GitHub Actions ownership check for a company dbt repository
 docs/              SPEC, PROGRESS, the ADRs and the Phase 6 review record
 .github/workflows/ CI, the on-demand SQL Server job, and the release
 Dockerfile         the toolkit image; docker-compose.yml runs it next to the databases

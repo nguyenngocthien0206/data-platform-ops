@@ -1,0 +1,6 @@
+version: 2
+seeds:
+  - name: raw_invoices
+    config:
+      column_types:
+        paid_at: Nullable(DateTime)

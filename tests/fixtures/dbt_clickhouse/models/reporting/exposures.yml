@@ -1,0 +1,21 @@
+version: 2
+exposures:
+  - name: finance_revenue_board
+    type: dashboard
+    maturity: high
+    owner:
+      name: linh
+      email: linh@example.com
+    depends_on:
+      - ref('rpt_revenue_daily')
+      - ref('rpt_revenue_monthly')
+      - ref('rpt_unpaid_invoices')
+  - name: growth_weekly_review
+    type: dashboard
+    maturity: medium
+    owner:
+      name: quan
+      email: quan@example.com
+    depends_on:
+      - ref('rpt_new_customers_weekly')
+      - ref('rpt_orders_by_country')

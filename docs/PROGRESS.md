@@ -6,10 +6,10 @@ Last updated: 2026-09-29
 
 ## Current phase
 
-Phase 9: Documentation for 1.0.0 (trimmed). Implemented, waiting for owner review.
-Branch: `phase-9-documentation` (off `main` at `882100e`).
+Phase 10: Ownership in the company's dbt CI. Implemented, waiting for owner review, then the `v1.1.0` tag.
+Branch: `phase-10-ownership-ci` (off `main` at `1bb96d7`).
 
-Phase 8 is merged but its last acceptance steps are the owner's: run `sqlserver.yml` and push the `v1.0.0` tag (see the next step).
+Phases 0 to 9 are done and released as 1.0.0. Phase 10 prepares 1.1.0.
 
 ## Done
 
@@ -55,6 +55,16 @@ Phase 8 is merged but its last acceptance steps are the owner's: run `sqlserver.
   - `docs/SPEC.md`: a status line, the repository layout with the Dockerfile, CHANGELOG, workflows and review record, and the Makefile table with `pipeline`, `fmt`, `clean` and every `docker-*` target.
   - `dashboards/README.md`: the container command, the browser check, and the three presentation problems stated as known limits.
 - Phase 9 acceptance, from a fresh clone of the branch plus the uncommitted files, with the working copy's `.env`: following the README's Docker section, `make docker-clean`, `docker-build` (31 s with the dependency layer cached), `docker-demo` (7 min 20 s), `docker-readme-check` (178 of 178) and `docker-browser-check` (8 of 8 page loads) passed, and the reports were byte-identical to the Phase 7 baseline. `make docker-dashboard` answered on `localhost:8501` within 6 s. All 44 relative links in the 27 Markdown files resolve (a one-off local script, not committed). All 13 ADRs are in the index.
+- Phase 9 merged (PR #11).
+- **1.0.0 released.** The owner pushed `v1.0.0` from `main` after the Phase 9 merge. The release workflow passed (CI rerun, tag checked against the version, image pushed, GitHub Release "data-platform-ops 1.0.0" with the changelog notes). The GHCR package is public, with tags `1.0.0`, `1.0` and `latest`. `sqlserver.yml` passed on `main`. Phase 8 and Phase 9 acceptance are closed.
+- Published image check (2026-10-04): an anonymous `docker pull ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0` took 54 s (amd64, OCI labels with version 1.0.0 and the repository source); `platform-ops version` prints 1.0.0; `TOOLKIT_IMAGE=ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0 make docker-clean docker-demo` took 6 min 16 s and wrote reports byte-identical to the Phase 7 baseline.
+- Phase 10 implemented:
+  - `platform-ops metadata check --manifest ... --registry-dir ...` runs on any dbt project and adapter: no settings, no database, nothing written but an optional `--summary-json`. Findings name the file to change and how (a ready-to-paste rule for an unowned dataset); `--format github` adds annotations on the dataset's file or the rule's line; `--report-only` never fails; exit 1 means owners to fix, 2 means the check cannot run. New module `metadata/output.py`; `check.py` records each finding with its node, rule and fix.
+  - Seeds and snapshots count as owned resources. `teams.yaml` takes an optional `telegram_chat`.
+  - ClickHouse: a `clickhouse` Compose profile (`clickhouse/clickhouse-server:26.8.16.41`), a `dbt-clickhouse` extra (1.10.3) in the image, `DOCKER_ENGINES` defaulting to all three engines, CI running Postgres and ClickHouse.
+  - `tests/fixtures/dbt_clickhouse` (`acme_analytics`): 15 models in a layout unlike the demo's, a local package, 4 seeds, a snapshot, 3 sources, 2 exposures and its own `ownership/` registry. `tests/test_ownership_external.py` parses it, checks every finding type, exit code and annotation, and builds it for real on ClickHouse.
+  - `examples/github-actions/ownership-check.yml` for a company dbt repository, a section on it in the metadata README, ADR 0014, version 1.1.0 and its CHANGELOG section.
+- Phase 10 verification, from a fresh clone of the branch plus the uncommitted files: `make docker-build` 104 s, `make docker-lint` 61 s, `make docker-metadata-check` 12 s (the demo still 9 sources, 118 models, 12 exposures, 139 rows), `make docker-test` with Postgres, ClickHouse and SQL Server 7 min 4 s, 327 passed and nothing skipped. `make docker-clean docker-demo` 6 min 58 s, reports byte-identical to the Phase 7 baseline. The example's `docker run` line, run from the built image as another user on a read-only mount of the parsed fixture: exit 0 on its registry, exit 1 with a repository-relative annotation when a rule is removed, exit 0 with `--report-only` (summary 24 of 25 owned, 0.96). actionlint found nothing in the example and the three workflows. Native `make lint` 3 s warm.
 - Phase 6 implemented: broader lint rules on and clean; `# fmt: skip` noise removed; module boundaries fixed and pinned by `tests/test_architecture.py`; shared helpers in `common` (`markdown.table`, `db.replace_table`, `hashing.stable_hash`, `sandbox.write_isolated_config`); dead code removed; stale docstrings rewritten; new tests for the Slack post and the dashboard command; a shared `full_warehouse` test fixture. 22 findings recorded with decisions in `docs/review/phase-6-review.md`.
 - Phase 6 acceptance: a clean `make demo` wrote byte-identical reports to the baseline (excluding `cost_proxy_accuracy.md`, non-deterministic by design); `make readme-check` 178 of 178; test suite 9 min 50 s on `main` against 6 min 24 s on the branch, same machine and session (305 passed, 3 skipped). The 5-minute target was not reached; the floor is the independent runs the determinism tests need.
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
@@ -63,9 +73,35 @@ Phase 8 is merged but its last acceptance steps are the owner's: run `sqlserver.
 
 ## In progress
 
-Nothing. Phase 9 is waiting for the owner's review; the Phase 8 steps on GitHub (the SQL Server job and the tag) are still the owner's.
+Nothing. Phase 10 is waiting for the owner's review.
 
 ## Decisions made
+
+### Phase 10 (owner, at planning)
+
+1. **The consuming CI runs `dbt parse`** and hands the manifest to the toolkit, which needs no adapter.
+2. **A report-only mode**, to measure the baseline and switch the check on without blocking merges.
+3. **ClickHouse runs in PR CI**, next to Postgres.
+4. **Release 1.1.0** at the end of the phase; the owner pushes the tag.
+
+### Phase 10, made during implementation
+
+50. **`dbt parse` with `dbt-clickhouse` runs without a server**, verified with nothing listening on the port. A parse-only profile selected with `--profile` is enough, so the example needs no secret.
+51. **`--repo-root` instead of a path prefix.** Annotation paths are made relative to the repository root, which works wherever the project and the registry sit inside it; a file outside it keeps its full path.
+52. **An installed package's datasets get no file annotation**, because their files are not in the repository; the finding still lists the rule to add.
+53. **Exposures appear in `run_results.json` as `no-op`** in a dbt build; the integration test allows that status for them.
+54. **A package macro is called with its namespace** (`acme_shared.cents_to_amount`); dbt does not resolve another package's macros unqualified.
+55. **Compose defaults for ClickHouse credentials** (`:-`, not `:?`), matching the fixture profile's defaults, so an existing `.env` without the new keys keeps working.
+
+### Before Phase 10 (owner)
+
+1. **The toolkit stays public; company configuration lives in the company's repositories.** `ownership.yaml` and `teams.yaml` for company projects sit in each dbt repository, and CI pulls the public image and points it at them. Names, channels and chats of the company never enter this repository. Added to the SPEC's Phase 10.
+2. **The company's dbt repositories run CI on GitHub Actions**, so the Phase 10 example is a GitHub Actions workflow.
+3. **Company policy allows the public image in company CI** (the owner asked). The example workflow pulls `ghcr.io/nguyenngocthien0206/data-platform-ops` at a fixed version.
+4. **The pilot is the data platform team.** It owns the shared layers (staging, intermediate), understands ownership best and will maintain the rules, so the first rollout meets the least friction.
+5. **The pilot's dbt project runs on ClickHouse** (`dbt-clickhouse`), self-managed by the company. First chosen as BigQuery, then changed by the owner: there is no BigQuery environment to test against, while ClickHouse runs locally in Docker, so the fixture project, the local tests and the pilot use the same engine.
+6. **The fixture project is built here**: a small dbt project on the ClickHouse adapter with a layout unlike the bundled one (several model folders, a package, sources and exposures), run against a ClickHouse service behind a Compose profile so its artifacts are real. No company data or manifest is needed.
+7. **Self-managed ClickHouse has no vendor bill.** Cost for it (Phase 12, if ClickHouse is the first engine) means sharing the infrastructure cost by usage, so the SPEC's Phase 12 acceptance now covers that case.
 
 ### After Phase 8: internal use (owner)
 
@@ -233,15 +269,10 @@ Found by the Phase 7 browser check, stated as known limits in `dashboards/README
 - Incidents page, "Timeline": every x-axis tick reads "12 PM"; the dates are only in the tooltips.
 - Overview "Ownership" and Incidents "Nights dbt ran": narrow columns cut off the last table column (coverage, failing checks); it is reachable by scrolling the table.
 
-From Phase 8, to confirm on GitHub:
+Kept on purpose since Phases 8 and 9:
 
-- `sqlserver.yml` is on `main` but has not been run yet.
-- The GHCR package may be created private; if an anonymous `docker pull` fails, the owner makes it public once in the package settings.
 - `make docker-browser-check` and `readme-check` stay out of CI (the docs check in CI was dropped from Phase 9).
-
-From Phase 9:
-
-- The README's `TOOLKIT_IMAGE` example names the 1.0.0 image, which exists only once the owner pushes the `v1.0.0` tag.
+- SQL Server regressions are caught only when someone runs `sqlserver.yml`; run it before each release.
 
 ## Open questions for the owner
 
@@ -249,14 +280,12 @@ None open.
 
 ## Next step
 
-The owner reviews and merges Phase 9 (`phase-9-documentation`), and finishes Phase 8 on GitHub: run `sqlserver.yml` from the Actions tab, then tag from `main` after the Phase 9 merge, so the release carries the finished documentation:
+The owner reviews and merges Phase 10 (`phase-10-ownership-ci`); CI on the pull request now runs ClickHouse. Then tag from `main`:
 
 ```bash
 git switch main && git pull
-git tag -a v1.0.0 -m "data-platform-ops 1.0.0"
-git push origin v1.0.0
+git tag -a v1.1.0 -m "data-platform-ops 1.1.0"
+git push origin v1.1.0
 ```
 
-After the release workflow passes: make the GHCR package public if needed, check `docker pull ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0` without logging in, run `TOOLKIT_IMAGE=ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0 make docker-clean docker-demo` against the Phase 7 report hashes, and open the GitHub Release.
-
-Then, when the owner says to start, plan Phase 10 (ownership in the company's dbt CI).
+After the release: copy `examples/github-actions/ownership-check.yml` into the pilot repository with the registry in `ownership/`, run it with `REPORT_ONLY: "true"`, record the baseline from the `ownership-summary` artifact, complete the registry, then set `REPORT_ONLY: "false"` and make the job required. Then Phase 11 (incidents on real dbt runs), when the owner says to start.

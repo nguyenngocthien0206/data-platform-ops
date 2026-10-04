@@ -1,4 +1,4 @@
-# The full test suite with both legacy engines up: Postgres and SQL Server.
+# The full test suite with every engine up: Postgres, ClickHouse and SQL Server.
 #
 # On demand only (Actions, "Run workflow"), because the SQL Server image is large
 # and slow to start. Every test must run here: a skip means an engine was not
@@ -32,12 +32,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Tests against Postgres and SQL Server, nothing skipped
+      - name: Tests against Postgres, ClickHouse and SQL Server, nothing skipped
         shell: bash
         run: |
           make docker-test | tee pytest.log
           if grep -Eq '[0-9]+ skipped' pytest.log; then
-            echo "::error::tests were skipped; both engines should be reachable in this job"
+            echo "::error::tests were skipped; every engine should be reachable in this job"
             exit 1
           fi
 

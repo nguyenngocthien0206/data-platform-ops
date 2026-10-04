@@ -10,7 +10,7 @@ another's command.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
 
@@ -52,9 +52,9 @@ PARSE_OPTION = typer.Option(
 )
 
 
-def _fail(message: str) -> None:
+def _fail(message: str, code: int = 1) -> NoReturn:
     typer.secho(message, fg=typer.colors.RED, err=True)
-    raise typer.Exit(code=1)
+    raise typer.Exit(code=code)
 
 
 def _start(name: str) -> tuple[Settings, SimulatedClock]:
@@ -74,7 +74,7 @@ def _manifest(settings: Settings, parse: bool) -> Path:
         try:
             run_dbt(invocation, ["parse"])
         except DbtError as error:
-            _fail(str(error))
+            _fail(str(error), EXIT_UNUSABLE)
     return invocation.manifest_path
 
 
@@ -199,30 +199,121 @@ def dashboard(port: int = PORT_OPTION, headless: bool = HEADLESS_OPTION) -> None
     raise typer.Exit(code)
 
 
+MANIFEST_OPTION = typer.Option(
+    None,
+    "--manifest",
+    envvar="PLATFORM_OPS_MANIFEST",
+    help="Check this manifest.json from any dbt project. Needs no settings and no warehouse.",
+)
+REGISTRY_DIR_OPTION = typer.Option(
+    None,
+    "--registry-dir",
+    envvar="PLATFORM_OPS_REGISTRY_DIR",
+    help="Folder with teams.yaml and ownership.yaml (default: the toolkit's config/).",
+)
+PROJECT_DIR_OPTION = typer.Option(
+    None,
+    "--project-dir",
+    help="The dbt project, to point findings at its files (default: the manifest's project).",
+)
+REPO_ROOT_OPTION = typer.Option(
+    None, "--repo-root", help="Report file paths relative to this folder (default: current)."
+)
+REPORT_ONLY_OPTION = typer.Option(
+    False, "--report-only", help="Report every problem but exit 0, to measure before enforcing."
+)
+SUMMARY_JSON_OPTION = typer.Option(
+    None, "--summary-json", help="Write coverage and every finding to this JSON file."
+)
+FORMAT_OPTION = typer.Option(
+    "text", "--format", help="text, or github to annotate a pull request in GitHub Actions."
+)
+# Exit codes for a required CI check: 1 means ownership problems the author can
+# fix in the registry; 2 means the check could not run at all.
+EXIT_PROBLEMS = 1
+EXIT_UNUSABLE = 2
+
+
 @metadata_app.command("check")
-def metadata_check(parse: bool = PARSE_OPTION) -> None:
-    """Fail if any dbt model, source or exposure has no single, valid owner."""
+def metadata_check(
+    parse: bool = PARSE_OPTION,
+    manifest: Path | None = MANIFEST_OPTION,
+    registry_dir: Path | None = REGISTRY_DIR_OPTION,
+    project_dir: Path | None = PROJECT_DIR_OPTION,
+    repo_root: Path | None = REPO_ROOT_OPTION,
+    report_only: bool = REPORT_ONLY_OPTION,
+    summary_json: Path | None = SUMMARY_JSON_OPTION,
+    output_format: str = FORMAT_OPTION,
+) -> None:
+    """Fail if any dbt source, seed, snapshot, model or exposure lacks one valid owner.
+
+    Without --manifest it checks the bundled project and records the result in
+    ops.node_ownership. With --manifest it checks any dbt project's manifest
+    against the registry in --registry-dir, and writes nothing but the optional
+    summary: the mode for a company dbt repository's CI.
+    """
+    import json
+
+    from pydantic import ValidationError
+    from yaml import YAMLError
+
+    from platform_ops.metadata import output
     from platform_ops.metadata.check import persist_ownership, run_check
-    from platform_ops.metadata.manifest import load_manifest
+    from platform_ops.metadata.manifest import load_manifest, project_name
     from platform_ops.metadata.registry import Registry
 
-    settings, _ = _start("metadata")
+    if output_format not in ("text", "github"):
+        _fail(f"unknown --format '{output_format}'; choose text or github", EXIT_UNUSABLE)
+    settings: Settings | None = None
+    if manifest is not None:
+        if registry_dir is None:
+            _fail("--manifest needs --registry-dir (teams.yaml and ownership.yaml)", EXIT_UNUSABLE)
+        configure_logging()
+        manifest_path = manifest
+    else:
+        settings, _ = _start("metadata")
+        manifest_path = _manifest(settings, parse)
+        registry_dir = registry_dir or settings.root / "config"
+
     try:
-        nodes = load_manifest(_manifest(settings, parse))
-    except FileNotFoundError as error:
-        _fail(str(error))
-    registry = Registry.from_config_dir(settings.root / "config")
+        nodes = load_manifest(manifest_path)
+        root_project = project_name(manifest_path)
+        registry = Registry.from_config_dir(registry_dir)
+    except (FileNotFoundError, ValueError, ValidationError, YAMLError) as error:
+        _fail(f"metadata check cannot run: {error}", EXIT_UNUSABLE)
     report = run_check(registry, nodes)
 
-    for resource_type, (owned, total) in report.coverage.items():
-        typer.echo(f"{resource_type + 's':<10} {owned:>4} of {total:<4} owned")
-    for warning in report.warnings:
-        typer.secho(f"warning: {warning}", fg=typer.colors.YELLOW)
-    for problem in report.errors:
-        typer.secho(f"error: {problem}", fg=typer.colors.RED, err=True)
-    if not report.passed:
-        _fail(f"metadata check failed with {len(report.errors)} error(s)")
+    locations = output.Locations(
+        nodes=nodes,
+        ownership_file=registry_dir / "ownership.yaml",
+        project_dir=project_dir or manifest_path.resolve().parent.parent,
+        root_project=root_project,
+        repo_root=repo_root or Path.cwd(),
+    )
+    for line in output.coverage_lines(report):
+        typer.echo(line)
+    for line in output.text_lines(report.warning_findings, "warning", locations):
+        typer.secho(line, fg=typer.colors.YELLOW)
+    for line in output.text_lines(report.error_findings, "error", locations):
+        typer.secho(line, fg=typer.colors.RED, err=True)
+    if output_format == "github":
+        for line in output.github_lines(report.warning_findings, "warning", locations):
+            typer.echo(line)
+        for line in output.github_lines(report.error_findings, "error", locations):
+            typer.echo(line)
+    if summary_json is not None:
+        data = output.summary(report, manifest=manifest_path, report_only=report_only)
+        summary_json.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
+    if not report.passed:
+        message = f"metadata check failed with {len(report.errors)} error(s)"
+        if report_only:
+            typer.echo(f"{message} (report only, not failing)")
+            return
+        _fail(message, EXIT_PROBLEMS)
+    if settings is None:
+        typer.echo("metadata check passed")
+        return
     with open_connection(settings) as connection:
         rows = persist_ownership(connection, report, nodes)
     typer.echo(f"metadata check passed; ops.node_ownership has {rows} rows")

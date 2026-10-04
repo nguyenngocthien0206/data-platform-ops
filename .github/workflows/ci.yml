@@ -1,9 +1,10 @@
 # Lint, type check, tests and the ownership check, in the toolkit's container.
 #
 # CI calls the same docker-* make targets people run locally, so CI and a laptop
-# cannot drift apart. Postgres comes from Compose; SQL Server runs in its own
-# on-demand workflow (sqlserver.yml), because its image is large and slow to
-# start. The release workflow calls this one before it publishes anything.
+# cannot drift apart. Postgres and ClickHouse (the pilot's warehouse) come from
+# Compose; SQL Server runs in its own on-demand workflow (sqlserver.yml), because
+# its image is large and slow to start. The release workflow calls this one
+# before it publishes anything.
 name: ci
 
 on:
@@ -45,13 +46,13 @@ jobs:
       - name: Lint, format and type check
         run: make docker-lint
 
-      # CODEOWNERS for data: every model, source and exposure has one owner.
+      # CODEOWNERS for data: every dataset has exactly one owner.
       - name: Ownership check
         run: make docker-metadata-check
 
       # The SQL Server cases skip here, with their reason listed.
-      - name: Tests against Postgres
-        run: make docker-test DOCKER_ENGINES=postgres
+      - name: Tests against Postgres and ClickHouse
+        run: make docker-test DOCKER_ENGINES="postgres clickhouse"
 
       - name: Stop the services
         if: always()

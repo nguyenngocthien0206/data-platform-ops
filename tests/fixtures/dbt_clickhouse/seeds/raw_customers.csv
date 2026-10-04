@@ -1,0 +1,5 @@
+customer_id,email,country_code,signed_up_at
+1,ana@example.com,VN,2026-01-03 09:00:00
+2,ben@example.com,SG,2026-01-05 10:30:00
+3,chi@example.com,VN,2026-01-12 08:15:00
+4,dan@example.com,TH,2026-02-01 14:45:00

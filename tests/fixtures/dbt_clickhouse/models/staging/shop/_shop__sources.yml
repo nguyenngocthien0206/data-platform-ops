@@ -1,0 +1,24 @@
+version: 2
+sources:
+  - name: shop
+    description: The web shop's database, loaded from seeds in this fixture.
+    schema: acme
+    tables:
+      - name: customers
+        identifier: raw_customers
+      - name: orders
+        identifier: raw_orders
+models:
+  - name: stg_shop__customers
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
+  - name: stg_shop__orders
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [completed, returned, pending]
