@@ -138,6 +138,23 @@ def test_team_needs_at_least_one_member() -> None:
         Team(id="empty", name="Empty", channel="#e", members=[])
 
 
+def test_a_telegram_chat_is_optional_but_never_empty() -> None:
+    assert TEAMS["finance"].telegram_chat is None
+    team = Team(id="t", name="T", channel="#t", members=["x"], telegram_chat="-100123")
+    assert team.telegram_chat == "-100123"
+    with pytest.raises(ValidationError):
+        Team(id="t", name="T", channel="#t", members=["x"], telegram_chat="")
+
+
+def test_seeds_and_snapshots_need_owners_too() -> None:
+    seed = Node(unique_id="seed.company.country_codes", resource_type="seed", name="country_codes")
+    snapshot = Node(unique_id="snapshot.company.snap_x", resource_type="snapshot", name="snap_x")
+    report = run_check(registry(rule("seed.company.*")), {n.unique_id: n for n in (seed, snapshot)})
+    assert report.errors == ["snapshot.company.snap_x has no owner"]
+    assert report.coverage["seed"] == (1, 1)
+    assert report.coverage["snapshot"] == (0, 1)
+
+
 # --- the check -----------------------------------------------------------------
 
 

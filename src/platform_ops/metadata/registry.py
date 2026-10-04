@@ -35,8 +35,11 @@ class _Strict(BaseModel):
 class Team(_Strict):
     id: str
     name: str
+    # The team's Slack channel.
     channel: str
     members: Annotated[list[str], Field(min_length=1)]
+    # Optional Telegram chat id, for teams that take their alerts there (Phase 11).
+    telegram_chat: Annotated[str, Field(min_length=1)] | None = None
 
 
 class TeamsFile(_Strict):
@@ -134,15 +137,22 @@ class Registry:
 
     def problems(self) -> list[str]:
         """Rules that point at a team that does not exist, or an owner not on it."""
-        found: list[str] = []
+        return [message for _, message in self.rule_problems()]
+
+    def rule_problems(self) -> list[tuple[DatasetRule, str]]:
+        """Each problem with the rule it is about, so a report can point at its line."""
+        found: list[tuple[DatasetRule, str]] = []
         for rule in self.rules:
             team = self.teams.get(rule.team)
             if team is None:
-                found.append(f"rule '{rule.match}' names unknown team '{rule.team}'")
+                found.append((rule, f"rule '{rule.match}' names unknown team '{rule.team}'"))
             elif rule.owner not in team.members:
                 found.append(
-                    f"rule '{rule.match}' names owner '{rule.owner}', "
-                    f"who is not a member of team '{rule.team}'"
+                    (
+                        rule,
+                        f"rule '{rule.match}' names owner '{rule.owner}', "
+                        f"who is not a member of team '{rule.team}'",
+                    )
                 )
         return found
 

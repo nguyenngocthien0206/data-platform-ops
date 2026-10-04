@@ -13,10 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# The resource types the metadata layer reasons about. Seeds, snapshots,
-# analyses and semantic objects are not used by this project.
-OWNED_TYPES: tuple[str, ...] = ("source", "model", "exposure")
-GRAPH_TYPES: tuple[str, ...] = ("source", "model", "test", "exposure")
+# The resource types the metadata layer reasons about. The bundled project has
+# no seeds or snapshots, but company projects do, and someone has to own them
+# too. Analyses and semantic objects are not tracked.
+OWNED_TYPES: tuple[str, ...] = ("source", "model", "exposure", "seed", "snapshot")
+GRAPH_TYPES: tuple[str, ...] = ("source", "seed", "snapshot", "model", "test", "exposure")
 
 
 @dataclass(frozen=True)
@@ -78,13 +79,26 @@ def _node_from(raw: dict[str, Any]) -> Node:
     )
 
 
-def load_manifest(path: Path) -> dict[str, Node]:
-    """Read a manifest and return every source, model, test and exposure by id."""
+def _read(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(
-            f"No dbt manifest at {path}. Run `make build`, or pass --parse to generate one."
+            f"No dbt manifest at {path}. Run `dbt parse` in the project first "
+            "(for the bundled project: `make build`, or pass --parse)."
         )
     data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} is not a dbt manifest")
+    return data
+
+
+def project_name(path: Path) -> str:
+    """The root project's name, so nodes from installed packages can be told apart."""
+    return str(_read(path).get("metadata", {}).get("project_name") or "")
+
+
+def load_manifest(path: Path) -> dict[str, Node]:
+    """Read a manifest and return every source, seed, snapshot, model, test and exposure."""
+    data = _read(path)
     nodes: dict[str, Node] = {}
     for section in ("nodes", "sources", "exposures"):
         for raw in data.get(section, {}).values():
