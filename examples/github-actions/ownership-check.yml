@@ -1,0 +1,93 @@
+# Ownership check for a company dbt repository. Copy to .github/workflows/.
+#
+# Every dbt source, seed, snapshot, model and exposure must have exactly one
+# owner in ownership/ownership.yaml before a pull request merges. The registry
+# (teams.yaml and ownership.yaml) lives in this repository, next to the project.
+# The toolkit runs from its public image and reads the manifest that `dbt parse`
+# writes, so the job needs no warehouse access and no secret.
+#
+# Roll it out in two steps. First keep REPORT_ONLY "true": problems show on the
+# pull request but nothing is blocked, and the summary artifact records the
+# baseline (the share of datasets with an owner). Once the registry is complete,
+# set REPORT_ONLY to "false" and make this job a required check in branch
+# protection.
+name: ownership
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  TOOLKIT_IMAGE: ghcr.io/nguyenngocthien0206/data-platform-ops:1.1.0
+  DBT_PROJECT_DIR: "."          # the folder holding dbt_project.yml
+  REGISTRY_DIR: ownership       # the folder holding teams.yaml and ownership.yaml
+  REPORT_ONLY: "true"
+
+jobs:
+  ownership:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # The same adapter the project runs on; parsing only needs it installed.
+      - name: Install dbt
+        run: pip install "dbt-core==1.12.*" "dbt-clickhouse==1.10.*"
+
+      # dbt parse renders a profile but never connects, so a parse-only profile
+      # with placeholder values replaces the real one, and no credential is used.
+      - name: Parse the dbt project
+        working-directory: ${{ env.DBT_PROJECT_DIR }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/profiles"
+          printf '%s\n' \
+            'ownership_check:' \
+            '  target: parse' \
+            '  outputs:' \
+            '    parse:' \
+            '      type: clickhouse' \
+            '      host: localhost' \
+            '      port: 8123' \
+            '      user: parse_only' \
+            '      password: parse_only' \
+            '      schema: parse_only' \
+            > "$RUNNER_TEMP/profiles/profiles.yml"
+          dbt deps
+          dbt parse --profiles-dir "$RUNNER_TEMP/profiles" --profile ownership_check
+
+      # Annotations land on the lines of the pull request; exit 1 means owners to
+      # fix, exit 2 means the check could not run (no manifest, invalid registry).
+      - name: Ownership check
+        run: |
+          report_only=""
+          if [ "$REPORT_ONLY" = "true" ]; then report_only="--report-only"; fi
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$GITHUB_WORKSPACE:/repo:ro" \
+            -v "$RUNNER_TEMP:/out" \
+            -w /repo \
+            "$TOOLKIT_IMAGE" \
+            platform-ops metadata check \
+              --manifest "/repo/$DBT_PROJECT_DIR/target/manifest.json" \
+              --registry-dir "/repo/$REGISTRY_DIR" \
+              --project-dir "/repo/$DBT_PROJECT_DIR" \
+              --repo-root /repo \
+              --format github \
+              --summary-json /out/ownership-summary.json \
+              $report_only
+
+      - name: Keep the summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ownership-summary
+          path: ${{ runner.temp }}/ownership-summary.json
+          if-no-files-found: ignore

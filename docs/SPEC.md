@@ -35,6 +35,7 @@ data-platform-ops/
 ├── warehouse/                 # local Iceberg warehouse, gitignored
 ├── reports/                   # generated markdown reports, gitignored
 ├── tests/
+├── examples/                  # CI examples for company dbt repositories (Phase 10)
 └── docs/
     ├── CLAUDE.md
     ├── PROGRESS.md

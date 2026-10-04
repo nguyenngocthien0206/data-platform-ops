@@ -8,7 +8,25 @@ The shared layer every other module reasons about: who owns each dataset, and ho
 
 When several rules match, the most specific one wins: the most literal characters, then the fewest wildcards. Two rules that tie are an error, never a coin toss decided by line order, because a reorder in a pull request should not be able to hand a critical dataset to a different on-call rotation. The full rule and the reasoning behind the platform team are in [ADR 0002](../../../docs/adr/0002-ownership-resolution-and-platform-team.md).
 
-`platform-ops metadata check` fails when any model, source or exposure has no owner, when ownership is ambiguous, when a rule names an unknown team or an owner who is not on that team, or when a dashboard's owner in dbt disagrees with the registry. It warns about rules that match nothing. On success it writes the resolved owner of every dataset to `ops.node_ownership`, so later modules join on ownership in SQL. With `--parse` it builds the dbt manifest first, which needs no data, so the check runs in CI.
+`platform-ops metadata check` fails when any source, seed, snapshot, model or exposure has no owner, when ownership is ambiguous, when a rule names an unknown team or an owner who is not on that team, or when a dashboard's owner in dbt disagrees with the registry. It warns about rules that match nothing. Every finding says which file to change and how, for example a ready-to-paste rule for an unowned model. On success it writes the resolved owner of every dataset to `ops.node_ownership`, so later modules join on ownership in SQL. With `--parse` it builds the dbt manifest first, which needs no data, so the check runs in CI.
+
+A team in `teams.yaml` names its Slack `channel` and, optionally, a `telegram_chat`, for teams that take their alerts on Telegram.
+
+## On a company dbt repository
+
+The same check guards any dbt project, on any adapter, without touching a warehouse ([ADR 0014](../../../docs/adr/0014-the-ownership-gate-in-the-consuming-repository.md)). The repository keeps its own registry next to the project, conventionally in an `ownership/` folder with `teams.yaml` and `ownership.yaml`; names, channels and chats of the company never enter this toolkit's repository. Its CI runs `dbt parse`, which needs the adapter but no connection, and hands the manifest to the toolkit's image:
+
+```bash
+platform-ops metadata check \
+  --manifest target/manifest.json --registry-dir ownership \
+  --format github --summary-json ownership-summary.json [--report-only]
+```
+
+With `--manifest` the check reads no settings, opens no database and writes nothing but the optional summary. `--format github` turns each finding into an annotation on the pull request, on the model's file or on the rule's line in `ownership.yaml`. The exit code is 0 when every dataset has one valid owner, 1 when there are owners to fix, and 2 when the check cannot run (no manifest, an invalid registry), so a broken setup is never mistaken for a missing owner.
+
+Roll it out in two steps, because a check that blocks every merge on day one gets switched off. First run it with `--report-only`: problems show on pull requests, nothing is blocked, and `--summary-json` records the baseline, the share of datasets with an owner per resource type. When the registry is complete, drop `--report-only` and make the job required in branch protection. [`examples/github-actions/ownership-check.yml`](../../../examples/github-actions/ownership-check.yml) is a workflow to copy, written for a ClickHouse project; another adapter only changes the `pip install` line and the parse-only profile.
+
+`tests/fixtures/dbt_clickhouse` is a small project on ClickHouse, laid out nothing like the bundled one, with its registry in its own `ownership/` folder. The tests parse it and run the check against variants of its registry, and run it for real on the ClickHouse service (`docker compose --profile clickhouse up -d`).
 
 ## Lineage (`lineage.py`, `manifest.py`)
 
