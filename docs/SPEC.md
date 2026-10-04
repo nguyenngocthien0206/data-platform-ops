@@ -349,10 +349,12 @@ Each phase starts with a pilot team chosen by the owner and a measure taken befo
 
 Make every company dbt model, source and exposure have exactly one owner before it merges. This is the foundation the incidents and cost modules route on.
 
+The toolkit repository stays public and holds only code and the demo. The company's `ownership.yaml` and `teams.yaml` live in the company's own dbt repositories, next to the project they describe; CI pulls the toolkit image and points it at them. No company configuration, names or channels ever enter this repository (owner decision before Phase 10).
+
 - `platform-ops metadata check` runs against any dbt project, not only the bundled one: the project directory, `ownership.yaml` and `teams.yaml` are given by path or environment, and the check works from a `manifest.json` (or `--parse`) whatever the dbt adapter (Snowflake, BigQuery, ClickHouse).
 - `teams.yaml` gains notification targets per team: a Slack channel and a Telegram chat, used from Phase 11.
 - Output a CI reviewer can act on: every unowned or ambiguously owned node, the rule that matched, and the file to edit. Exit codes suitable for a required CI check.
-- A documented CI step for the company's dbt repositories, using the published image, with an example for the company's CI system.
+- A documented CI step for the company's dbt repositories, using the published image, with a GitHub Actions workflow as the example (the company's CI).
 - Tested against at least one dbt project other than the bundled one (a small fixture project with a different adapter and layout).
 
 **Acceptance:** the check passes and fails correctly on the fixture project and on the bundled one, from the published image, with no access to any warehouse. The pilot repository runs it as a CI step (the owner wires it). The bundled demo's reports are unchanged.
