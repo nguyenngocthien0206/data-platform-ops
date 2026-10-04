@@ -1,0 +1,24 @@
+# Who owns each dataset of acme_analytics. The platform team owns the sources,
+# seeds, snapshots, staging and core; the business teams own their reports and
+# dashboards. The most specific matching rule wins (ADR 0002).
+datasets:
+  - {match: "source.acme_analytics.*", owner: an, team: platform, tier: important}
+  - {match: "seed.acme_analytics.raw_*", owner: an, team: platform, tier: important}
+  - {match: "seed.acme_analytics.country_codes", owner: binh, team: platform, tier: best_effort}
+  - {match: "snapshot.acme_analytics.*", owner: binh, team: platform, tier: important}
+
+  - {match: "model.acme_analytics.stg_*", owner: an, team: platform, tier: important}
+  - {match: "model.acme_analytics.int_*", owner: binh, team: platform, tier: important}
+  - {match: "model.acme_analytics.dim_*", owner: binh, team: platform, tier: critical}
+  - {match: "model.acme_analytics.fct_*", owner: binh, team: platform, tier: critical}
+  # The shared package's models are the platform team's too.
+  - {match: "model.acme_shared.*", owner: binh, team: platform, tier: best_effort}
+
+  - {match: "model.acme_analytics.rpt_revenue_*", owner: linh, team: finance, tier: critical}
+  - {match: "model.acme_analytics.rpt_unpaid_invoices", owner: linh, team: finance, tier: important}
+  - {match: "exposure.acme_analytics.finance_revenue_board", owner: linh, team: finance, tier: critical}
+
+  - {match: "model.acme_analytics.rpt_new_customers_weekly", owner: quan, team: growth, tier: important}
+  - {match: "model.acme_analytics.rpt_orders_by_country", owner: quan, team: growth, tier: important}
+  - {match: "model.acme_analytics.rpt_repeat_customers", owner: quan, team: growth, tier: best_effort}
+  - {match: "exposure.acme_analytics.growth_weekly_review", owner: quan, team: growth, tier: important}

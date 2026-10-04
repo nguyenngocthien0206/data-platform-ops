@@ -1,0 +1,14 @@
+# Connection from the environment, with the Compose service's defaults.
+# `dbt parse` does not connect, so parsing needs no server.
+acme_analytics:
+  target: local
+  outputs:
+    local:
+      type: clickhouse
+      driver: http
+      host: "{{ env_var('CLICKHOUSE_HOST', 'localhost') }}"
+      port: "{{ env_var('CLICKHOUSE_PORT', '8123') | int }}"
+      user: "{{ env_var('CLICKHOUSE_USER', 'platform_ops') }}"
+      password: "{{ env_var('CLICKHOUSE_PASSWORD', 'change_me_locally') }}"
+      schema: acme
+      threads: 4

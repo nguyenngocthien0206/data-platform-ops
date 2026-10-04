@@ -1,0 +1,19 @@
+name: acme_analytics
+version: "1.0.0"
+config-version: 2
+profile: acme_analytics
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+macro-paths: ["macros"]
+clean-targets: [target, dbt_packages]
+
+flags:
+  send_anonymous_usage_stats: false
+
+models:
+  acme_analytics:
+    +materialized: table
+    staging:
+      +materialized: view

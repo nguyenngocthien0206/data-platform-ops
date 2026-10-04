@@ -1,0 +1,17 @@
+# Teams of the fixture company. In a real repository this file lives next to
+# the dbt project, never in the toolkit's repository.
+teams:
+  - id: platform
+    name: Data Platform
+    channel: "#data-platform"
+    telegram_chat: "-1001000000001"
+    members: [an, binh]
+  - id: finance
+    name: Finance Analytics
+    channel: "#finance-data"
+    members: [linh]
+  - id: growth
+    name: Growth
+    channel: "#growth-data"
+    telegram_chat: "-1001000000003"
+    members: [quan]

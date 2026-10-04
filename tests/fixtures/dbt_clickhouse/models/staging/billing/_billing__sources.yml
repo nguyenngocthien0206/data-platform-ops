@@ -1,0 +1,13 @@
+version: 2
+sources:
+  - name: billing
+    description: The billing system's export, loaded from a seed in this fixture.
+    schema: acme
+    tables:
+      - name: invoices
+        identifier: raw_invoices
+models:
+  - name: stg_billing__invoices
+    columns:
+      - name: invoice_id
+        data_tests: [unique, not_null]

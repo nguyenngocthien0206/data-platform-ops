@@ -1,0 +1,9 @@
+name: acme_shared
+version: "1.0.0"
+config-version: 2
+model-paths: ["models"]
+macro-paths: ["macros"]
+
+models:
+  acme_shared:
+    +materialized: table
