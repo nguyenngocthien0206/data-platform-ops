@@ -30,6 +30,8 @@ x-toolkit: &toolkit
     POSTGRES_PORT: "5432"
     MSSQL_HOST: sqlserver
     MSSQL_PORT: "1433"
+    CLICKHOUSE_HOST: clickhouse
+    CLICKHOUSE_PORT: "8123"
     # .streamlit/config.toml binds to localhost for the native run; inside the
     # container the dashboards must answer on the published port.
     STREAMLIT_SERVER_ADDRESS: 0.0.0.0
@@ -131,9 +133,36 @@ services:
       retries: 12
       start_period: 30s
 
+  # The pilot's warehouse engine (Phase 10). The tests run a small dbt project
+  # on it (tests/fixtures/dbt_clickhouse), so its artifacts are real. The
+  # defaults match that project's profile, so an older .env still works.
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8.16.41
+    container_name: dpo-clickhouse
+    profiles: ["clickhouse"]
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-platform_ops}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change_me_locally}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "${CLICKHOUSE_PORT:-8123}:8123"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
 volumes:
   postgres_data:
   sqlserver_data:
+  clickhouse_data:
   app_data:
   app_warehouse:
   app_dbt_target:

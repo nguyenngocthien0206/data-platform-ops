@@ -31,14 +31,15 @@ RUN useradd --create-home --uid 1000 app
 WORKDIR /app
 
 # Dependencies first, in their own layer, so a code change only recopies the
-# code. The SQL Server driver and the dev tools (tests, lint) are included.
+# code. The SQL Server driver, dbt-clickhouse for the ClickHouse fixture project,
+# and the dev tools (tests, lint) are included.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --extra sqlserver --no-install-project
+    uv sync --frozen --extra sqlserver --extra clickhouse --no-install-project
 
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --extra sqlserver \
+    uv sync --frozen --extra sqlserver --extra clickhouse \
     && mkdir -p data warehouse reports dbt/target dbt/logs \
     && chown -R app:app /app
 

@@ -14,9 +14,10 @@ RUN := $(UV) run
 COMPOSE ?= docker compose
 
 PYTEST_ARGS ?=
-# Legacy engines the docker-* targets start. CI starts Postgres only and runs
-# SQL Server in its own on-demand job: make docker-test DOCKER_ENGINES=postgres
-DOCKER_ENGINES ?= postgres sqlserver
+# Database engines the docker-* targets start: the legacy sources and ClickHouse,
+# the pilot's warehouse. CI starts Postgres and ClickHouse and runs SQL Server in
+# its own on-demand job: make docker-test DOCKER_ENGINES="postgres clickhouse"
+DOCKER_ENGINES ?= postgres sqlserver clickhouse
 
 .PHONY: help setup up down seed build simulate cost incidents reconcile \
         dashboard readme-check test lint fmt clean pipeline demo check-env \
@@ -39,7 +40,7 @@ up: ## Start Docker services (postgres)
 	$(COMPOSE) up -d --wait postgres
 
 down: ## Stop Docker services
-	$(COMPOSE) --profile sqlserver --profile app --profile dashboard --profile browser down
+	$(COMPOSE) --profile sqlserver --profile clickhouse --profile app --profile dashboard --profile browser down
 
 seed: ## Generate raw data for the simulated company
 	$(RUN) platform-ops seed
@@ -109,8 +110,8 @@ check-env:
 docker-build: check-env ## Build the toolkit image
 	$(COMPOSE) build app
 
-docker-up: check-env ## Start the legacy engines for the container (DOCKER_ENGINES)
-	$(COMPOSE) --profile sqlserver up -d --wait $(DOCKER_ENGINES)
+docker-up: check-env ## Start the database engines for the container (DOCKER_ENGINES)
+	$(COMPOSE) --profile sqlserver --profile clickhouse up -d --wait $(DOCKER_ENGINES)
 
 docker-demo: docker-up ## Full end to end run in the container on a clean state
 	$(COMPOSE) run --rm app make clean pipeline
