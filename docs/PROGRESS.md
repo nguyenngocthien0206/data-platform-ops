@@ -76,8 +76,9 @@ Nothing. Waiting for the owner's go-ahead to plan Phase 10.
 2. **The company's dbt repositories run CI on GitHub Actions**, so the Phase 10 example is a GitHub Actions workflow.
 3. **Company policy allows the public image in company CI** (the owner asked). The example workflow pulls `ghcr.io/nguyenngocthien0206/data-platform-ops` at a fixed version.
 4. **The pilot is the data platform team.** It owns the shared layers (staging, intermediate), understands ownership best and will maintain the rules, so the first rollout meets the least friction.
-5. **The pilot's dbt project runs on BigQuery** (`dbt-bigquery`).
-6. **The fixture project is built here**: a small dbt project on the BigQuery adapter with a layout unlike the bundled one (several model folders, a package, sources and exposures). No company data or manifest is needed.
+5. **The pilot's dbt project runs on ClickHouse** (`dbt-clickhouse`), self-managed by the company. First chosen as BigQuery, then changed by the owner: there is no BigQuery environment to test against, while ClickHouse runs locally in Docker, so the fixture project, the local tests and the pilot use the same engine.
+6. **The fixture project is built here**: a small dbt project on the ClickHouse adapter with a layout unlike the bundled one (several model folders, a package, sources and exposures), run against a ClickHouse service behind a Compose profile so its artifacts are real. No company data or manifest is needed.
+7. **Self-managed ClickHouse has no vendor bill.** Cost for it (Phase 12, if ClickHouse is the first engine) means sharing the infrastructure cost by usage, so the SPEC's Phase 12 acceptance now covers that case.
 
 ### After Phase 8: internal use (owner)
 
@@ -256,4 +257,4 @@ None open.
 
 ## Next step
 
-When the owner says to start, plan Phase 10 (ownership in the company's dbt CI) on `phase-10-ownership-ci`, for the data platform team's BigQuery project, with a fixture project built here and a GitHub Actions example that pulls the public image. The baseline (the share of nodes without an owner before the check is switched on) is still to be recorded; raise at planning whether the check itself should offer a report-only mode that measures it on the pilot repository.
+When the owner says to start, plan Phase 10 (ownership in the company's dbt CI) on `phase-10-ownership-ci`, for the data platform team's ClickHouse project, with a fixture project built here and run against a local ClickHouse, and a GitHub Actions example that pulls the public image. The baseline (the share of nodes without an owner before the check is switched on) is still to be recorded; raise at planning whether the check itself should offer a report-only mode that measures it on the pilot repository.

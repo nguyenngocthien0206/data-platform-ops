@@ -355,7 +355,7 @@ The toolkit repository stays public and holds only code and the demo. The compan
 - `teams.yaml` gains notification targets per team: a Slack channel and a Telegram chat, used from Phase 11.
 - Output a CI reviewer can act on: every unowned or ambiguously owned node, the rule that matched, and the file to edit. Exit codes suitable for a required CI check.
 - A documented CI step for the company's dbt repositories, using the published image, with a GitHub Actions workflow as the example (the company's CI).
-- Tested against at least one dbt project other than the bundled one (a small fixture project with a different adapter and layout).
+- Tested against at least one dbt project other than the bundled one: a small fixture project on the pilot's engine, self-managed ClickHouse (`dbt-clickhouse`), with a different layout. A ClickHouse service behind a Compose profile lets the fixture project really run, so its artifacts are real and Phases 11 and 12 can reuse it.
 
 **Acceptance:** the check passes and fails correctly on the fixture project and on the bundled one, from the published image, with no access to any warehouse. The pilot repository runs it as a CI step (the owner wires it). The bundled demo's reports are unchanged.
 
@@ -380,12 +380,12 @@ Turn the company's failing dbt checks into one incident per root cause, routed t
 
 Attribute one warehouse's real query cost to the owning teams. The engine (Snowflake, BigQuery or ClickHouse) is chosen at planning, by where the largest bill is.
 
-- A collector for that engine reading its query history with a read-only role (the Phase 5 collector for BigQuery or Snowflake, verified against a real account; or a new one for ClickHouse's `system.query_log`), with a pricing model that matches how the company is billed.
+- A collector for that engine reading its query history with a read-only role (the Phase 5 collector for BigQuery or Snowflake, verified against a real account; or a new one for ClickHouse's `system.query_log`), with a pricing model that matches how the company is billed. For self-managed ClickHouse, which has no vendor bill, the pricing model shares the stated infrastructure cost of the cluster by usage.
 - Query text handled as sensitive: the toolkit stores what attribution needs, can redact literals, and keeps raw text out of reports.
 - Attribution and showback through the existing core, with results in the shared Postgres database, run on a schedule from Airflow or Dagster.
 - The access and data handling are reviewed with whoever owns security or data governance before the first run against production.
 
-**Acceptance:** a showback for the pilot's warehouse over a real window, reconciled against the vendor's own bill for the same window within a stated tolerance. Contract tests for the collector. `make demo` reports are byte-identical.
+**Acceptance:** a showback for the pilot's warehouse over a real window, reconciled against the vendor's own bill for the same window within a stated tolerance, or, for self-managed ClickHouse, adding up to the infrastructure cost the owner states for that window. Contract tests for the collector, and for ClickHouse an integration test against the local ClickHouse service. `make demo` reports are byte-identical.
 
 ---
 
