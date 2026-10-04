@@ -17,5 +17,6 @@ Each choice that shapes a number, a boundary or how the toolkit is run is record
 | [0011](0011-module-boundaries-and-a-review-before-release.md) | Module boundaries pinned by a test, and a review before the release | 6 |
 | [0012](0012-the-toolkit-in-a-container.md) | The toolkit in a container, with its state on volumes | 7 |
 | [0013](0013-ci-and-release-from-the-same-container.md) | CI and release from the same container, the tag pushed by a person | 8 |
+| [0014](0014-the-ownership-gate-in-the-consuming-repository.md) | The ownership gate runs in the consuming repository, on its manifest | 10 |
 
 To add one, take the next number, name the file `NNNN-short-title.md`, start with `Status` and `Date`, and add a row here.
