@@ -6,10 +6,10 @@ Last updated: 2026-09-29
 
 ## Current phase
 
-Phase 10: Ownership in the company's dbt CI. Defined in the SPEC, not yet planned in detail.
+Phase 10: Ownership in the company's dbt CI. Implemented, waiting for owner review, then the `v1.1.0` tag.
 Branch: `phase-10-ownership-ci` (off `main` at `1bb96d7`).
 
-Phases 0 to 9 are done and released as 1.0.0.
+Phases 0 to 9 are done and released as 1.0.0. Phase 10 prepares 1.1.0.
 
 ## Done
 
@@ -58,6 +58,13 @@ Phases 0 to 9 are done and released as 1.0.0.
 - Phase 9 merged (PR #11).
 - **1.0.0 released.** The owner pushed `v1.0.0` from `main` after the Phase 9 merge. The release workflow passed (CI rerun, tag checked against the version, image pushed, GitHub Release "data-platform-ops 1.0.0" with the changelog notes). The GHCR package is public, with tags `1.0.0`, `1.0` and `latest`. `sqlserver.yml` passed on `main`. Phase 8 and Phase 9 acceptance are closed.
 - Published image check (2026-10-04): an anonymous `docker pull ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0` took 54 s (amd64, OCI labels with version 1.0.0 and the repository source); `platform-ops version` prints 1.0.0; `TOOLKIT_IMAGE=ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0 make docker-clean docker-demo` took 6 min 16 s and wrote reports byte-identical to the Phase 7 baseline.
+- Phase 10 implemented:
+  - `platform-ops metadata check --manifest ... --registry-dir ...` runs on any dbt project and adapter: no settings, no database, nothing written but an optional `--summary-json`. Findings name the file to change and how (a ready-to-paste rule for an unowned dataset); `--format github` adds annotations on the dataset's file or the rule's line; `--report-only` never fails; exit 1 means owners to fix, 2 means the check cannot run. New module `metadata/output.py`; `check.py` records each finding with its node, rule and fix.
+  - Seeds and snapshots count as owned resources. `teams.yaml` takes an optional `telegram_chat`.
+  - ClickHouse: a `clickhouse` Compose profile (`clickhouse/clickhouse-server:26.8.16.41`), a `dbt-clickhouse` extra (1.10.3) in the image, `DOCKER_ENGINES` defaulting to all three engines, CI running Postgres and ClickHouse.
+  - `tests/fixtures/dbt_clickhouse` (`acme_analytics`): 15 models in a layout unlike the demo's, a local package, 4 seeds, a snapshot, 3 sources, 2 exposures and its own `ownership/` registry. `tests/test_ownership_external.py` parses it, checks every finding type, exit code and annotation, and builds it for real on ClickHouse.
+  - `examples/github-actions/ownership-check.yml` for a company dbt repository, a section on it in the metadata README, ADR 0014, version 1.1.0 and its CHANGELOG section.
+- Phase 10 verification, from a fresh clone of the branch plus the uncommitted files: `make docker-build` 104 s, `make docker-lint` 61 s, `make docker-metadata-check` 12 s (the demo still 9 sources, 118 models, 12 exposures, 139 rows), `make docker-test` with Postgres, ClickHouse and SQL Server 7 min 4 s, 327 passed and nothing skipped. `make docker-clean docker-demo` 6 min 58 s, reports byte-identical to the Phase 7 baseline. The example's `docker run` line, run from the built image as another user on a read-only mount of the parsed fixture: exit 0 on its registry, exit 1 with a repository-relative annotation when a rule is removed, exit 0 with `--report-only` (summary 24 of 25 owned, 0.96). actionlint found nothing in the example and the three workflows. Native `make lint` 3 s warm.
 - Phase 6 implemented: broader lint rules on and clean; `# fmt: skip` noise removed; module boundaries fixed and pinned by `tests/test_architecture.py`; shared helpers in `common` (`markdown.table`, `db.replace_table`, `hashing.stable_hash`, `sandbox.write_isolated_config`); dead code removed; stale docstrings rewritten; new tests for the Slack post and the dashboard command; a shared `full_warehouse` test fixture. 22 findings recorded with decisions in `docs/review/phase-6-review.md`.
 - Phase 6 acceptance: a clean `make demo` wrote byte-identical reports to the baseline (excluding `cost_proxy_accuracy.md`, non-deterministic by design); `make readme-check` 178 of 178; test suite 9 min 50 s on `main` against 6 min 24 s on the branch, same machine and session (305 passed, 3 skipped). The 5-minute target was not reached; the floor is the independent runs the determinism tests need.
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
@@ -66,9 +73,25 @@ Phases 0 to 9 are done and released as 1.0.0.
 
 ## In progress
 
-Nothing. Waiting for the owner's go-ahead to plan Phase 10.
+Nothing. Phase 10 is waiting for the owner's review.
 
 ## Decisions made
+
+### Phase 10 (owner, at planning)
+
+1. **The consuming CI runs `dbt parse`** and hands the manifest to the toolkit, which needs no adapter.
+2. **A report-only mode**, to measure the baseline and switch the check on without blocking merges.
+3. **ClickHouse runs in PR CI**, next to Postgres.
+4. **Release 1.1.0** at the end of the phase; the owner pushes the tag.
+
+### Phase 10, made during implementation
+
+50. **`dbt parse` with `dbt-clickhouse` runs without a server**, verified with nothing listening on the port. A parse-only profile selected with `--profile` is enough, so the example needs no secret.
+51. **`--repo-root` instead of a path prefix.** Annotation paths are made relative to the repository root, which works wherever the project and the registry sit inside it; a file outside it keeps its full path.
+52. **An installed package's datasets get no file annotation**, because their files are not in the repository; the finding still lists the rule to add.
+53. **Exposures appear in `run_results.json` as `no-op`** in a dbt build; the integration test allows that status for them.
+54. **A package macro is called with its namespace** (`acme_shared.cents_to_amount`); dbt does not resolve another package's macros unqualified.
+55. **Compose defaults for ClickHouse credentials** (`:-`, not `:?`), matching the fixture profile's defaults, so an existing `.env` without the new keys keeps working.
 
 ### Before Phase 10 (owner)
 
@@ -257,4 +280,12 @@ None open.
 
 ## Next step
 
-When the owner says to start, plan Phase 10 (ownership in the company's dbt CI) on `phase-10-ownership-ci`, for the data platform team's ClickHouse project, with a fixture project built here and run against a local ClickHouse, and a GitHub Actions example that pulls the public image. The baseline (the share of nodes without an owner before the check is switched on) is still to be recorded; raise at planning whether the check itself should offer a report-only mode that measures it on the pilot repository.
+The owner reviews and merges Phase 10 (`phase-10-ownership-ci`); CI on the pull request now runs ClickHouse. Then tag from `main`:
+
+```bash
+git switch main && git pull
+git tag -a v1.1.0 -m "data-platform-ops 1.1.0"
+git push origin v1.1.0
+```
+
+After the release: copy `examples/github-actions/ownership-check.yml` into the pilot repository with the registry in `ownership/`, run it with `REPORT_ONLY: "true"`, record the baseline from the `ownership-summary` artifact, complete the registry, then set `REPORT_ONLY: "false"` and make the job required. Then Phase 11 (incidents on real dbt runs), when the owner says to start.
