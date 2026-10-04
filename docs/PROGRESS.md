@@ -66,7 +66,7 @@ Phases 0 to 9 are done and released as 1.0.0.
 
 ## In progress
 
-Nothing. Waiting for the owner's preparation (see the next step) and the go-ahead to plan Phase 10.
+Nothing. Waiting for the owner's go-ahead to plan Phase 10.
 
 ## Decisions made
 
@@ -74,6 +74,10 @@ Nothing. Waiting for the owner's preparation (see the next step) and the go-ahea
 
 1. **The toolkit stays public; company configuration lives in the company's repositories.** `ownership.yaml` and `teams.yaml` for company projects sit in each dbt repository, and CI pulls the public image and points it at them. Names, channels and chats of the company never enter this repository. Added to the SPEC's Phase 10.
 2. **The company's dbt repositories run CI on GitHub Actions**, so the Phase 10 example is a GitHub Actions workflow.
+3. **Company policy allows the public image in company CI** (the owner asked). The example workflow pulls `ghcr.io/nguyenngocthien0206/data-platform-ops` at a fixed version.
+4. **The pilot is the data platform team.** It owns the shared layers (staging, intermediate), understands ownership best and will maintain the rules, so the first rollout meets the least friction.
+5. **The pilot's dbt project runs on BigQuery** (`dbt-bigquery`).
+6. **The fixture project is built here**: a small dbt project on the BigQuery adapter with a layout unlike the bundled one (several model folders, a package, sources and exposures). No company data or manifest is needed.
 
 ### After Phase 8: internal use (owner)
 
@@ -252,10 +256,4 @@ None open.
 
 ## Next step
 
-The owner prepares Phase 10:
-
-- check the company's policy on using a public personal repository's image in company CI;
-- pick the pilot team and its dbt repository, and record a baseline (for example, the share of models, sources and exposures without an owner today);
-- share the pilot repository's adapter and layout, or a sanitized `manifest.json`, so the fixture project Phase 10 tests against looks like the real one.
-
-Then, when the owner says to start, plan Phase 10 (ownership in the company's dbt CI) on `phase-10-ownership-ci`.
+When the owner says to start, plan Phase 10 (ownership in the company's dbt CI) on `phase-10-ownership-ci`, for the data platform team's BigQuery project, with a fixture project built here and a GitHub Actions example that pulls the public image. The baseline (the share of nodes without an owner before the check is switched on) is still to be recorded; raise at planning whether the check itself should offer a report-only mode that measures it on the pilot repository.
