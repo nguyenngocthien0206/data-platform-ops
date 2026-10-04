@@ -50,6 +50,8 @@ The modules never talk to each other. They share the registry and the lineage gr
 
 You need [uv](https://docs.astral.sh/uv/), Docker, GNU make and a machine with 16 GB of memory.
 
+On Windows, install [Git for Windows](https://git-scm.com/download/win) and GNU make (`winget install ezwinports.make`). The Makefile runs its recipes with Git's bash, so `make` works the same from PowerShell, cmd or Git Bash; if Git is not in `C:/Program Files/Git`, pass its bash as `make GIT_BASH="<path>/bin/bash.exe" <target>`.
+
 ```bash
 cp .env.example .env      # local passwords for the legacy databases
 make setup                # Python dependencies
@@ -65,7 +67,7 @@ SQL Server is optional: `docker compose --profile sqlserver up -d`, `uv sync --e
 
 ## Run it in Docker
 
-The same demo with nothing on the host but Docker and GNU make: no Python, no uv, and no dependence on the host's security policies ([ADR 0012](docs/adr/0012-the-toolkit-in-a-container.md)).
+The same demo with nothing on the host but Docker and GNU make (plus Git for Windows on Windows, see above): no Python, no uv, and no dependence on the host's security policies ([ADR 0012](docs/adr/0012-the-toolkit-in-a-container.md)).
 
 ```bash
 cp .env.example .env

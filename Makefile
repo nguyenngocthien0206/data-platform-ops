@@ -4,8 +4,18 @@
 #
 # Recipes run under bash so this file behaves the same on Linux, macOS, and on
 # Windows with GNU make installed (winget install ezwinports.make).
-
+#
+# On Windows that bash is Git for Windows' own. /usr/bin/env only exists inside
+# Git Bash, so from PowerShell or cmd make would otherwise fall back to cmd.exe
+# and fail on the first bash line; the bash.exe on PATH is often WSL's, which
+# cannot see this checkout the same way. If Git lives elsewhere, pass its bash:
+#   make GIT_BASH="D:/Tools/Git/bin/bash.exe" demo
+ifeq ($(OS),Windows_NT)
+GIT_BASH ?= C:/Program Files/Git/bin/bash.exe
+SHELL := $(GIT_BASH)
+else
 SHELL := /usr/bin/env bash
+endif
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
