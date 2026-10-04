@@ -2,6 +2,26 @@
 
 All notable changes to data-platform-ops. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The GitHub Release for each version uses its section below as the notes.
 
+## [1.1.0] - 2026-10-04
+
+The ownership check leaves the demo: it now guards any company dbt project from that repository's own CI, starting with the data platform team's project on self-managed ClickHouse.
+
+### Added
+
+- **The ownership check on any dbt project.** `platform-ops metadata check --manifest <manifest.json> --registry-dir <folder>` checks a manifest from any adapter against a registry kept in the consuming repository. It loads no settings, opens no database and writes nothing but an optional summary, so the published image can run it in a company CI with no credential.
+- **Output a reviewer can act on.** Every finding names the file to change and how, with a ready-to-paste rule for an unowned dataset. `--format github` turns findings into annotations on the pull request, on the dataset's file or on the rule's line in `ownership.yaml`.
+- **A gentle rollout.** `--report-only` reports every problem without failing, and `--summary-json` records coverage per resource type, so a team measures its baseline before making the check required.
+- **Exit codes for a required check:** 1 for owners to fix, 2 when the check cannot run.
+- **A GitHub Actions example** for a company dbt repository (`examples/github-actions/ownership-check.yml`): `dbt parse` with a parse-only profile, then the check from the public image.
+- **ClickHouse.** A `clickhouse` Compose profile, a `dbt-clickhouse` extra, and a fixture dbt project on ClickHouse (`tests/fixtures/dbt_clickhouse`) that the tests parse and build for real. CI runs the tests with Postgres and ClickHouse.
+- **`telegram_chat` per team** in `teams.yaml`, optional, next to the Slack `channel`.
+- ADR 0014: the ownership gate runs in the consuming repository, on its manifest.
+
+### Changed
+
+- Seeds and snapshots need an owner too, alongside sources, models and exposures. The bundled project has none, so its results are unchanged.
+- A rule that matches nothing is now reported as "matches no dataset".
+
 ## [1.0.0] - 2026-09-29
 
 The first release: a local-first toolkit for operating a multi-team data platform, with cost attribution, incident management and migration reconciliation over one shared metadata layer. Everything runs offline on a laptop, natively or in Docker Compose, and every run at a given scale writes byte-identical reports.
@@ -26,4 +46,5 @@ The first release: a local-first toolkit for operating a multi-team data platfor
 - The 10-minute budget for `make demo` was lifted; measured times are recorded instead.
 - The pandas and pyarrow caps added for Windows Smart App Control were lifted (pandas 3, pyarrow 25), and mypy moved to its compiled 2.x wheels. Reports stayed byte-identical.
 
+[1.1.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v1.1.0
 [1.0.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v1.0.0
