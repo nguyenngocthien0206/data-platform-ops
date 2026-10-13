@@ -6,10 +6,10 @@ Last updated: 2026-09-29
 
 ## Current phase
 
-Between Phases 10 and 11: the registry bootstrap (1.2.0), implemented, waiting for owner review, then the `v1.2.0` tag.
-Branch: `registry-bootstrap` (off `main` at `dc46628`).
+Phase 11: The company on Postgres and ClickHouse (version 2.0). Defined in the SPEC, not yet planned in detail.
+Branch: `phase-11-replatform` (off `main` at `8a2c23b`).
 
-Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0. Phase 11 (incidents on real dbt runs) is planned, not started.
+Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
 
@@ -74,6 +74,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0. Phase 11 (incidents on r
   - A step-by-step rollout guide in the metadata README; the GitHub Actions example points at it and pulls 1.2.0.
   - SPEC Phase 11 rewritten for the owner's decisions (below), including the live dashboard and the changed acceptance.
 - Registry bootstrap verification, from a fresh clone of the branch plus the uncommitted files: `make docker-build` 92 s, `make docker-lint` 60 s, `make docker-test` with Postgres, ClickHouse and SQL Server 7 min 10 s, 334 passed and nothing skipped. `init-registry` from the built image on the ClickHouse fixture: 25 datasets as 17 rules, and the check then reports 0 of 25 owned with 17 errors, one per rule. On the bundled project: 139 datasets as 63 rules, every dataset matched by exactly one. Filling in the TODOs makes the check pass (tested). `make docker-clean docker-demo` 7 min 2 s, reports byte-identical to the Phase 7 baseline.
+- Registry bootstrap merged (PR #14) and released as 1.2.0 (`v1.2.0` tagged).
 - Phase 6 implemented: broader lint rules on and clean; `# fmt: skip` noise removed; module boundaries fixed and pinned by `tests/test_architecture.py`; shared helpers in `common` (`markdown.table`, `db.replace_table`, `hashing.stable_hash`, `sandbox.write_isolated_config`); dead code removed; stale docstrings rewritten; new tests for the Slack post and the dashboard command; a shared `full_warehouse` test fixture. 22 findings recorded with decisions in `docs/review/phase-6-review.md`.
 - Phase 6 acceptance: a clean `make demo` wrote byte-identical reports to the baseline (excluding `cost_proxy_accuracy.md`, non-deterministic by design); `make readme-check` 178 of 178; test suite 9 min 50 s on `main` against 6 min 24 s on the branch, same machine and session (305 passed, 3 skipped). The 5-minute target was not reached; the floor is the independent runs the determinism tests need.
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
@@ -82,9 +83,29 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0. Phase 11 (incidents on r
 
 ## In progress
 
-Nothing. The registry bootstrap is waiting for the owner's review.
+Nothing. Waiting for the owner's go-ahead to plan Phase 11.
 
 ## Decisions made
+
+### Version 2.0 (owner, 2026-10-13)
+
+The owner asked why the repository held two dbt projects (the simulated company on DuckDB, and the Phase 10 test fixture on ClickHouse) and redirected the project around one story that mirrors the company's real stack:
+
+1. **One simulated company, one dbt project.** The company's reporting runs on a legacy Postgres database as hand-written SQL views and tables; it migrates to self-managed ClickHouse, where the analytics are rebuilt as one dbt project. The ClickHouse fixture project is retired once the company's project replaces it in the tests.
+2. **The toolkit is applied to that flow:** reconciliation signs off Postgres to ClickHouse; ownership and incidents run on the ClickHouse dbt project; cost and FinOps run on ClickHouse's query log.
+3. **BigQuery and Snowflake are priced as alternative targets only**, on the same measured workload; no module is built for them, and their collectors stay contract-tested.
+4. **Cost uses measured bytes and rows, modelled time.** `system.query_log` gives bytes and rows; compute time stays modelled from bytes (ADR 0005), so reports stay byte-identical. If measured bytes do not repeat exactly, ask before relaxing the rule.
+5. **DuckDB stops being the warehouse; Iceberg and SQL Server are removed.** Version 1.x stays available at `v1.2.0`.
+6. **Order follows the migration:** Phase 11 the company on Postgres and ClickHouse, 12 reconciliation, 13 cost and FinOps, 14 incidents on real runs (the former Phase 11, with the live store, notifiers, integrations and dashboard decided before), 15 documentation and 2.0.0. The former Phases 11 and 12 are folded into 13 and 14.
+7. **Every number is regenerated** from 2.0's runs: READMEs, reports, ADR figures, and the numbers in the owner's CV.
+8. **Airflow and Dagster for real, in Docker** (owner, same day). The integrations still import neither orchestrator, so the toolkit stays light. But they are also tested on real Airflow with Cosmos and real Dagster with dagster-dbt, in their own images. That runs on demand and in the release workflow before it publishes; pull requests keep the fast tests with fakes. The same images run the simulated company's dbt project on its schedule behind Compose profiles, with their UIs, so the company runs dbt the way the real one does. `make demo` stays on the Makefile. This replaces "tested with fakes only" (decision 5 below), and `docs/CLAUDE.md` was changed to allow these images.
+9. **Closer to a real company** (owner asked whether the plan was realistic; all five suggestions taken):
+   - ClickHouse-style modelling in Phase 11: `ReplacingMergeTree` for tables changed in place, `MergeTree` with chosen `ORDER BY` and partition keys, incremental models, not nightly full refreshes of 120 models.
+   - Incremental loads from Postgres by an `updated_at` watermark through `postgresql()`, not a full copy and not CDC (too heavy for a laptop).
+   - A parallel run before cutover in Phase 12: legacy and ClickHouse side by side for weeks, nightly reconciliation, cutover only after N consecutive nights within thresholds.
+   - FinOps in Phase 13 splits the cluster's cost into compute (bytes and rows read) and storage (`system.parts`, by rows and uncompressed bytes), compares legacy Postgres's cost before with ClickHouse's after, and shows back per ClickHouse user and team with suggested quotas.
+   - One ClickHouse user per team, plus `metabase` and `dbt`, so `query_log` records who ran what.
+10. **Metabase is the company's BI, Streamlit stays the toolkit's.** Metabase (Phase 11, behind a Compose profile, its application database on the same Postgres server) shows the dbt exposures as real dashboards on ClickHouse marts, created by a script from the exposures. `make demo` replays their queries deterministically under the `metabase` user; a live Metabase's own queries never feed the reports. Superset was judged too heavy for this.
 
 ### Before Phase 11 (owner, 2026-10-13)
 
@@ -272,6 +293,11 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 
 ## Known issues
 
+For version 2.0:
+
+- Every figure in the README, the module READMEs, the ADRs, the CHANGELOG's 1.x sections and the owner's CV describes 1.x on DuckDB. They stay true for `v1.2.0` and are replaced by 2.0's own results in Phase 15.
+- Until each 2.0 phase lands, its module still runs on the 1.x stack; `make demo` will say which modules it skipped.
+
 Kept on purpose (design limits, documented in the ADRs):
 
 - Replayed days price model reads on model sizes up to 4 weeks old, and dashboards read marts up to 4 weeks stale. Raw data is always current. Acceptable for quarterly cost attribution (ADR 0007).
@@ -297,13 +323,5 @@ None open.
 
 ## Next step
 
-1. The owner reviews and merges `registry-bootstrap`, then tags `v1.2.0` from `main`:
-
-   ```bash
-   git switch main && git pull
-   git tag -a v1.2.0 -m "data-platform-ops 1.2.0"
-   git push origin v1.2.0
-   ```
-
-2. Pilot rollout, following "Rolling out on a repository" in the metadata README: `init-registry` in the data platform team's dbt repository, owners for sources and staging first, the workflow with `REPORT_ONLY: "true"`, the baseline from the summary artifact recorded here (numbers only, no company names).
-3. Phase 11 (incidents on real dbt runs) when the owner says "Implement Phase 11". Its detailed plan is approved in outline: `incidents ingest` with run-level regrouping, a versioned Postgres store with an advisory lock per project, auto-resolve only for roots a run covered, Slack and Telegram bot notifiers sent after commit, duck-typed Cosmos and dagster-dbt integrations, a live Incidents dashboard, `incidents summary`, ADR 0015, release 1.3.0. Open questions to settle then: whether the pilot starts with paging off (store and dashboard only) for a week, and who owns the shared Postgres.
+1. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0: the check works on any dbt project): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).
+2. When the owner says to start, plan Phase 11 (the company on Postgres and ClickHouse) on `phase-11-replatform`. Questions to settle in that plan: where the toolkit's `ops` result tables live in 2.0 (ClickHouse or the Postgres store), which legacy reports exist on Postgres and how many, the engine and keys per model group, how the 120 DuckDB models are ported (by hand, with a script for the generated ones), and the Metabase version and how its dashboards are provisioned.
