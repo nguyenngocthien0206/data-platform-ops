@@ -15,6 +15,8 @@ MAKEFILE_COMMANDS: list[list[str]] = [
     ["seed"],
     ["build"],
     ["company", "run"],
+    ["metabase", "prepare"],
+    ["metabase", "provision"],
     ["paused"],
     ["simulation", "run"],
     ["cost", "report"],
@@ -27,7 +29,15 @@ MAKEFILE_COMMANDS: list[list[str]] = [
 def test_help_exits_zero_and_lists_every_command_group() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for group in ("metadata", "company", "simulation", "cost", "incidents", "reconcile"):
+    for group in (
+        "metadata",
+        "company",
+        "metabase",
+        "simulation",
+        "cost",
+        "incidents",
+        "reconcile",
+    ):
         assert group in result.output
     for command in ("seed", "build", "dashboard", "version"):
         assert command in result.output

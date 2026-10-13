@@ -28,10 +28,10 @@ PYTEST_ARGS ?=
 # also holds the toolkit's ops store) and ClickHouse, its warehouse.
 DOCKER_ENGINES ?= postgres clickhouse
 
-.PHONY: help setup up down seed build company simulate cost incidents reconcile \
+.PHONY: help setup up down seed build company metabase simulate cost incidents reconcile \
         dashboard paused readme-check test lint fmt clean pipeline demo check-env \
         docker-build docker-up docker-demo docker-test docker-lint \
-        docker-metadata-check docker-readme-check docker-dashboard \
+        docker-metadata-check docker-metabase-check docker-readme-check docker-dashboard \
         docker-browser-check docker-shell docker-clean
 
 help: ## Show the available targets
@@ -49,7 +49,7 @@ up: ## Start Docker services (postgres, clickhouse)
 	$(COMPOSE) up -d --wait postgres clickhouse
 
 down: ## Stop Docker services
-	$(COMPOSE) --profile app --profile dashboard --profile browser down
+	$(COMPOSE) --profile app --profile dashboard --profile browser --profile metabase down
 
 seed: ## Seed the legacy Postgres, empty ClickHouse, backfill its raw layer
 	$(RUN) platform-ops seed
@@ -59,6 +59,14 @@ build: ## Run dbt build on ClickHouse (add --full-refresh after a seed)
 
 company: ## Replay the company's window: daily data, ingestion, dbt builds
 	$(RUN) platform-ops company run
+
+# The company's BI. Not part of `demo`: Metabase is a heavy JVM service, and its
+# dashboards read the marts that `make demo` builds, so run this after it.
+metabase: check-env ## Start Metabase and build one dashboard per exposure (after make demo)
+	$(RUN) platform-ops metabase prepare
+	$(COMPOSE) --profile metabase up -d --wait metabase
+	$(RUN) platform-ops metabase provision
+	@echo "Metabase: http://localhost:$${METABASE_PORT:-3000} (MB_ADMIN_EMAIL and MB_ADMIN_PASSWORD in .env)"
 
 # The 1.x modules below are paused in version 2.0 until their phase moves them
 # to ClickHouse; each command says so and exits 2. `make paused` lists them.
@@ -149,6 +157,14 @@ docker-lint: check-env ## Lint, check formatting, and type check in the containe
 # --parse builds the manifest without any data.
 docker-metadata-check: check-env ## Check dataset ownership in the container
 	$(COMPOSE) run --rm app platform-ops metadata check --parse
+
+# Run after docker-demo: provisions Metabase, runs every card through its API,
+# then opens every dashboard in headless Chromium (screenshots in reports/).
+docker-metabase-check: docker-up ## Provision Metabase and check every dashboard (after docker-demo)
+	$(COMPOSE) run --rm app platform-ops metabase prepare
+	$(COMPOSE) --profile metabase up -d --wait metabase
+	$(COMPOSE) run --rm app sh -c "platform-ops metabase provision && platform-ops metabase check"
+	$(COMPOSE) --profile metabase run --rm metabase-screens
 
 docker-readme-check: check-env ## Check README numbers against reports/ in the container
 	$(COMPOSE) run --rm app make readme-check

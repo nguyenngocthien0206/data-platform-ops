@@ -25,6 +25,7 @@ x-toolkit: &toolkit
     POSTGRES_PORT: "5432"
     CLICKHOUSE_HOST: clickhouse
     CLICKHOUSE_PORT: "8123"
+    METABASE_URL: http://metabase:3000
     # .streamlit/config.toml binds to localhost for the native run; inside the
     # container the dashboards must answer on the published port.
     STREAMLIT_SERVER_ADDRESS: 0.0.0.0
@@ -70,7 +71,7 @@ services:
   # and uv.lock carry no browser. The official image ships the browsers but not
   # the Python package, which must match the image's version.
   browser-check:
-    build:
+    build: &playwright
       context: scripts
       dockerfile_inline: |
         FROM mcr.microsoft.com/playwright/python:v1.63.0-noble
@@ -85,6 +86,23 @@ services:
       - ./reports:/work/reports
     depends_on:
       dashboard:
+        condition: service_healthy
+
+  # Opens every Metabase dashboard in headless Chromium, fails on a broken card,
+  # and saves screenshots to reports/screenshots/metabase. Same image as above.
+  metabase-screens:
+    build: *playwright
+    image: data-platform-ops-browser-check:local
+    pull_policy: build
+    profiles: ["metabase"]
+    env_file: .env
+    working_dir: /work
+    command: ["python", "scripts/screenshot_metabase.py", "--url", "http://metabase:3000"]
+    volumes:
+      - ./scripts:/work/scripts:ro
+      - ./reports:/work/reports
+    depends_on:
+      metabase:
         condition: service_healthy
 
   postgres:
@@ -130,6 +148,40 @@ services:
       timeout: 5s
       retries: 12
       start_period: 5s
+
+  # The company's BI (Phase 11b): one dashboard per dbt exposure, created by
+  # `platform-ops metabase provision`, querying ClickHouse as the `metabase`
+  # user. Its own state lives in a `metabase` database on the Postgres server,
+  # so it needs no volume. Behind a profile because it is a heavy JVM service
+  # that `make demo` and `make test` never need: `make metabase` starts it.
+  metabase:
+    image: metabase/metabase:v0.63.19.6
+    container_name: dpo-metabase
+    profiles: ["metabase"]
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: postgres
+      MB_DB_PORT: "5432"
+      MB_DB_DBNAME: metabase
+      MB_DB_USER: ${POSTGRES_USER:-platform_ops}
+      MB_DB_PASS: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # Offline and quiet: no usage statistics, no update checks.
+      MB_ANON_TRACKING_ENABLED: "false"
+      MB_CHECK_FOR_UPDATES: "false"
+      JAVA_OPTS: "-Xmx1g"
+    ports:
+      - "${METABASE_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:3000/api/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
 
 volumes:
   postgres_data:
