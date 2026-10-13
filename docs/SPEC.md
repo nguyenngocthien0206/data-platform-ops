@@ -2,7 +2,7 @@
 
 This document is the source of truth for what to build. Work through the phases in order. Each phase ends with acceptance criteria; stop after each phase for review.
 
-Status: Phases 0 to 9 make up release 1.0.0, the reference toolkit on the simulated company. Phases 10 to 12 plan its adoption inside the company. `docs/PROGRESS.md` records where each phase stands.
+Status: Phases 0 to 9 make up release 1.0.0, the reference toolkit on the simulated company. Phase 10 took the ownership check to the company's dbt repositories (1.1.0, 1.2.0). Phases 11 to 15 rebuild the simulated company on Postgres and ClickHouse for version 2.0. `docs/PROGRESS.md` records where each phase stands.
 
 ## Target repository layout
 
@@ -331,16 +331,16 @@ Not in this phase: a Docker-first rewrite of the README for outside readers, and
 
 ---
 
-## Internal use (Phases 10 to 12)
+## Internal use (from Phase 10)
 
 From here the toolkit is adopted by the teams inside the company. The owner's decisions after Phase 8:
 
 - **Internal only, not open source.** Only the company's stack is supported: Snowflake, BigQuery or ClickHouse as the warehouse, dbt run from Airflow and from Dagster, alerts to Slack or Telegram.
-- **One module per phase, lowest integration cost first:** ownership, then incidents, then cost for one engine. Reconciliation waits until the company has a migration.
+- **One module per phase, lowest integration cost first:** ownership first (Phase 10). After 1.2.0 the owner reordered the rest around version 2.0 (below).
 - **Shared state lives in one Postgres database** for the toolkit, the same whatever the warehouse.
 - **Airflow (through Cosmos) and Dagster (through dagster-dbt) are supported through thin integrations** in this repo that import neither orchestrator. The core stays a CLI and a Python API, and the toolkit never becomes an orchestrator.
 
-The simulated company, `make demo` and the test suite stay local, offline and deterministic. They remain the regression test for every module, and nothing in Phases 10 to 12 may change their reports. Code that talks to company systems sits behind the existing interfaces, is never needed by `make demo` or `make test`, and reads credentials only from the environment.
+The simulated company, `make demo` and the test suite stay local, offline and deterministic. They remain the regression test for every module. Phase 10 did not change their reports; version 2.0 changes them on purpose and records a new baseline. Code that talks to company systems sits behind the existing interfaces, is never needed by `make demo` or `make test`, and reads credentials only from the environment.
 
 Each phase starts with a pilot team chosen by the owner and a measure taken before the module is switched on, so the phase can end with a before-and-after number rather than a demo.
 
@@ -362,37 +362,94 @@ The toolkit repository stays public and holds only code and the demo. The compan
 
 ---
 
-## Phase 11: Incidents on real dbt runs
+## Version 2.0: the simulated company migrates to ClickHouse (Phases 11 to 15)
 
-Turn the company's failing dbt checks into one incident per root cause, routed to the right owner, instead of one alert per failure. The company runs dbt from Airflow through Cosmos (one dbt invocation per model) and from Dagster through dagster-dbt.
+Decided by the owner after 1.2.0 (2026-10-13). In 1.x the simulated company ran on DuckDB, with Postgres and SQL Server only as the sources of a migration into Iceberg, and the Phase 10 tests needed a second dbt project on ClickHouse. Version 2.0 tells one story that mirrors the company's real stack:
 
-- `platform-ops incidents ingest` reads the artifacts of one dbt invocation (`run_results.json`, `sources.json`, `manifest.json`) from any adapter, and runs the existing ingestion, grouping, severity and routing. Many invocations that share an orchestrator run id form one run, and the run is regrouped on every ingest, so Cosmos's per-model invocations group like a single `dbt build`. Ingesting the same results twice changes nothing.
-- Incident state in the shared Postgres database (runs, check events, open incidents, appends, notifications), safe when several Airflow or Dagster workers ingest at the same time, with its schema versioned.
-- Lifecycle for real runs: open on a new root failure, append when it fails again, resolve automatically when a later run shows the root healthy (its model ran and every test on it passed, or its source is fresh again). A run that did not cover the root never resolves it. Acknowledgement stays optional.
-- Severity without the demo's settings: thresholds and tier weights from an optional `incidents.yaml` next to the registry, defaulting to the demo's values.
-- Notifiers, chosen per team from `teams.yaml`: Slack through a bot token (`chat.postMessage` to the team's `channel`) and Telegram through a bot token (to the team's `telegram_chat`). Notifications are sent only after the incident is committed, and their delivery is recorded.
-- Integrations in this repository that import neither orchestrator: a callback for Cosmos's per-task hook, and a helper to call inside a dagster-dbt `@dbt_assets` function after the dbt invocation. Both call the same ingest with the orchestrator's run id.
-- Dashboards for real data: the Streamlit app gains a live mode that reads the shared Postgres database, starting with a live Incidents page (open incidents by severity, team and owner, opened and resolved per week, MTTR by severity, pages per person per week against failing checks, a timeline). The demo keeps reading its DuckDB.
-- `platform-ops incidents summary` prints failing checks against pages per person and week from the store: the pilot's before-and-after number.
-- The simulated 21-day scenario keeps running through the same code path and stays the regression test, with its ground truth.
+The company runs its reporting on a **legacy Postgres** database: operational tables, plus reporting tables and views written by hand in SQL. It is **migrating to self-managed ClickHouse**, where the analytics are rebuilt as **one dbt project**. The toolkit is applied to that flow: reconciliation signs off the migration, ownership and incidents run on the new dbt project, and cost attribution and FinOps run on ClickHouse's own query log, with **BigQuery and Snowflake priced as alternative targets**.
 
-**Acceptance:** fixture artifacts from Snowflake, BigQuery and ClickHouse dbt runs ingest into the same incidents the grouping rules predict. Several Cosmos-style partial invocations of one run group like a single build. On the ClickHouse fixture project with the shared Postgres store, a failing build opens one incident paged to the source owner and the next clean build resolves it, end to end. The integrations are tested with fakes of the Cosmos callback and the dagster-dbt invocation, without installing Airflow or Dagster. Slack and Telegram messages are rendered and sent through a test double. The live dashboard renders against a seeded store. `make demo` reports are byte-identical. The pilot team runs it; the pages per person per week before and after are recorded.
+Decisions:
+
+- **One company, one dbt project, on ClickHouse** (`dbt-clickhouse`). The legacy reporting on Postgres is hand-written SQL, not dbt. The Phase 10 fixture project is retired once the company's project replaces it in the tests.
+- **DuckDB stops being the warehouse; Iceberg and SQL Server are removed.** DuckDB may stay as an in-process helper only where a test needs one. Version 1.x remains available at tag `v1.2.0`.
+- **Cost uses ClickHouse's measured bytes and rows** from `system.query_log`; compute time stays modelled from bytes (ADR 0005), so reports stay byte-identical across runs. If measured bytes turn out not to repeat exactly, the owner decides before the rule is relaxed.
+- **BigQuery and Snowflake are priced, not built:** scan and compute pricing on the same measured workload, as candidate migration targets. Their collectors stay contract-tested only.
+- **Every number is regenerated.** READMEs, reports, ADR figures and the CV numbers come from 2.0's runs; 2.0's reports are not comparable byte for byte with 1.x, and each phase records its own baseline. Determinism, the offline demo and `make demo` as one command still hold, now on Postgres and ClickHouse in Docker.
+- **Order follows the migration:** the company first, then reconciliation, then cost and FinOps, then incidents (the former Phases 11 and 12 are folded into Phases 13 and 14).
+- Between Phases 11 and 14, `make demo` runs the modules already moved to 2.0 and says which ones it skipped.
 
 ---
 
-## Phase 12: Cost for the first engine
+## Phase 11: The company on Postgres and ClickHouse
 
-Attribute one warehouse's real query cost to the owning teams. The engine (Snowflake, BigQuery or ClickHouse) is chosen at planning, by where the largest bill is.
+- **Legacy Postgres:** the raw data generator writes the operational tables (customers, products, orders, order items, payments, web sessions, campaigns and spend, support tickets) into Postgres, with the same seeded mess as 1.x. A legacy reporting layer of hand-written SQL views and tables produces the reports the business reads today.
+- **Incremental loads into ClickHouse:** an ingestion job pulls new and changed rows from Postgres into ClickHouse's raw layer on the simulated clock, by an `updated_at` watermark through ClickHouse's `postgresql()` table function, the way a team without CDC feeds its new platform. Late rows and watermark edges happen for real, and the job records what each load moved.
+- **The dbt project on ClickHouse, modelled the ClickHouse way:** the 1.x project (about 120 models, owners, tests, source freshness, exposures, abandoned models) ported from DuckDB SQL to ClickHouse SQL with the same structure, lineage and ownership registry, but not as nightly full refreshes. Tables whose rows change in place (customers, products) use `ReplacingMergeTree` and are read deduplicated; large event tables use `MergeTree` with chosen `ORDER BY` and partition keys and build incrementally; small marts may stay full-refresh tables. Each choice of engine and keys is written down, because cost recommendations (Phase 13) build on it.
+- **Metabase as the company's BI:** behind a Compose profile, with its application database on the same Postgres server. The dbt exposures (about 12 dashboards) are created in Metabase by a script from the exposures themselves, on the marts in ClickHouse, querying as a `metabase` ClickHouse user. `make demo` replays the same dashboard queries from the seeded workload generator under that user, so the BI load in `query_log` stays deterministic; a live Metabase's own queries never feed the demo's reports.
+- **One ClickHouse user per team, plus `metabase` and `dbt`**, so `query_log` records who ran what the way a real cluster does. The workload generator runs ad hoc queries as the team users.
+- **The workload and fault simulations** target ClickHouse.
+- **Ownership and lineage** run on the ported project; the Phase 10 fixture project and its tests move to the company's project.
+- Where the toolkit's own result tables (`ops`) live in 2.0 is decided at the start of this phase.
 
-- A collector for that engine reading its query history with a read-only role (the Phase 5 collector for BigQuery or Snowflake, verified against a real account; or a new one for ClickHouse's `system.query_log`), with a pricing model that matches how the company is billed. For self-managed ClickHouse, which has no vendor bill, the pricing model shares the stated infrastructure cost of the cluster by usage.
-- Query text handled as sensitive: the toolkit stores what attribution needs, can redact literals, and keeps raw text out of reports.
-- Attribution and showback through the existing core, with results in the shared Postgres database, run on a schedule from Airflow or Dagster.
-- The access and data handling are reviewed with whoever owns security or data governance before the first run against production.
+**Acceptance:** `make demo` seeds Postgres, loads ClickHouse incrementally and builds the dbt project on it, with the engine and keys of every model recorded. `metadata check` passes on the ported project. The Metabase profile serves every exposure as a dashboard on ClickHouse. The 1.x structural invariants hold (abandoned models are dead ends, every live model reaches an exposure, one owner each). Two clean runs produce identical per-model fingerprints (row count and a content hash) in ClickHouse. The time of each step is recorded.
 
-**Acceptance:** a showback for the pilot's warehouse over a real window, reconciled against the vendor's own bill for the same window within a stated tolerance, or, for self-managed ClickHouse, adding up to the infrastructure cost the owner states for that window. Contract tests for the collector, and for ClickHouse an integration test against the local ClickHouse service. `make demo` reports are byte-identical.
+---
+
+## Phase 12: Reconciliation from Postgres to ClickHouse
+
+- A ClickHouse connector behind the existing interface, whose canonical row string and MD5 hash are byte-identical to Python's and Postgres's (ADR 0009), proven by the golden-row test extended to ClickHouse.
+- ClickHouse's own traps handled by canonical rules: no enforced primary key (deduplicate before comparing), `Nullable`, `DateTime64` precision, `FixedString` padding, case-sensitive comparison.
+- Tables to reconcile declared in configuration instead of hard-coded.
+- Two levels of sign-off: the migrated operational tables, and the legacy reports against the dbt marts that replace them ("the new dashboards show the same revenue as the old reports").
+- **A parallel run before cutover:** for a stated number of simulated weeks, legacy and ClickHouse both run, and the reconciliation runs every night. The report shows the match rate per table over the window, and the cutover is recommended only once every table has met its thresholds for N consecutive nights, the way a migration is actually signed off.
+- The planted defects move into the Postgres to ClickHouse load (a time zone mishandled, a decimal cast to float, trailing spaces trimmed, rows dropped at batch boundaries), plus the labelled discrepancy injector.
+
+**Acceptance:** `make reconcile` runs the parallel window and signs off (or not) the cutover against thresholds fixed before the run, with recall and classification accuracy against ground truth, and the segmented diff against a naive comparison, all computed from the actual run. Reports byte-identical across two runs.
+
+---
+
+## Phase 13: Cost attribution and FinOps on ClickHouse
+
+- A collector for `system.query_log`: measured bytes and rows read, the query kind, the user, and the dbt query comment for model ids. The logged-connection proxy of 1.x is no longer needed where ClickHouse measures.
+- Pricing: the self-managed cluster's stated monthly cost (from configuration), split into **compute**, shared by measured bytes and rows read per query, and **storage**, shared by each owner's tables from `system.parts` (by rows and uncompressed bytes, which repeat across runs, not compressed size), alongside BigQuery scan pricing and Snowflake compute pricing on the same workload: what the same company would pay on each candidate target.
+- **The migration's business case:** the legacy Postgres's stated cost before against ClickHouse's after, from the same simulated window.
+- **Per-team users and quotas:** showback by ClickHouse user and team (the `metabase` user's load goes to the owners of the dashboards it serves), and suggested settings profiles or quotas for the heaviest teams, the lever a real platform team pulls.
+- Attribution, showback by team and month, and recommendations on ClickHouse: unused tables, ORDER BY and partition keys for full-scan hotspots, incremental candidates.
+- Query text handled as sensitive: what attribution needs is stored, literals can be redacted, raw text stays out of reports.
+
+**Acceptance:** compute and storage shares add up to the stated infrastructure cost; the before-and-after cost of the migration comes from the same window; every abandoned model is in the unused list and no model with a live exposure is; the BigQuery and Snowflake comparison comes from the same measured workload; reports byte-identical across two runs. For the real pilot cluster, the same collector and pricing run against its query log with a read-only role, after the access and data handling review.
+
+---
+
+## Phase 14: Incidents on real dbt runs
+
+Turn failing dbt checks into one incident per root cause, routed to the right owner, instead of one alert per failure: first in the simulated company on ClickHouse, then on the company's real runs from Airflow (Cosmos, one dbt invocation per model) and Dagster (dagster-dbt).
+
+- The simulated incident scenario runs on the ClickHouse project and stays the regression test, with its ground truth.
+- `platform-ops incidents ingest` reads the artifacts of one dbt invocation (`run_results.json`, `sources.json`, `manifest.json`) from any adapter. Invocations that share an orchestrator run id form one run, regrouped on every ingest, so Cosmos's per-model invocations group like a single `dbt build`. Ingesting the same results twice changes nothing.
+- Incident state in the shared Postgres store (runs, check events, incidents, notifications), safe under concurrent ingests, with its schema versioned.
+- Lifecycle: open on a new root failure, append when it fails again, resolve automatically when a later run shows the root healthy (its model ran and every test on it passed, or its source is fresh again). A run that did not cover the root never resolves it.
+- Severity thresholds and tier weights from an optional `incidents.yaml` next to the registry.
+- Notifiers per team from `teams.yaml`: Slack through a bot token (`chat.postMessage` to the team's `channel`) and Telegram through a bot token (to the team's `telegram_chat`), sent only after the incident is committed, delivery recorded.
+- Integrations that import neither orchestrator, so the toolkit's image and lock file never carry Airflow or Dagster: a callback for Cosmos's per-task hook and a helper for a dagster-dbt `@dbt_assets` function. Airflow and Dagster call them and hand over what they need (the task's project folder and run id, the dbt invocation's target path and run id).
+- Airflow and Dagster for real, in Docker: an Airflow image with Cosmos and a Dagster image with dagster-dbt, each with the toolkit installed, kept apart from the toolkit's image. Both run the simulated company's dbt project on ClickHouse on its daily schedule, behind Compose profiles, with their UIs published: the company runs dbt the way the real company does. `make demo` stays on the Makefile and the simulated clock, deterministic and one command.
+- Integration tests on the real orchestrators (`make docker-test-orchestrators`): break a staging test, trigger the DAG and the Dagster job, check that one incident opens in the Postgres store and is paged; repair, trigger again, check that it resolves. Run on demand (its own workflow) and by the release workflow before it publishes; pull requests run the fast tests with fakes.
+- A live mode of the dashboards reading the store, starting with incidents; `platform-ops incidents summary` prints failing checks against pages per person and week.
+
+**Acceptance:** the simulated scenario maps every injected fault to exactly one incident on ClickHouse. Fixture artifacts from Snowflake and BigQuery runs and real ClickHouse artifacts ingest into the incidents the grouping rules predict. Several Cosmos-style partial invocations of one run group like a single build. A failing build of the company project opens one incident paged to the source owner, and the next clean build resolves it, end to end on ClickHouse and Postgres. The integrations pass with fakes on every pull request and end to end on real Airflow (Cosmos) and Dagster (dagster-dbt) in Docker, on demand and before every release; the release does not publish without them. Slack and Telegram messages go through a test double. The live dashboard renders against a seeded store. The pilot records pages per person per week before and after.
+
+---
+
+## Phase 15: Documentation and release 2.0.0
+
+- The root README rewritten around the migration story, with an updated architecture diagram and results from a real 2.0 run; module READMEs and the dashboards README brought in line.
+- ADRs for the 2.0 decisions (the re-platform, ClickHouse hashing, cost on measured bytes, the live incident store), and a later note on every 1.x ADR the re-platform changed (0001, 0005, 0007, 0009, 0010 at least).
+- The SPEC's layout and Makefile table, `docs/PROGRESS.md` closed out, `CHANGELOG.md` 2.0.0; the owner pushes the tag.
+
+**Acceptance:** a reader goes from a fresh clone to the dashboards by following the README; `make readme-check` passes against a fresh 2.0 run; every relative link resolves; every ADR is in the index.
 
 ---
 
 ## Out of scope
 
-Open-source distribution and outside support; warehouses beyond Snowflake, BigQuery and ClickHouse; replacing or running as an orchestrator (Airflow and Dagster are supported only through the thin integrations of Phase 11); authentication and multi-user deployment of the dashboards; cloud emulators; and any UI beyond the Streamlit dashboards. Migration reconciliation for company systems waits for a real migration.
+Open-source distribution and outside support; warehouses beyond ClickHouse, with BigQuery and Snowflake priced but not built; Iceberg and SQL Server (removed in 2.0); replacing or running as an orchestrator (Airflow and Dagster are supported only through the thin integrations of Phase 14); authentication and multi-user deployment of the dashboards; cloud emulators; and any UI beyond the Streamlit dashboards.

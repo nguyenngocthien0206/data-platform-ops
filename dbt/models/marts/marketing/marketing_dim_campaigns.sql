@@ -1,3 +1,4 @@
+{{ config(order_by='campaign_id') }}
 select
     campaign_id,
     campaign_name,

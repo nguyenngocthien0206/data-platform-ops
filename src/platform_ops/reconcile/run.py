@@ -32,9 +32,7 @@ from platform_ops.reconcile.classify import classify
 from platform_ops.reconcile.connectors import (
     DuckDBConnector,
     PostgresConnector,
-    SqlServerConnector,
     postgres_params,
-    sqlserver_params,
 )
 from platform_ops.reconcile.diff import TableDiff, diff_table
 from platform_ops.reconcile.metrics import Discrepancy, Grade, TableVerdict, grade, verdict
@@ -100,24 +98,7 @@ def _legacy_connector(engine: Engine, settings: Settings) -> Any:
                 f"Postgres is not reachable at {params.host}:{params.port} "
                 f"({type(error).__name__}). Start it with `make up`."
             ) from error
-    try:
-        import pymssql
-    except ImportError as error:
-        raise ReconcileError(
-            "SQL Server needs the optional driver: `uv sync --extra sqlserver`."
-        ) from error
-    mssql = sqlserver_params(env_file)
-    try:
-        return SqlServerConnector(
-            mssql,
-            local_zone=r.legacy_timezone,
-            zone_names={r.legacy_timezone: r.legacy_timezone_windows},
-        )
-    except (pymssql.Error, OSError) as error:
-        raise ReconcileError(
-            f"SQL Server is not reachable at {mssql.host}:{mssql.port} "
-            f"({type(error).__name__}). Start it with `docker compose --profile sqlserver up -d`."
-        ) from error
+    raise ReconcileError(f"unknown legacy engine {engine!r}")
 
 
 def _target(catalog: Any, namespace: str) -> DuckDBConnector:
@@ -175,7 +156,6 @@ def run_reconcile(settings: Settings, engines: Sequence[Engine] | None = None) -
     r = settings.reconcile
     chosen: list[Engine] = list(engines or r.engines)
     tolerance = Decimal(str(r.rounding_tolerance))
-    zone_names = {r.legacy_timezone: r.legacy_timezone_windows}
     warehouse = settings.resolve(settings.paths.iceberg_warehouse) / "reconcile"
     reset_warehouse(warehouse)
     catalog = open_catalog(warehouse)
@@ -208,7 +188,6 @@ def run_reconcile(settings: Settings, engines: Sequence[Engine] | None = None) -
                         rules[spec.name],
                         fanout=r.fanout,
                         leaf_width=r.leaf_width,
-                        zone_names=zone_names,
                     )
                     for spec in TABLES
                 }

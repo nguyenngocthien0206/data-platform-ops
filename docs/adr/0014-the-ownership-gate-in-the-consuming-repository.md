@@ -19,6 +19,10 @@ Three things had to be settled. Where the company's registry lives, given that t
 - **Seeds and snapshots need owners too**, because company projects have them and someone answers for each.
 - **The check is tested on a project it was not written for**: a small dbt project on ClickHouse (`tests/fixtures/dbt_clickhouse`), with its own layout, a local package, seeds, a snapshot and exposures, parsed in the tests and built for real on a ClickHouse service in Compose.
 
+Update, version 2.0 (Phase 11a): the company's own project now runs on ClickHouse, so the
+standalone tests run on it and the fixture project was retired. A model from an
+installed package, which only the fixture had, is covered by a unit test.
+
 ## Consequences
 
 Adopting the check costs a team one workflow file, a registry and a few weeks in report-only mode, and needs no access request, because nothing touches the warehouse. The pilot gets a before-and-after number for free: the share of datasets with an owner on the day the job is added, and on the day it becomes required.

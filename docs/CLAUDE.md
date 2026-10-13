@@ -2,13 +2,15 @@
 
 ## What this project is
 
-`data-platform-ops` is a local-first toolkit for operating a multi-team data platform. It runs a simulated company (4 business teams plus a data platform team, around 120 dbt models on DuckDB) and ships three modules on top of one shared metadata layer:
+`data-platform-ops` is a local-first toolkit for operating a multi-team data platform. It runs a simulated company (4 business teams plus a data platform team, around 120 dbt models) and ships three modules on top of one shared metadata layer:
 
 1. `cost`: attributes query cost to owning teams and flags waste.
 2. `incidents`: turns raw data test failures into root-cause incidents routed to owners.
-3. `reconcile`: verifies a legacy-to-lakehouse migration with a segmented checksum diff.
+3. `reconcile`: verifies a migration with a segmented checksum diff.
 
-Version 1.0.0 is the reference release built on the simulated company. From Phase 10 the toolkit is adopted by the teams inside the company (not open source): their dbt projects on Snowflake, BigQuery or ClickHouse, run from Airflow and Dagster, with alerts to Slack or Telegram. The simulated company stays as the demo and the regression test.
+Version 1.x (up to 1.2.0) ran the simulated company on DuckDB. From Phase 10 the toolkit is also adopted by the teams inside the company (not open source): their dbt projects, run from Airflow (Cosmos) and Dagster (dagster-dbt), with alerts to Slack or Telegram.
+
+Version 2.0 (Phases 11 to 15) rebuilds the simulated company to mirror the company's real stack: its reporting runs on a legacy Postgres database (hand-written SQL), and it is migrating to self-managed ClickHouse, where the analytics are one dbt project. Reconciliation signs off that migration; ownership and incidents run on the ClickHouse dbt project; cost and FinOps run on ClickHouse's query log, with BigQuery and Snowflake priced as alternative targets. One company, one dbt project. The simulated company stays the demo and the regression test.
 
 The full specification and the phased build plan live in `docs/SPEC.md`. Read it before starting any phase.
 
@@ -23,21 +25,21 @@ The full specification and the phased build plan live in `docs/SPEC.md`. Read it
 ## Stack
 
 - Python 3.11+, dependencies managed with `uv` (single `pyproject.toml`).
-- DuckDB as the warehouse, `dbt-duckdb` for transformations.
-- Postgres (default) and SQL Server Developer Edition (optional Docker Compose profile) as legacy sources.
-- Iceberg via PyIceberg with a SQLite catalog and a local filesystem warehouse.
+- From 2.0: Postgres as the simulated company's legacy database, self-managed ClickHouse as its warehouse, `dbt-clickhouse` for transformations, all in Docker Compose. Until each 2.0 phase lands, its module still runs on the 1.x stack (DuckDB with `dbt-duckdb`, Postgres and SQL Server as legacy sources, Iceberg via PyIceberg); DuckDB, SQL Server and Iceberg leave the stack in 2.0.
+- BigQuery and Snowflake are priced as alternative targets only; their collectors stay contract-tested against recorded fixtures.
+- From 2.0, Metabase is the simulated company's BI tool, behind a Compose profile (its application database on the same Postgres server). The toolkit's own dashboards stay in Streamlit.
 - `sqlglot` for SQL parsing, `pydantic` for config and registry validation, `typer` for the CLI, `streamlit` for dashboards.
 - `pytest`, `ruff` (lint and format), `mypy` on the `src/` package.
-- From Phase 10, for internal use: Snowflake, BigQuery or ClickHouse as company warehouses (read-only), one shared Postgres database for the toolkit's state, and optional Airflow and Dagster integrations.
+- For internal use: the company's warehouses read-only, one shared Postgres database for the toolkit's state, and thin Airflow (Cosmos) and Dagster (dagster-dbt) integrations.
 
-Do not add an orchestrator to the toolkit or make it depend on one, and do not add heavy services. The Makefile plus the Python CLI orchestrates the demo; Airflow and Dagster are supported only through the thin, optional integrations of Phase 11, which call the same CLI or Python API.
+Do not make the toolkit depend on an orchestrator: its code never imports Airflow or Dagster, and its image and lock file never carry them. The Makefile plus the Python CLI orchestrates `make demo`. From Phase 14, Airflow (Cosmos) and Dagster (dagster-dbt) run in their own images behind Compose profiles: to run the simulated company's dbt project the way the real company does, and to test the thin integrations end to end. Metabase (from Phase 11) is the same kind of service. None of them is ever needed by `make demo` or `make test`, and none of their own activity feeds the demo's reports.
 
 ## Code conventions
 
 - Package layout: `src/platform_ops/{metadata,simulation,cost,incidents,reconcile,common}`.
 - Every external system sits behind a small interface with a local default implementation (for example `PricingModel`, `Notifier`, `SourceConnector`). This keeps the core logic vendor-neutral so a cloud adapter can be added later without touching it.
 - Type hints everywhere. Pydantic models for anything read from YAML or written as a report.
-- Module outputs (facts, incidents, diff results) are stored as tables, never only in memory: in DuckDB under an `ops` schema for the demo, and in the shared Postgres database for company runs from Phase 11.
+- Module outputs (facts, incidents, diff results) are stored as tables, never only in memory: in DuckDB under an `ops` schema in 1.x, in the place Phase 11 decides for 2.0, and in the shared Postgres database for company incident runs (Phase 14).
 - Prefer pushing computation into the database (SQL) over pulling rows into Python, especially in `reconcile`.
 - Before relying on a library or DuckDB feature (profiling settings, extension functions, PyIceberg catalog options), verify it against the installed version with a quick check or test. Do not assume API names from memory.
 - Each module has unit tests for its core logic plus one integration test that runs against the simulated company.

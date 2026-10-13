@@ -121,18 +121,16 @@ incidents:
     load_factor: 0.5
 
 reconcile:
-  # Legacy engines to reconcile, each against its own Iceberg copy. `sqlserver`
-  # needs `docker compose --profile sqlserver up -d` and `uv sync --extra
-  # sqlserver`; `platform-ops reconcile run --engine ...` picks engines for one run.
+  # Legacy engines to reconcile, each against its own Iceberg copy;
+  # `platform-ops reconcile run --engine ...` picks engines for one run. Paused
+  # in version 2.0 until Phase 12 reconciles Postgres against ClickHouse.
   engines: [postgres]
   # Legacy rows at scale_factor 1.0. The legacy system holds calendar year
   # legacy_year, so its local timestamps cross both DST changes.
   rows: {customers: 50000, orders: 300000, payments: 300000}
   legacy_year: 2025
-  # The legacy system stores local wall-clock time in this zone. SQL Server
-  # names zones the Windows way, so it gets its own spelling.
+  # The legacy system stores local wall-clock time in this zone.
   legacy_timezone: America/New_York
-  legacy_timezone_windows: Eastern Standard Time
   # Segmented diff: each differing segment splits into `fanout` children until
   # a segment spans at most `leaf_width` keys; only then are rows fetched.
   fanout: 16
@@ -141,11 +139,9 @@ reconcile:
   rounding_tolerance: 0.01
   # How values are rendered before hashing (ADR 0009). Engine defaults first,
   # then per-column overrides as "table.column": {rtrim, casefold, scale}.
-  # SQL Server folds case to model its case-insensitive default collation.
   canonical:
     engines:
       postgres: {rtrim: false, casefold: false}
-      sqlserver: {rtrim: false, casefold: true}
       duckdb: {rtrim: false, casefold: false}
     columns: {}
   # Sign-off criteria, fixed before the run and stated first in the report.
@@ -169,3 +165,24 @@ metadata:
     critical: 3
     important: 2
     best_effort: 1
+
+company:
+  # Version 2.0: the simulated company's reporting runs on a legacy Postgres
+  # (schemas below, in the POSTGRES_DB database) and it migrates to ClickHouse.
+  # Hosts, ports and passwords come from .env, never from here.
+  legacy_schema: app
+  reporting_schema: reporting
+  # The raw layer the incremental ingestion fills; dbt's databases are named
+  # after its layers (staging, intermediate, marts, reference, snapshots).
+  raw_database: raw
+  # The toolkit's own results, in a separate database on the Postgres server.
+  ops_database: platform_ops
+  ops_schema: ops
+  # Postgres as ClickHouse sees it: postgresql() runs on the ClickHouse server.
+  postgres_from_clickhouse: "postgres:5432"
+  # Each load re-reads this much before its watermark (late commits), and
+  # ReplacingMergeTree keeps the latest version of anything read twice.
+  ingest_overlap_minutes: 60
+  # dbt builds every N simulated days and on the last day. Measured, not
+  # assumed: see docs/PROGRESS.md for what a build costs at scale 1.0.
+  build_every_days: 28

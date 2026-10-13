@@ -7,4 +7,4 @@ select
     is_active,
     created_at,
     _loaded_at
-from {{ source('raw', 'products') }}
+from {{ source('raw', 'products') }} final

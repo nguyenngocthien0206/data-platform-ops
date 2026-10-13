@@ -1,3 +1,4 @@
+{{ config(order_by='(campaign_id, activity_date)') }}
 with spend as (
     select
         campaign_id,
@@ -35,10 +36,10 @@ keys as (
 )
 
 select
-    k.campaign_id,
-    c.campaign_name,
-    c.channel,
-    k.activity_date,
+    k.campaign_id as campaign_id,
+    c.campaign_name as campaign_name,
+    c.channel as channel,
+    k.activity_date as activity_date,
     coalesce(sp.spend, 0) as spend,
     coalesce(sp.impressions, 0) as impressions,
     coalesce(sp.clicks, 0) as clicks,

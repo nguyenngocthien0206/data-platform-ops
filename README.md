@@ -1,5 +1,15 @@
 # data-platform-ops
 
+> **Version 2.0 is in progress.** The simulated company now looks like a real
+> one: its reporting runs on a legacy Postgres, and it is moving to self-managed
+> ClickHouse with one dbt project. On `main`, `make demo` runs that company
+> (Postgres, incremental ingestion into ClickHouse, dbt on ClickHouse) and the
+> ownership check and lineage on it. Cost, incidents, reconciliation and the
+> dashboards are paused until their phase moves them; `make paused` says when.
+>
+> Everything below describes 1.x, and its numbers come from a 1.x run. To run
+> it, check out tag `v1.2.0`. Progress is in [docs/PROGRESS.md](docs/PROGRESS.md).
+
 A data platform team is usually judged on three things it only half controls: what the warehouse costs, how fast broken data gets fixed, and whether a migration can be signed off. All three depend on the same missing piece, which is knowing who owns each dataset and what depends on it. Without that, the bill lands on whoever builds the shared tables, alerts page whoever wrote the last model in the chain, and a migration is approved on a spot check and a hope.
 
 This toolkit builds that missing piece once, as a shared metadata layer (an ownership registry and a lineage graph), and puts three modules on top of it:

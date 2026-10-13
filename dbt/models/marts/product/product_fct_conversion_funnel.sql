@@ -1,4 +1,5 @@
 -- Visit, engage, convert: the funnel the product team watches daily per device.
+{{ config(order_by='(activity_date, device)') }}
 select
     session_date as activity_date,
     device,

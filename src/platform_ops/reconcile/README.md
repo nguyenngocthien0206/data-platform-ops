@@ -65,12 +65,17 @@ What the numbers say:
 
 ## Running it
 
+Paused in version 2.0 until Phase 12, which reconciles the company's legacy
+Postgres reports against the marts that replace them on ClickHouse.
+`platform-ops reconcile run` says so and exits 2; the 1.x version below is at
+tag `v1.2.0`.
+
 ```bash
 make up                             # Postgres, the default legacy engine
 make reconcile                      # both passes, ops tables, reports/reconciliation.md
 uv run platform-ops reconcile run --strict   # exits non-zero when not signed off, for CI
 ```
 
-SQL Server is optional. Start it with `docker compose --profile sqlserver up -d`, install the driver with `uv sync --extra sqlserver`, then run `uv run --extra sqlserver platform-ops reconcile run --engine sqlserver`. The same scenario runs against it; its case-insensitive policy reports the planted upper-case emails as equal under the source's policy rather than as discrepancies.
+Until version 2.0, SQL Server was an optional second legacy engine, with a case-insensitive policy that reported the planted upper-case emails as equal. Version 2.0 removed it: the company's legacy system is Postgres.
 
 Tunables live under `reconcile:` in `config/settings.yaml`: legacy row counts, the legacy time zone, fanout and leaf width, the rounding tolerance, the canonical rules and the sign-off thresholds.

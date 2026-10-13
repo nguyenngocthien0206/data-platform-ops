@@ -18,9 +18,18 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def write_isolated_config(
-    root: Path, scale_factor: float, weeks: int | None = None, repo: Path = REPO_ROOT
+    root: Path,
+    scale_factor: float,
+    weeks: int | None = None,
+    repo: Path = REPO_ROOT,
+    namespace: str = "",
 ) -> Path:
-    """Write ``root/config/settings.yaml`` (plus teams, ownership and ``.env``) and return it."""
+    """Write ``root/config/settings.yaml`` (plus teams, ownership and ``.env``) and return it.
+
+    ``namespace`` prefixes every Postgres schema and ClickHouse database the
+    company and the toolkit use (version 2.0), so a test shares the servers
+    with the demo without touching its data.
+    """
     config_dir = root / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     raw = yaml.safe_load((repo / "config" / "settings.yaml").read_text(encoding="utf-8"))
@@ -29,16 +38,19 @@ def write_isolated_config(
         raw["simulation"]["weeks"] = weeks
     raw["paths"] = {
         "duckdb": str(root / "warehouse.duckdb"),
+        "generator": str(root / "generator.duckdb"),
         "reports": str(root / "reports"),
         "iceberg_warehouse": str(root / "iceberg"),
         "dbt_project": str(repo / "dbt"),
         "dbt_target": str(root / "target"),
     }
+    if namespace:
+        raw.setdefault("company", {})["namespace"] = namespace
     settings_path = config_dir / "settings.yaml"
     settings_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
     for name in ("teams.yaml", "ownership.yaml"):
         shutil.copyfile(repo / "config" / name, config_dir / name)
-    # Local service credentials (Postgres, SQL Server) live in .env at the root.
+    # Local service credentials (Postgres, ClickHouse) live in .env at the root.
     if (repo / ".env").is_file():
         shutil.copyfile(repo / ".env", root / ".env")
     return settings_path

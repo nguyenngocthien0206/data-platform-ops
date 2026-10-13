@@ -17,7 +17,6 @@ import typer
 from platform_ops import __version__
 from platform_ops.common.clock import SimulatedClock
 from platform_ops.common.config import Settings, load_settings
-from platform_ops.common.db import open_connection
 from platform_ops.common.logging import configure_logging, get_logger, log_event
 
 app = typer.Typer(
@@ -39,7 +38,13 @@ reconcile_app = typer.Typer(
     help="Legacy to lakehouse migration reconciliation.", no_args_is_help=True
 )
 
+company_app = typer.Typer(
+    help="The simulated company on legacy Postgres and ClickHouse (version 2.0).",
+    no_args_is_help=True,
+)
+
 app.add_typer(metadata_app, name="metadata")
+app.add_typer(company_app, name="company")
 app.add_typer(simulation_app, name="simulation")
 app.add_typer(cost_app, name="cost")
 app.add_typer(incidents_app, name="incidents")
@@ -55,6 +60,32 @@ PARSE_OPTION = typer.Option(
 def _fail(message: str, code: int = 1) -> NoReturn:
     typer.secho(message, fg=typer.colors.RED, err=True)
     raise typer.Exit(code=code)
+
+
+# Version 2.0 moves the company to Postgres and ClickHouse one module at a time.
+# Until its phase rewrites it, a 1.x module still reads the DuckDB warehouse that
+# no longer exists, so its command says when it returns instead of failing
+# somewhere deep inside. 1.x is available at tag v1.2.0.
+PAUSED_UNTIL: dict[str, int] = {
+    "reconcile": 12,
+    "cost": 13,
+    "simulation": 13,
+    "dashboard": 13,
+    "incidents": 14,
+}
+
+
+def paused_reason(module: str) -> str:
+    """Why a paused module does not run, and when it returns. The tests skip with it too."""
+    return (
+        f"{module} is paused while version 2.0 moves it to ClickHouse; it returns in "
+        f"Phase {PAUSED_UNTIL[module]}. The 1.x version is at tag v1.2.0."
+    )
+
+
+def _check_paused(module: str) -> None:
+    if module in PAUSED_UNTIL:
+        _fail(paused_reason(module), EXIT_UNUSABLE)
 
 
 def _start(name: str) -> tuple[Settings, SimulatedClock]:
@@ -84,6 +115,14 @@ def version() -> None:
     typer.echo(__version__)
 
 
+@app.command()
+def paused() -> None:
+    """List the 1.x modules paused in version 2.0, and the phase each returns in."""
+    for module, phase in sorted(PAUSED_UNTIL.items(), key=lambda item: (item[1], item[0])):
+        typer.echo(f"{module:<12} paused, returns in Phase {phase}")
+    typer.echo("The 1.x versions are at tag v1.2.0.")
+
+
 @app.command("config")
 def show_config() -> None:
     """Load config/settings.yaml, validate it, and print the resolved values."""
@@ -96,38 +135,76 @@ def show_config() -> None:
 
 @app.command()
 def seed() -> None:
-    """Generate raw data for the simulated company, up to the window start."""
-    from platform_ops.simulation import raw_data
+    """Seed the legacy Postgres up to the window start, empty ClickHouse, backfill raw."""
+    from platform_ops.simulation.company import start_over
+    from platform_ops.simulation.ingest import Ingestion
+    from platform_ops.simulation.legacy_db import LegacyCompany
 
     settings, clock = _start("seed")
     logger = get_logger("seed")
-    with open_connection(settings) as connection:
-        counts = raw_data.seed(connection, settings)
-    for table, rows in counts.items():
-        log_event(logger, f"raw.{table}: {rows:,} rows", clock=clock)
-    typer.echo(f"seeded {sum(counts.values()):,} rows across {len(counts)} raw tables")
+    legacy = LegacyCompany(settings)
+    ingestion = Ingestion(settings)
+    try:
+        seeded, ingested = start_over(settings, legacy, ingestion)
+    finally:
+        legacy.close()
+        ingestion.close()
+    log_event(logger, f"legacy Postgres: {seeded:,} rows", clock=clock)
+    typer.echo(
+        f"seeded {seeded:,} rows into the legacy Postgres; ingested {ingested:,} into ClickHouse"
+    )
+
+
+FULL_REFRESH_OPTION = typer.Option(
+    False, "--full-refresh", help="Rebuild incremental models from scratch."
+)
 
 
 @app.command()
-def build() -> None:
-    """Run dbt build, then refresh ops.lineage_edges from the new manifest."""
+def build(full_refresh: bool = FULL_REFRESH_OPTION) -> None:
+    """Run dbt build on ClickHouse, then refresh ops.lineage_edges in the store."""
     from platform_ops.common.dbt_invoke import DbtError, invocation_from_settings, run_dbt
-    from platform_ops.metadata.lineage import build_graph, persist_edges
+    from platform_ops.metadata.lineage import build_graph, store_edges
     from platform_ops.metadata.manifest import load_manifest
 
     settings, clock = _start("build")
     logger = get_logger("build")
     invocation = invocation_from_settings(settings)
     try:
-        run_dbt(invocation, ["build"])
+        run_dbt(invocation, ["build", "--full-refresh"] if full_refresh else ["build"])
     except DbtError as error:
         _fail(str(error))
-
-    graph = build_graph(load_manifest(invocation.manifest_path))
-    with open_connection(settings) as connection:
-        edges = persist_edges(connection, graph)
+    edges = store_edges(settings, build_graph(load_manifest(invocation.manifest_path)))
     log_event(logger, f"ops.lineage_edges: {edges:,} edges", clock=clock)
     typer.echo(f"dbt build succeeded; lineage refreshed with {edges:,} edges")
+
+
+DAYS_OPTION = typer.Option(None, "--days", help="Simulated days to replay (default: the window).")
+
+
+@company_app.command("run")
+def company_run(days: int | None = DAYS_OPTION) -> None:
+    """Seed the history, then replay the window: daily data, ingestion, dbt builds."""
+    from platform_ops.common.dbt_invoke import DbtError
+    from platform_ops.metadata.lineage import build_graph, store_edges
+    from platform_ops.metadata.manifest import load_manifest
+    from platform_ops.simulation.company import run_company
+
+    settings, _ = _start("company")
+    try:
+        summary = run_company(settings, days)
+    except DbtError as error:
+        _fail(str(error))
+    from platform_ops.common.dbt_invoke import invocation_from_settings
+
+    graph = build_graph(load_manifest(invocation_from_settings(settings).manifest_path))
+    edges = store_edges(settings, graph)
+    typer.echo(
+        f"simulated {summary.days} days: {summary.rows_seeded:,} rows of history, "
+        f"{summary.rows_loaded:,} new and {summary.rows_changed:,} changed in Postgres, "
+        f"{summary.rows_ingested:,} ingested into ClickHouse, {len(summary.builds)} dbt builds; "
+        f"lineage {edges:,} edges"
+    )
 
 
 PORT_OPTION = typer.Option(8501, "--port", help="Port to serve the dashboards on.")
@@ -155,6 +232,7 @@ def _wait_until_healthy(url: str, process: Any, timeout: float) -> bool:
 @app.command()
 def dashboard(port: int = PORT_OPTION, headless: bool = HEADLESS_OPTION) -> None:
     """Launch the Streamlit dashboards (read-only over the ops schema)."""
+    _check_paused("dashboard")
     import os
     import subprocess
     import sys
@@ -258,7 +336,7 @@ def metadata_check(
     from yaml import YAMLError
 
     from platform_ops.metadata import output
-    from platform_ops.metadata.check import persist_ownership, run_check
+    from platform_ops.metadata.check import run_check, store_ownership
     from platform_ops.metadata.manifest import load_manifest, project_name
     from platform_ops.metadata.registry import Registry
 
@@ -314,8 +392,7 @@ def metadata_check(
     if settings is None:
         typer.echo("metadata check passed")
         return
-    with open_connection(settings) as connection:
-        rows = persist_ownership(connection, report, nodes)
+    rows = store_ownership(settings, report, nodes)
     typer.echo(f"metadata check passed; ops.node_ownership has {rows} rows")
 
 
@@ -360,7 +437,7 @@ def metadata_init_registry(
 @metadata_app.command("lineage")
 def metadata_lineage(parse: bool = PARSE_OPTION) -> None:
     """Build the lineage graph and persist its edges to ops.lineage_edges."""
-    from platform_ops.metadata.lineage import build_graph, persist_edges
+    from platform_ops.metadata.lineage import build_graph, store_edges
     from platform_ops.metadata.manifest import load_manifest
 
     settings, _ = _start("metadata")
@@ -368,8 +445,7 @@ def metadata_lineage(parse: bool = PARSE_OPTION) -> None:
         graph = build_graph(load_manifest(_manifest(settings, parse)))
     except FileNotFoundError as error:
         _fail(str(error))
-    with open_connection(settings) as connection:
-        edges = persist_edges(connection, graph)
+    edges = store_edges(settings, graph)
     typer.echo(f"ops.lineage_edges: {edges:,} edges across {graph.number_of_nodes():,} nodes")
 
 
@@ -381,6 +457,8 @@ def simulation_run() -> None:
     on every run.
     """
     from platform_ops.simulation.workload import run_workload
+
+    _check_paused("simulation")
 
     settings, _ = _start("simulation")
     summary = run_workload(settings)
@@ -396,6 +474,8 @@ def simulation_run() -> None:
 def cost_report() -> None:
     """Price the collected workload, attribute it, and write reports/cost.md."""
     from platform_ops.cost.run import CostError, run_cost
+
+    _check_paused("cost")
 
     settings, _ = _start("cost")
     try:
@@ -417,6 +497,8 @@ def incidents_run() -> None:
     """
     from platform_ops.common.dbt_invoke import DbtError
     from platform_ops.incidents.run import run_incidents
+
+    _check_paused("incidents")
     from platform_ops.incidents.scenario import ScenarioError
 
     settings, _ = _start("incidents")
@@ -456,8 +538,10 @@ def reconcile_run(engine: list[str] | None = ENGINE_OPTION, strict: bool = STRIC
     from platform_ops.common.config import Engine
     from platform_ops.reconcile.run import ReconcileError, run_and_report
 
+    _check_paused("reconcile")
+
     settings, _ = _start("reconcile")
-    allowed = ("postgres", "sqlserver", "duckdb")
+    allowed = ("postgres", "duckdb")
     unknown = [e for e in engine or [] if e not in allowed]
     if unknown:
         _fail(f"unknown engine {unknown}; choose from {list(allowed)}")

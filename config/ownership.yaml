@@ -17,6 +17,9 @@ datasets:
   - {match: "source.company.raw.orders", owner: priya, team: platform, tier: critical}
   - {match: "source.company.raw.payments", owner: marco, team: platform, tier: critical}
   - {match: "source.company.raw.customers", owner: priya, team: platform, tier: critical}
+  # Reference data maintained by hand, and the customer history snapshot.
+  - {match: "seed.company.*", owner: lena, team: platform, tier: important}
+  - {match: "snapshot.company.*", owner: priya, team: platform, tier: important}
 
   - {match: "model.company.stg_*", owner: marco, team: platform, tier: important}
   - {match: "model.company.stg_orders", owner: marco, team: platform, tier: critical}

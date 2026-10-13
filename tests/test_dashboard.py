@@ -1,9 +1,8 @@
 """The dashboards: an ops-only data layer, and every page rendering on real data.
 
-One warehouse is built for the whole module the way ``make demo`` builds it,
-at scale 0.01: simulate three weeks, price them, run the incident scenario and
-the reconciliation (with DuckDB as the legacy engine, so no Docker is needed).
-Every page is then rendered with Streamlit's AppTest.
+The rendering tests read a full 1.x warehouse (cost, incidents and
+reconciliation), so they skip until version 2.0 moves those modules and the
+dashboards to the new store; the data layer tests run as before.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 from typer.testing import CliRunner
 
+from platform_ops.cli import paused_reason
 from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings
 from platform_ops.cost.sql_parse import parse_query
 from platform_ops.dashboard.queries import QUERIES, MissingData, Warehouse, producer
@@ -63,10 +63,13 @@ def test_a_missing_table_names_its_command(tmp_path: Path) -> None:
 # -- a real warehouse ------------------------------------------------------------------
 
 
+PAUSED = pytest.mark.skip(reason=paused_reason("dashboard"))
+
 # Hotspots need tables over `hotspot_min_table_bytes` (20 MB); none are that big at 0.01.
 MAY_BE_EMPTY_AT_SMALL_SCALE = {"hotspots"}
 
 
+@PAUSED
 @pytest.mark.integration
 @pytest.mark.parametrize("name", sorted(QUERIES))
 def test_every_query_runs_on_a_full_warehouse(full_warehouse: Settings, name: str) -> None:
@@ -91,6 +94,7 @@ EXPECTED = {
 }
 
 
+@PAUSED
 @pytest.mark.integration
 @pytest.mark.parametrize("page", sorted(EXPECTED))
 def test_every_page_renders(
@@ -109,6 +113,7 @@ def test_every_page_renders(
     assert elements["metric"] >= 1
 
 
+@PAUSED
 @pytest.mark.integration
 def test_the_cost_page_switches_pricing_model(
     full_warehouse: Settings, monkeypatch: pytest.MonkeyPatch

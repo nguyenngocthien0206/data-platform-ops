@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 import duckdb
 
+from platform_ops.common.config import Settings
 from platform_ops.common.db import OPS_SCHEMA, transaction
 from platform_ops.metadata.manifest import OWNED_TYPES, Node
 from platform_ops.metadata.registry import Registry, Resolution
@@ -162,3 +163,41 @@ def persist_ownership(
                 f"INSERT INTO {OPS_SCHEMA}.node_ownership VALUES (?, ?, ?, ?, ?, ?, ?)", rows
             )
     return len(rows)
+
+
+OWNERSHIP_DDL = """
+    unique_id text PRIMARY KEY,
+    resource_type text NOT NULL,
+    name text NOT NULL,
+    owner text NOT NULL,
+    team text NOT NULL,
+    tier text NOT NULL,
+    matched_pattern text NOT NULL"""
+
+
+def store_ownership(settings: Settings, report: CheckReport, nodes: dict[str, Node]) -> int:
+    """Replace ``ops.node_ownership`` in the toolkit's Postgres store (version 2.0)."""
+    from platform_ops.common.store import open_store, replace_ops_table
+
+    rows = [
+        (
+            unique_id,
+            nodes[unique_id].resource_type,
+            nodes[unique_id].name,
+            resolution.rule.owner,
+            resolution.rule.team,
+            resolution.rule.tier,
+            resolution.rule.match,
+        )
+        for unique_id, resolution in sorted(report.resolutions.items())
+        if resolution.owned and resolution.rule is not None
+    ]
+    with open_store(settings) as store:
+        return replace_ops_table(
+            store,
+            settings,
+            "node_ownership",
+            OWNERSHIP_DDL,
+            ("unique_id", "resource_type", "name", "owner", "team", "tier", "matched_pattern"),
+            rows,
+        )

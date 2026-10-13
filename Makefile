@@ -24,13 +24,12 @@ RUN := $(UV) run
 COMPOSE ?= docker compose
 
 PYTEST_ARGS ?=
-# Database engines the docker-* targets start: the legacy sources and ClickHouse,
-# the pilot's warehouse. CI starts Postgres and ClickHouse and runs SQL Server in
-# its own on-demand job: make docker-test DOCKER_ENGINES="postgres clickhouse"
-DOCKER_ENGINES ?= postgres sqlserver clickhouse
+# The servers the docker-* targets start: the company's legacy Postgres (which
+# also holds the toolkit's ops store) and ClickHouse, its warehouse.
+DOCKER_ENGINES ?= postgres clickhouse
 
-.PHONY: help setup up down seed build simulate cost incidents reconcile \
-        dashboard readme-check test lint fmt clean pipeline demo check-env \
+.PHONY: help setup up down seed build company simulate cost incidents reconcile \
+        dashboard paused readme-check test lint fmt clean pipeline demo check-env \
         docker-build docker-up docker-demo docker-test docker-lint \
         docker-metadata-check docker-readme-check docker-dashboard \
         docker-browser-check docker-shell docker-clean
@@ -44,37 +43,46 @@ setup: ## Install Python dependencies and dbt packages
 	@if [ -f dbt/packages.yml ]; then $(RUN) dbt deps --project-dir dbt; \
 	else echo "no dbt/packages.yml yet, skipping dbt deps (phase 1)"; fi
 
-up: ## Start Docker services (postgres)
+up: ## Start Docker services (postgres, clickhouse)
 	@if [ ! -f .env ]; then \
 		echo "error: .env is missing. Run: cp .env.example .env"; exit 1; fi
-	$(COMPOSE) up -d --wait postgres
+	$(COMPOSE) up -d --wait postgres clickhouse
 
 down: ## Stop Docker services
-	$(COMPOSE) --profile sqlserver --profile clickhouse --profile app --profile dashboard --profile browser down
+	$(COMPOSE) --profile app --profile dashboard --profile browser down
 
-seed: ## Generate raw data for the simulated company
+seed: ## Seed the legacy Postgres, empty ClickHouse, backfill its raw layer
 	$(RUN) platform-ops seed
 
-build: ## Run dbt build
+build: ## Run dbt build on ClickHouse (add --full-refresh after a seed)
 	$(RUN) platform-ops build
 
-simulate: ## Run the workload generator over the simulated window
+company: ## Replay the company's window: daily data, ingestion, dbt builds
+	$(RUN) platform-ops company run
+
+# The 1.x modules below are paused in version 2.0 until their phase moves them
+# to ClickHouse; each command says so and exits 2. `make paused` lists them.
+simulate: ## Run the workload generator over the simulated window (paused)
 	$(RUN) platform-ops simulation run
 
-cost: ## Collect, price, attribute, write the cost report
+cost: ## Collect, price, attribute, write the cost report (paused)
 	$(RUN) platform-ops cost report
 
-incidents: ## Inject faults, detect and group incidents, write metrics
+incidents: ## Inject faults, detect and group incidents, write metrics (paused)
 	$(RUN) platform-ops incidents run
 
-reconcile: ## Run the migration scenario and the diff, write the sign-off report
+reconcile: ## Run the migration scenario and the diff, write the sign-off report (paused)
 	$(RUN) platform-ops reconcile run
 
-dashboard: ## Launch the Streamlit dashboards (read-only over the ops schema)
+dashboard: ## Launch the Streamlit dashboards (paused)
 	$(RUN) platform-ops dashboard
+
+paused: ## List the 1.x modules paused in version 2.0 and when each returns
+	$(RUN) platform-ops paused
 
 # Not part of `demo`: the README numbers come from the reference run, and a
 # first `make demo` on another machine should not fail on a documentation check.
+# Paused with the modules whose reports it reads: the README numbers are 1.x's.
 readme-check: ## Check every README results number against reports/ (after make demo)
 	$(RUN) python scripts/check_readme.py
 
@@ -100,17 +108,22 @@ clean: ## Remove generated data, reports and build artifacts
 	rm -rf .pytest_cache .ruff_cache .mypy_cache
 	find reports -type f ! -name .gitkeep -delete 2>/dev/null || true
 
-# `simulate` re-seeds and builds on its first simulated day, so `demo` needs no
-# separate `seed` and `build` steps.
-pipeline: simulate cost incidents reconcile ## Every module in order, on the current state
-	@echo "pipeline complete. Reports are in reports/."
+# Version 2.0, Phase 11a: the company runs on Postgres and ClickHouse, and the
+# ownership check and lineage run on its project. `company run` seeds and
+# builds itself, so `demo` needs no separate `seed` and `build` steps. The 1.x
+# modules return phase by phase; `paused` says which and when.
+pipeline: company ## Every module that runs in this phase, in order, on the current state
+	$(RUN) platform-ops metadata check
+	$(RUN) platform-ops metadata lineage
+	@$(RUN) platform-ops paused
+	@echo "pipeline complete."
 
 demo: clean setup up pipeline ## Full end to end run on a clean state
 
 # -- in the container ------------------------------------------------------------
 #
-# The same work inside the toolkit image (Dockerfile), next to Postgres and SQL
-# Server in Compose. No Python, uv or make on the host beyond this Makefile.
+# The same work inside the toolkit image (Dockerfile), next to Postgres and
+# ClickHouse in Compose. No Python, uv or make on the host beyond this Makefile.
 # Code changes need `make docker-build`; generated state lives on volumes.
 
 check-env:
@@ -121,7 +134,7 @@ docker-build: check-env ## Build the toolkit image
 	$(COMPOSE) build app
 
 docker-up: check-env ## Start the database engines for the container (DOCKER_ENGINES)
-	$(COMPOSE) --profile sqlserver --profile clickhouse up -d --wait $(DOCKER_ENGINES)
+	$(COMPOSE) up -d --wait $(DOCKER_ENGINES)
 
 docker-demo: docker-up ## Full end to end run in the container on a clean state
 	$(COMPOSE) run --rm app make clean pipeline

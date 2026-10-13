@@ -5,9 +5,9 @@
 -- dashboard was retired, but nobody removed the model, so it still builds nightly.
 with first_touch as (
     select
-        o.order_id,
-        o.net_amount,
-        s.campaign_id,
+        o.order_id as order_id,
+        o.net_amount as net_amount,
+        s.campaign_id as campaign_id,
         row_number() over (
             partition by o.order_id order by s.started_at, s.session_id
         ) as touch_rank

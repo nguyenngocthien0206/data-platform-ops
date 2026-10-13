@@ -3,9 +3,9 @@
 -- torn down with the POC environment and survived because it lives in dbt.
 select
     s.canonical_customer_id as customer_id,
-    s.lifetime_revenue,
-    s.order_count,
-    s.is_lapsed,
+    s.lifetime_revenue as lifetime_revenue,
+    s.order_count as order_count,
+    s.is_lapsed as is_lapsed,
     count(t.ticket_id) as support_tickets
 from {{ ref('int_customer_segments') }} s
 left join {{ ref('int_tickets_enriched') }} t

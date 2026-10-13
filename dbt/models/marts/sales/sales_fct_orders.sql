@@ -1,5 +1,6 @@
 -- The order fact every sales number is built from. Customer is the canonical
 -- person, so revenue per customer is not split across duplicate accounts.
+{{ config(order_by='order_id') }}
 select
     order_id,
     canonical_customer_id as customer_id,

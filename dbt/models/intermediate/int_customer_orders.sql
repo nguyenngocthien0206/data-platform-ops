@@ -1,3 +1,4 @@
+{{ config(order_by='canonical_customer_id') }}
 select
     canonical_customer_id,
     min(ordered_at) as first_order_at,

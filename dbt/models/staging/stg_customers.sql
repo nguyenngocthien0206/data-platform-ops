@@ -12,4 +12,4 @@ select
     coalesce(referral_source, 'unknown') as referral_source,
     signed_up_at,
     _loaded_at
-from {{ source('raw', 'customers') }}
+from {{ source('raw', 'customers') }} final

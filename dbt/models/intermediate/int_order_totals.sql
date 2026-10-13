@@ -1,3 +1,4 @@
+{{ config(order_by='order_id') }}
 select
     order_id,
     count(*) as item_lines,

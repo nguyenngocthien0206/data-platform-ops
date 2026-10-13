@@ -1,14 +1,13 @@
 """End to end: the migration scenario and its sign-off (SPEC Phase 4 acceptance).
 
-Three runs at scale 0.01:
+Two runs at scale 0.01:
 
 - DuckDB as the legacy engine, so the whole scenario is exercised without
   Docker (and in CI): every planted discrepancy is found and correctly
   classified, results land in ``ops``, and two runs write the same report;
-- Postgres through the real CLI, as ``make reconcile`` runs it (skipped when
-  Postgres is not reachable);
-- SQL Server, whose case-insensitive policy must treat the planted case change
-  as equal (skipped without the profile and driver).
+- Postgres through the real CLI, as ``make reconcile`` runs it. The command is
+  paused in version 2.0 until Phase 12 moves the scenario to ClickHouse, so
+  this one skips with that reason.
 """
 
 from __future__ import annotations
@@ -21,9 +20,9 @@ import duckdb
 import pytest
 from typer.testing import CliRunner
 
-from platform_ops.cli import app
+from platform_ops.cli import app, paused_reason
 from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings, load_settings
-from platform_ops.reconcile.run import ReconcileError, ReconcileResult, run_and_report
+from platform_ops.reconcile.run import ReconcileResult, run_and_report
 
 pytestmark = pytest.mark.integration
 
@@ -115,6 +114,7 @@ def test_two_runs_write_the_same_report(
 # -- real legacy engines ---------------------------------------------------------------
 
 
+@pytest.mark.skip(reason=paused_reason("reconcile"))
 def test_postgres_through_the_cli(
     tmp_path: Path, isolated_config: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -131,19 +131,3 @@ def test_postgres_through_the_cli(
     settings = load_settings(settings_path)
     engines = _query(settings, "SELECT DISTINCT engine FROM ops.reconcile_tables")
     assert engines == [("postgres",)]
-
-
-def test_sqlserver_folds_case_like_the_legacy_system(
-    tmp_path: Path, isolated_config: Callable[..., Path]
-) -> None:
-    pytest.importorskip("pymssql", reason="install with `uv sync --extra sqlserver`")
-    settings = _settings(tmp_path, isolated_config)
-    try:
-        _, result = run_and_report(settings, ["sqlserver"])
-    except ReconcileError as error:
-        pytest.skip(str(error))
-    for p in result.passes:
-        assert p.grade.recall == 1.0 and p.grade.classification_accuracy == 1.0
-        # The planted upper-casing of emails is equal under a case-insensitive policy.
-        assert p.grade.equivalent_under_policy == 8
-        assert "M4" not in p.grade.by_label

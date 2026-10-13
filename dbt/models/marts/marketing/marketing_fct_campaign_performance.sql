@@ -1,12 +1,13 @@
 -- Lifetime performance per campaign. Return on ad spend uses last-touch
 -- attributed revenue, which is the definition marketing and finance agreed on.
+{{ config(order_by='campaign_id') }}
 select
-    c.campaign_id,
-    c.campaign_name,
-    c.channel,
-    c.start_date,
-    c.end_date,
-    c.budget,
+    c.campaign_id as campaign_id,
+    c.campaign_name as campaign_name,
+    c.channel as channel,
+    c.start_date as start_date,
+    c.end_date as end_date,
+    c.budget as budget,
     coalesce(sum(p.spend), 0) as spend,
     coalesce(sum(p.impressions), 0) as impressions,
     coalesce(sum(p.clicks), 0) as clicks,

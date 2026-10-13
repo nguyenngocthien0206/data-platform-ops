@@ -1,3 +1,4 @@
+{{ config(order_by='order_id') }}
 select
     order_id,
     ordered_at,

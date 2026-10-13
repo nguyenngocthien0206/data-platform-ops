@@ -27,6 +27,9 @@ class _Strict(BaseModel):
 
 class Paths(_Strict):
     duckdb: Path
+    # Version 2.0: the generator's scratch database. The raw data is still
+    # generated in DuckDB, then copied into the company's legacy Postgres.
+    generator: Path = Path("data/generator.duckdb")
     reports: Path
     iceberg_warehouse: Path
     dbt_project: Path
@@ -161,7 +164,7 @@ class IncidentSettings(_Strict):
     lifecycle: LifecycleSettings
 
 
-Engine = Literal["postgres", "sqlserver", "duckdb"]
+Engine = Literal["postgres", "duckdb"]
 DiscrepancyClass = Literal[
     "missing_in_target",
     "extra_in_target",
@@ -220,7 +223,6 @@ class ReconcileSettings(_Strict):
     rows: dict[Literal["customers", "orders", "payments"], Annotated[int, Field(gt=0)]]
     legacy_year: Annotated[int, Field(ge=2000, le=2100)]
     legacy_timezone: str
-    legacy_timezone_windows: str
     fanout: Annotated[int, Field(ge=2, le=256)]
     leaf_width: Annotated[int, Field(ge=1)]
     rounding_tolerance: Annotated[float, Field(ge=0)]
@@ -235,6 +237,40 @@ class ReconcileSettings(_Strict):
         return self
 
 
+class CompanySettings(_Strict):
+    """Version 2.0: the simulated company on legacy Postgres and ClickHouse.
+
+    Connection details (hosts, ports, users, passwords) come from the
+    environment or ``.env``, never from this file. Every schema and database
+    name below is prefixed with ``namespace``, so tests can run side by side
+    with the demo on the same servers without touching its data.
+    """
+
+    namespace: str = ""
+    # Legacy Postgres: operational tables, and the hand-written reports.
+    legacy_schema: str = "app"
+    reporting_schema: str = "reporting"
+    # ClickHouse: the raw layer the ingestion fills; dbt's own databases are
+    # named after its layers (staging, intermediate, marts).
+    raw_database: str = "raw"
+    # The toolkit's own results, in a Postgres database next to the legacy one.
+    ops_database: str = "platform_ops"
+    ops_schema: str = "ops"
+    # How ClickHouse reaches Postgres. The postgresql() table function runs on
+    # the ClickHouse server, so this is Postgres's address inside Docker.
+    postgres_from_clickhouse: str = "postgres:5432"
+    # Each load re-reads this much before the watermark, so a row committed
+    # late with an older updated_at is not lost; ReplacingMergeTree keeps the
+    # latest version of anything read twice.
+    ingest_overlap_minutes: Annotated[int, Field(ge=0)] = 60
+    # dbt builds on this cadence over the simulated window, and on its last day.
+    build_every_days: Annotated[int, Field(ge=1)] = 28
+
+    def name(self, base: str) -> str:
+        """A schema or database name with the namespace applied."""
+        return f"{self.namespace}{base}"
+
+
 class Settings(_Strict):
     seed: int
     scale_factor: Annotated[float, Field(gt=0)]
@@ -247,6 +283,7 @@ class Settings(_Strict):
     incidents: IncidentSettings
     reconcile: ReconcileSettings
     metadata: MetadataSettings
+    company: CompanySettings = Field(default_factory=CompanySettings)
 
     # Directory the config file was found in, used to resolve relative paths.
     root: Path = Field(default=Path(), exclude=True)

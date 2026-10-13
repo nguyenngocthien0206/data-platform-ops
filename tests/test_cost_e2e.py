@@ -22,13 +22,14 @@ import duckdb
 import pytest
 from typer.testing import CliRunner
 
-from platform_ops.cli import app
+from platform_ops.cli import app, paused_reason
 from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings, load_settings
 from platform_ops.common.dbt_invoke import invocation_from_settings
 from platform_ops.metadata.lineage import build_graph, downstream
 from platform_ops.metadata.manifest import Node, load_manifest
 
-pytestmark = pytest.mark.integration
+# Version 2.0: the module reads the 1.x DuckDB warehouse until its phase moves it.
+pytestmark = [pytest.mark.integration, pytest.mark.skip(reason=paused_reason("cost"))]
 
 runner = CliRunner()
 

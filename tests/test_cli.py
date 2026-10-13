@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from platform_ops import __version__
-from platform_ops.cli import app
+from platform_ops.cli import PAUSED_UNTIL, app
 
 runner = CliRunner()
 
@@ -14,6 +14,8 @@ runner = CliRunner()
 MAKEFILE_COMMANDS: list[list[str]] = [
     ["seed"],
     ["build"],
+    ["company", "run"],
+    ["paused"],
     ["simulation", "run"],
     ["cost", "report"],
     ["incidents", "run"],
@@ -25,7 +27,7 @@ MAKEFILE_COMMANDS: list[list[str]] = [
 def test_help_exits_zero_and_lists_every_command_group() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for group in ("metadata", "simulation", "cost", "incidents", "reconcile"):
+    for group in ("metadata", "company", "simulation", "cost", "incidents", "reconcile"):
         assert group in result.output
     for command in ("seed", "build", "dashboard", "version"):
         assert command in result.output
@@ -49,3 +51,33 @@ def test_every_makefile_command_is_built_and_documented(command: list[str]) -> N
     result = runner.invoke(app, [*command, "--help"])
     assert result.exit_code == 0
     assert "not implemented" not in result.output.lower()
+
+
+# Version 2.0: each 1.x module that has not moved yet, with the command that runs it.
+PAUSED_COMMANDS = {
+    "simulation": ["simulation", "run"],
+    "cost": ["cost", "report"],
+    "incidents": ["incidents", "run"],
+    "reconcile": ["reconcile", "run"],
+    "dashboard": ["dashboard"],
+}
+
+
+def test_every_paused_module_has_its_command() -> None:
+    assert set(PAUSED_COMMANDS) == set(PAUSED_UNTIL)
+
+
+@pytest.mark.parametrize("module", sorted(PAUSED_COMMANDS))
+def test_a_paused_command_exits_2_and_names_the_phase_it_returns_in(module: str) -> None:
+    """Before reading any settings or data: the 1.x warehouse it needs is gone."""
+    result = runner.invoke(app, PAUSED_COMMANDS[module])
+    assert result.exit_code == 2
+    assert f"returns in Phase {PAUSED_UNTIL[module]}" in result.output
+    assert "v1.2.0" in result.output
+
+
+def test_paused_lists_every_paused_module() -> None:
+    result = runner.invoke(app, ["paused"])
+    assert result.exit_code == 0
+    for module, phase in PAUSED_UNTIL.items():
+        assert f"{module:<12} paused, returns in Phase {phase}" in result.output

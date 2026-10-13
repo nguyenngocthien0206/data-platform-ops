@@ -16,7 +16,7 @@ from platform_ops.reconcile.run import PassResult, ReconcileResult
 from platform_ops.reconcile.schema import TABLES
 from platform_ops.simulation.migration_faults import CATALOGUE
 
-ENGINE_LABEL = {"postgres": "Postgres", "sqlserver": "SQL Server", "duckdb": "DuckDB"}
+ENGINE_LABEL = {"postgres": "Postgres", "duckdb": "DuckDB"}
 PASS_LABEL = {
     "as_delivered": "the job as delivered",
     "fixed": "the job after fixing D1 to D4",

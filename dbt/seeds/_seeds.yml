@@ -1,0 +1,10 @@
+version: 2
+
+seeds:
+  - name: country_codes
+    description: >
+      The countries the company sells in, with the name and sales region the
+      business reports by. Maintained by hand by the data platform team.
+    columns:
+      - name: country
+        data_tests: [unique, not_null]

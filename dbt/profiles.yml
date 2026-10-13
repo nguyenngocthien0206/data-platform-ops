@@ -1,10 +1,26 @@
-# The warehouse path comes from platform-ops, which reads it from
-# config/settings.yaml, so there is one source of truth for where data lives.
+# The company's warehouse: self-managed ClickHouse (version 2.0). platform-ops
+# sets the CLICKHOUSE_* variables from its own settings for every invocation,
+# so dbt and the toolkit always point at the same server.
+#
+# Two settings make ClickHouse read the models as standard SQL, which is how
+# they were written: join_use_nulls (an outer join returns NULL for a missing
+# row, not the column type's default) and union_default_mode (a bare UNION
+# means UNION DISTINCT). ClickHouse also lets a SELECT alias shadow a column of
+# the same name anywhere in the query; the models qualify such a column with
+# its table instead (prefer_column_name_to_alias would also fix it, but it
+# breaks dbt-clickhouse's own metadata queries).
 company:
   target: local
   outputs:
     local:
-      type: duckdb
-      path: "{{ env_var('PLATFORM_OPS_DUCKDB_PATH') }}"
-      schema: main
+      type: clickhouse
+      driver: http
+      host: "{{ env_var('CLICKHOUSE_HOST', 'localhost') }}"
+      port: "{{ env_var('CLICKHOUSE_PORT', '8123') | int }}"
+      user: "{{ env_var('CLICKHOUSE_USER', 'platform_ops') }}"
+      password: "{{ env_var('CLICKHOUSE_PASSWORD', 'change_me_locally') }}"
+      schema: "{{ var('namespace', '') }}staging"
       threads: 8
+      custom_settings:
+        join_use_nulls: 1
+        union_default_mode: DISTINCT

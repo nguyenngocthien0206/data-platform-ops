@@ -6,4 +6,4 @@ select
     impressions,
     clicks,
     _loaded_at
-from {{ source('raw', 'marketing_spend') }}
+from {{ source('raw', 'marketing_spend') }} final

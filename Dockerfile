@@ -1,9 +1,11 @@
 # The toolkit in a container, so it runs the same way on any machine with Docker
 # and no longer depends on the host's Python, uv or security policies.
 #
-# The code is baked into the image. Generated state (the DuckDB warehouse, the
-# Iceberg warehouse, dbt's target and logs) lives on named volumes declared in
-# docker-compose.yml, and reports/ is bind-mounted so they show up on the host.
+# The code is baked into the image. Generated state (the data generator's
+# scratch file, the 1.x DuckDB and Iceberg warehouses, dbt's target and logs)
+# lives on named volumes declared in docker-compose.yml, and reports/ is
+# bind-mounted so they show up on the host. The company's data itself lives in
+# the Postgres and ClickHouse services.
 # Build and run it through the docker-* make targets.
 
 FROM python:3.11.16-slim-bookworm
@@ -31,15 +33,14 @@ RUN useradd --create-home --uid 1000 app
 WORKDIR /app
 
 # Dependencies first, in their own layer, so a code change only recopies the
-# code. The SQL Server driver, dbt-clickhouse for the ClickHouse fixture project,
-# and the dev tools (tests, lint) are included.
+# code. The dev tools (tests, lint) are included.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --extra sqlserver --extra clickhouse --no-install-project
+    uv sync --frozen --no-install-project
 
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --extra sqlserver --extra clickhouse \
+    uv sync --frozen \
     && mkdir -p data warehouse reports dbt/target dbt/logs \
     && chown -R app:app /app
 

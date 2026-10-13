@@ -1,14 +1,15 @@
 -- Last-touch attribution: an order is credited to the most recent campaign
 -- session by the same person in the seven days before the order. This replaced
 -- the first-touch model in 2025-06 (abandoned/marketing_fct_campaign_attribution_v1).
+{{ config(order_by='order_id') }}
 with touches as (
     select
-        o.order_id,
-        o.ordered_at,
-        o.net_amount,
-        s.session_id,
-        s.campaign_id,
-        s.campaign_channel,
+        o.order_id as order_id,
+        o.ordered_at as ordered_at,
+        o.net_amount as net_amount,
+        s.session_id as session_id,
+        s.campaign_id as campaign_id,
+        s.campaign_channel as campaign_channel,
         s.started_at as touch_at,
         row_number() over (
             partition by o.order_id order by s.started_at desc, s.session_id desc

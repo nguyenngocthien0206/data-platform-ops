@@ -3,8 +3,8 @@
 -- marketing analytics in 2025-03 and now uses the all-channel campaign
 -- performance mart. This one kept building.
 select
-    c.campaign_id,
-    c.campaign_name,
+    c.campaign_id as campaign_id,
+    c.campaign_name as campaign_name,
     sum(s.spend) as spend,
     sum(s.clicks) as clicks,
     round(sum(s.clicks) / nullif(sum(s.impressions), 0), 4) as click_through_rate

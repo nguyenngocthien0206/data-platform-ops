@@ -1,3 +1,4 @@
+{{ config(order_by='revenue_month') }}
 select
     cast(date_trunc('month', recognized_at) as date) as revenue_month,
     count(*) as orders,

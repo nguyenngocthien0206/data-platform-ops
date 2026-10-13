@@ -1,13 +1,14 @@
 -- Does every order that should have been paid have its payment? Payments cover
 -- the goods total, so they are compared with the gross amount, not the net.
+{{ config(order_by='order_id') }}
 select
-    o.order_id,
-    o.ordered_at,
-    o.order_date,
+    o.order_id as order_id,
+    o.ordered_at as ordered_at,
+    o.order_date as order_date,
     o.status as order_status,
-    o.channel,
-    o.gross_amount,
-    o.net_amount,
+    o.channel as channel,
+    o.gross_amount as gross_amount,
+    o.net_amount as net_amount,
     coalesce(p.paid_amount, 0) as paid_amount,
     coalesce(p.refunded_amount, 0) as refunded_amount,
     coalesce(p.payment_count, 0) as payment_count,

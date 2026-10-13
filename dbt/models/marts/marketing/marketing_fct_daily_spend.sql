@@ -1,3 +1,4 @@
+{{ config(order_by='(activity_date, channel)') }}
 select
     activity_date,
     channel,

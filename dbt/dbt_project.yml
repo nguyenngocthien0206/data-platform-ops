@@ -1,11 +1,15 @@
-# The simulated company. Every model is a full-refresh table so that each node
-# has a real storage size and a real build cost for the cost module to price.
+# The simulated company's analytics on ClickHouse (version 2.0). Staging is views
+# over the raw layer; every other model is a MergeTree table sorted by its key,
+# so each node has a real storage size and a real build cost to price, and the
+# large event tables are incremental by month.
 name: company
 version: "1.0.0"
 config-version: 2
 profile: company
 
 model-paths: [models]
+seed-paths: [seeds]
+snapshot-paths: [snapshots]
 macro-paths: [macros]
 test-paths: [tests]
 target-path: target
@@ -15,11 +19,13 @@ flags:
   # The toolkit runs offline after setup, so dbt must not phone home.
   send_anonymous_usage_stats: false
 
-# Every query dbt issues carries the node it belongs to, appended as a JSON
-# comment, so the cost module can join query history back to models and owners.
+# Every query dbt issues carries the node it belongs to as a JSON comment, so
+# the cost module can join ClickHouse's query log back to models and owners. It
+# goes first, not last: a seed's INSERT carries its CSV rows inline, and a
+# trailing comment would be read as one more row.
 query-comment:
   comment: "{{ tojson({'app': 'platform-ops', 'unique_id': (node.unique_id if node is not none else none)}) }}"
-  append: true
+  append: false
 
 vars:
   # Supplied by platform-ops from config/settings.yaml. Used by the row count
@@ -29,15 +35,40 @@ vars:
 
 models:
   company:
+    # Tables are MergeTree, sorted by the model's own key (set in each model's
+    # config, taken from its unique test); a model without one, such as the
+    # abandoned ones nobody tuned, keeps the unsorted default. The large event
+    # tables are incremental, replacing monthly partitions (see the models).
     +materialized: table
+    +engine: MergeTree()
     staging:
       +schema: staging
+      # Views over the raw ReplacingMergeTree tables, read with FINAL: one row
+      # per key, the latest version, without storing the data twice.
+      +materialized: view
     intermediate:
       +schema: intermediate
+      # Keys may be nullable: the legacy columns are, and the keys derive from
+      # them (a payment's order_id, an order's time). Tables only, not views.
+      +settings:
+        allow_nullable_key: 1
     marts:
       +schema: marts
+      # Keys may be nullable: the legacy columns are, and the keys derive from
+      # them (a payment's order_id, an order's time). Tables only, not views.
+      +settings:
+        allow_nullable_key: 1
     # Abandoned models live alongside the real marts on purpose. Nothing marks
     # them as dead except that nobody reads them, which is exactly how waste
     # hides in a real warehouse.
     abandoned:
       +schema: marts
+      # Keys may be nullable: the legacy columns are, and the keys derive from
+      # them (a payment's order_id, an order's time). Tables only, not views.
+      +settings:
+        allow_nullable_key: 1
+
+seeds:
+  company:
+    # Reference data the business maintains by hand.
+    +schema: reference
