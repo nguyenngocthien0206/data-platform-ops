@@ -319,6 +319,44 @@ def metadata_check(
     typer.echo(f"metadata check passed; ops.node_ownership has {rows} rows")
 
 
+INIT_MANIFEST_OPTION = typer.Option(..., "--manifest", help="The project's manifest.json.")
+OUT_OPTION = typer.Option(
+    Path("ownership"), "--out", help="Folder to write teams.yaml and ownership.yaml into."
+)
+FORCE_OPTION = typer.Option(False, "--force", help="Overwrite a registry that already exists.")
+
+
+@metadata_app.command("init-registry")
+def metadata_init_registry(
+    manifest: Path = INIT_MANIFEST_OPTION,
+    out: Path = OUT_OPTION,
+    force: bool = FORCE_OPTION,
+) -> None:
+    """Write a starter registry from a manifest: one TODO rule per group of datasets.
+
+    Groups are a source system, a folder of models, an installed package, the
+    seeds, the snapshots and each exposure, so the first `metadata check` lists
+    one TODO per rule instead of one per dataset.
+    """
+    from platform_ops.metadata.bootstrap import starter_rules, write_registry
+    from platform_ops.metadata.manifest import load_manifest, project_name
+
+    configure_logging()
+    try:
+        nodes = load_manifest(manifest)
+        root_project = project_name(manifest)
+        written = write_registry(nodes, root_project, out, force)
+    except (FileNotFoundError, FileExistsError, ValueError) as error:
+        _fail(f"init-registry cannot run: {error}", EXIT_UNUSABLE)
+    rules = starter_rules(nodes, root_project)
+    for path in written:
+        typer.echo(f"wrote {path}")
+    typer.echo(
+        f"{len(rules)} rules with owner TODO; fill in teams.yaml and the rules, then run "
+        "`platform-ops metadata check --report-only` to see what is left"
+    )
+
+
 @metadata_app.command("lineage")
 def metadata_lineage(parse: bool = PARSE_OPTION) -> None:
     """Build the lineage graph and persist its edges to ops.lineage_edges."""

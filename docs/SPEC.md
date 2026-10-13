@@ -338,7 +338,7 @@ From here the toolkit is adopted by the teams inside the company. The owner's de
 - **Internal only, not open source.** Only the company's stack is supported: Snowflake, BigQuery or ClickHouse as the warehouse, dbt run from Airflow and from Dagster, alerts to Slack or Telegram.
 - **One module per phase, lowest integration cost first:** ownership, then incidents, then cost for one engine. Reconciliation waits until the company has a migration.
 - **Shared state lives in one Postgres database** for the toolkit, the same whatever the warehouse.
-- **Airflow and Dagster are supported through thin, optional integrations** in this repo (`platform-ops[airflow]`, `platform-ops[dagster]`). The core stays a CLI and a Python API, and the toolkit never becomes an orchestrator.
+- **Airflow (through Cosmos) and Dagster (through dagster-dbt) are supported through thin integrations** in this repo that import neither orchestrator. The core stays a CLI and a Python API, and the toolkit never becomes an orchestrator.
 
 The simulated company, `make demo` and the test suite stay local, offline and deterministic. They remain the regression test for every module, and nothing in Phases 10 to 12 may change their reports. Code that talks to company systems sits behind the existing interfaces, is never needed by `make demo` or `make test`, and reads credentials only from the environment.
 
@@ -364,16 +364,19 @@ The toolkit repository stays public and holds only code and the demo. The compan
 
 ## Phase 11: Incidents on real dbt runs
 
-Turn the company's failing dbt checks into one incident per root cause, routed to the right owner, instead of one alert per failure.
+Turn the company's failing dbt checks into one incident per root cause, routed to the right owner, instead of one alert per failure. The company runs dbt from Airflow through Cosmos (one dbt invocation per model) and from Dagster through dagster-dbt.
 
-- `platform-ops incidents ingest` reads the artifacts of one dbt invocation (`run_results.json`, `sources.json`, `manifest.json`) from any adapter, and runs the existing ingestion, grouping, severity and routing.
-- Incident state in the shared Postgres database (open incidents, appends, pages sent), safe when several Airflow or Dagster workers ingest at the same time, with its schema versioned.
-- Lifecycle for real runs: open on a new root failure, append when it fails again, resolve automatically when a later run passes the root's checks. Acknowledgement stays optional.
-- Notifiers: the existing Slack webhook, and Telegram (bot token and chat from the environment), chosen per team from `teams.yaml`.
-- Integrations as optional extras: for Airflow, a callback or operator to add after the dbt task; for Dagster, a sensor or hook after the dbt assets run. Both call the same ingest.
+- `platform-ops incidents ingest` reads the artifacts of one dbt invocation (`run_results.json`, `sources.json`, `manifest.json`) from any adapter, and runs the existing ingestion, grouping, severity and routing. Many invocations that share an orchestrator run id form one run, and the run is regrouped on every ingest, so Cosmos's per-model invocations group like a single `dbt build`. Ingesting the same results twice changes nothing.
+- Incident state in the shared Postgres database (runs, check events, open incidents, appends, notifications), safe when several Airflow or Dagster workers ingest at the same time, with its schema versioned.
+- Lifecycle for real runs: open on a new root failure, append when it fails again, resolve automatically when a later run shows the root healthy (its model ran and every test on it passed, or its source is fresh again). A run that did not cover the root never resolves it. Acknowledgement stays optional.
+- Severity without the demo's settings: thresholds and tier weights from an optional `incidents.yaml` next to the registry, defaulting to the demo's values.
+- Notifiers, chosen per team from `teams.yaml`: Slack through a bot token (`chat.postMessage` to the team's `channel`) and Telegram through a bot token (to the team's `telegram_chat`). Notifications are sent only after the incident is committed, and their delivery is recorded.
+- Integrations in this repository that import neither orchestrator: a callback for Cosmos's per-task hook, and a helper to call inside a dagster-dbt `@dbt_assets` function after the dbt invocation. Both call the same ingest with the orchestrator's run id.
+- Dashboards for real data: the Streamlit app gains a live mode that reads the shared Postgres database, starting with a live Incidents page (open incidents by severity, team and owner, opened and resolved per week, MTTR by severity, pages per person per week against failing checks, a timeline). The demo keeps reading its DuckDB.
+- `platform-ops incidents summary` prints failing checks against pages per person and week from the store: the pilot's before-and-after number.
 - The simulated 21-day scenario keeps running through the same code path and stays the regression test, with its ground truth.
 
-**Acceptance:** fixture artifacts from Snowflake, BigQuery and ClickHouse dbt runs ingest into the same incidents the grouping rules predict. An example Airflow DAG and an example Dagster job ingest a failing run end to end against a local Postgres. Slack and Telegram messages are rendered and sent through a test double. `make demo` reports are byte-identical. The pilot team runs it; the pages per person per week before and after are recorded.
+**Acceptance:** fixture artifacts from Snowflake, BigQuery and ClickHouse dbt runs ingest into the same incidents the grouping rules predict. Several Cosmos-style partial invocations of one run group like a single build. On the ClickHouse fixture project with the shared Postgres store, a failing build opens one incident paged to the source owner and the next clean build resolves it, end to end. The integrations are tested with fakes of the Cosmos callback and the dagster-dbt invocation, without installing Airflow or Dagster. Slack and Telegram messages are rendered and sent through a test double. The live dashboard renders against a seeded store. `make demo` reports are byte-identical. The pilot team runs it; the pages per person per week before and after are recorded.
 
 ---
 

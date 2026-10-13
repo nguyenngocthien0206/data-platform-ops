@@ -6,10 +6,10 @@ Last updated: 2026-09-29
 
 ## Current phase
 
-Phase 10: Ownership in the company's dbt CI. Implemented, waiting for owner review, then the `v1.1.0` tag.
-Branch: `phase-10-ownership-ci` (off `main` at `1bb96d7`).
+Between Phases 10 and 11: the registry bootstrap (1.2.0), implemented, waiting for owner review, then the `v1.2.0` tag.
+Branch: `registry-bootstrap` (off `main` at `dc46628`).
 
-Phases 0 to 9 are done and released as 1.0.0. Phase 10 prepares 1.1.0.
+Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0. Phase 11 (incidents on real dbt runs) is planned, not started.
 
 ## Done
 
@@ -67,6 +67,13 @@ Phases 0 to 9 are done and released as 1.0.0. Phase 10 prepares 1.1.0.
 - Phase 10 verification, from a fresh clone of the branch plus the uncommitted files: `make docker-build` 104 s, `make docker-lint` 61 s, `make docker-metadata-check` 12 s (the demo still 9 sources, 118 models, 12 exposures, 139 rows), `make docker-test` with Postgres, ClickHouse and SQL Server 7 min 4 s, 327 passed and nothing skipped. `make docker-clean docker-demo` 6 min 58 s, reports byte-identical to the Phase 7 baseline. The example's `docker run` line, run from the built image as another user on a read-only mount of the parsed fixture: exit 0 on its registry, exit 1 with a repository-relative annotation when a rule is removed, exit 0 with `--report-only` (summary 24 of 25 owned, 0.96). actionlint found nothing in the example and the three workflows. Native `make lint` 3 s warm.
 - Phase 10 merged (PR #12).
 - Fix after Phase 10 (branch `fix-make-shell-on-windows`): `make` run from PowerShell or cmd failed with `! was unexpected at this time.`, because `SHELL := /usr/bin/env bash` only resolves inside Git Bash, so GNU make on Windows fell back to cmd.exe (the `bash.exe` on PATH was WSL's). On Windows the Makefile now runs recipes with Git for Windows' bash (`GIT_BASH`, default `C:/Program Files/Git/bin/bash.exe`, overridable). Verified from PowerShell (`check-env`, `help`, `make -n docker-demo`, a real `make docker-build`) and from Git Bash; Git's bash resolves Git's `find`, `grep` and `awk` and Docker Desktop's `docker`. The README states the Windows requirement.
+- Phase 10 released: `v1.1.0` tagged and published (release workflow passed, image on GHCR). The Windows `make` fix merged (PR #13).
+- Registry bootstrap implemented (branch `registry-bootstrap`, release 1.2.0):
+  - `platform-ops metadata init-registry --manifest ... --out ownership/` writes `teams.yaml` (a commented example team) and `ownership.yaml` with one `TODO` rule per group: each source system, each folder of models split by name-token prefix until a prefix matches only that group (`fct_*`, `rpt_revenue_*`), each installed package, the seeds, the snapshots, and each exposure with its dbt owner. Every dataset matches exactly one rule and no two tie. Deterministic; never overwrites without `--force`. New module `metadata/bootstrap.py`.
+  - Coverage and the summary's `owned_share` now count a dataset as owned only when its rule names a real team and member, so a starter registry reads 0%. The bundled project is unaffected (no rule problems).
+  - A step-by-step rollout guide in the metadata README; the GitHub Actions example points at it and pulls 1.2.0.
+  - SPEC Phase 11 rewritten for the owner's decisions (below), including the live dashboard and the changed acceptance.
+- Registry bootstrap verification, from a fresh clone of the branch plus the uncommitted files: `make docker-build` 92 s, `make docker-lint` 60 s, `make docker-test` with Postgres, ClickHouse and SQL Server 7 min 10 s, 334 passed and nothing skipped. `init-registry` from the built image on the ClickHouse fixture: 25 datasets as 17 rules, and the check then reports 0 of 25 owned with 17 errors, one per rule. On the bundled project: 139 datasets as 63 rules, every dataset matched by exactly one. Filling in the TODOs makes the check pass (tested). `make docker-clean docker-demo` 7 min 2 s, reports byte-identical to the Phase 7 baseline.
 - Phase 6 implemented: broader lint rules on and clean; `# fmt: skip` noise removed; module boundaries fixed and pinned by `tests/test_architecture.py`; shared helpers in `common` (`markdown.table`, `db.replace_table`, `hashing.stable_hash`, `sandbox.write_isolated_config`); dead code removed; stale docstrings rewritten; new tests for the Slack post and the dashboard command; a shared `full_warehouse` test fixture. 22 findings recorded with decisions in `docs/review/phase-6-review.md`.
 - Phase 6 acceptance: a clean `make demo` wrote byte-identical reports to the baseline (excluding `cost_proxy_accuracy.md`, non-deterministic by design); `make readme-check` 178 of 178; test suite 9 min 50 s on `main` against 6 min 24 s on the branch, same machine and session (305 passed, 3 skipped). The 5-minute target was not reached; the floor is the independent runs the determinism tests need.
 - Phase 5 acceptance, from a fresh clone of the branch: `make setup && make up && make demo && make readme-check` passed in 7 min 41 s with byte-identical reports; the dashboards served every page.
@@ -75,9 +82,17 @@ Phases 0 to 9 are done and released as 1.0.0. Phase 10 prepares 1.1.0.
 
 ## In progress
 
-Nothing. Phase 10 is waiting for the owner's review.
+Nothing. The registry bootstrap is waiting for the owner's review.
 
 ## Decisions made
+
+### Before Phase 11 (owner, 2026-10-13)
+
+1. **The rollout gets a starter registry command** before Phase 11 (`init-registry`, release 1.2.0: a new command is a minor version).
+2. **Dashboards for real data are part of Phase 11**: a live mode of the Streamlit app reading the shared Postgres store, starting with incidents. The demo keeps DuckDB.
+3. **Slack through a bot token** (`chat.postMessage` to the team's `channel`), Telegram through a bot token to the team's `telegram_chat`.
+4. **The company runs dbt with Airflow + Cosmos and Dagster + dagster-dbt.** Cosmos runs one dbt invocation per model, so ingest regroups a whole orchestrator run on every call.
+5. **The integrations import neither orchestrator** and are tested with fakes plus a real end-to-end ingest; the SPEC's acceptance was changed to match.
 
 ### Phase 10 (owner, at planning)
 
@@ -282,12 +297,13 @@ None open.
 
 ## Next step
 
-The owner reviews and merges Phase 10 (`phase-10-ownership-ci`); CI on the pull request now runs ClickHouse. Then tag from `main`:
+1. The owner reviews and merges `registry-bootstrap`, then tags `v1.2.0` from `main`:
 
-```bash
-git switch main && git pull
-git tag -a v1.1.0 -m "data-platform-ops 1.1.0"
-git push origin v1.1.0
-```
+   ```bash
+   git switch main && git pull
+   git tag -a v1.2.0 -m "data-platform-ops 1.2.0"
+   git push origin v1.2.0
+   ```
 
-After the release: copy `examples/github-actions/ownership-check.yml` into the pilot repository with the registry in `ownership/`, run it with `REPORT_ONLY: "true"`, record the baseline from the `ownership-summary` artifact, complete the registry, then set `REPORT_ONLY: "false"` and make the job required. Then Phase 11 (incidents on real dbt runs), when the owner says to start.
+2. Pilot rollout, following "Rolling out on a repository" in the metadata README: `init-registry` in the data platform team's dbt repository, owners for sources and staging first, the workflow with `REPORT_ONLY: "true"`, the baseline from the summary artifact recorded here (numbers only, no company names).
+3. Phase 11 (incidents on real dbt runs) when the owner says "Implement Phase 11". Its detailed plan is approved in outline: `incidents ingest` with run-level regrouping, a versioned Postgres store with an advisory lock per project, auto-resolve only for roots a run covered, Slack and Telegram bot notifiers sent after commit, duck-typed Cosmos and dagster-dbt integrations, a live Incidents dashboard, `incidents summary`, ADR 0015, release 1.3.0. Open questions to settle then: whether the pilot starts with paging off (store and dashboard only) for a week, and who owns the shared Postgres.

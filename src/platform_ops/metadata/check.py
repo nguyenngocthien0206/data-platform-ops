@@ -59,9 +59,17 @@ def _suggested_rule(node: Node) -> str:
     )
 
 
+def _valid(resolution: Resolution, broken: set[str]) -> bool:
+    return resolution.owned and resolution.rule is not None and resolution.rule.match not in broken
+
+
 def run_check(registry: Registry, nodes: dict[str, Node]) -> CheckReport:
     report = CheckReport()
-    for rule, message in registry.rule_problems():
+    problems = registry.rule_problems()
+    # A dataset only counts as owned when its rule names a real team and member,
+    # so a starter registry full of TODOs reads as 0% owned, not 100%.
+    broken = {rule.match for rule, _ in problems}
+    for rule, message in problems:
         report.error_findings.append(
             Finding(message, rule=rule.match, fix="fix the rule, or the team in teams.yaml")
         )
@@ -114,7 +122,7 @@ def run_check(registry: Registry, nodes: dict[str, Node]) -> CheckReport:
 
     for resource_type in OWNED_TYPES:
         of_type = [n for n in owned_nodes if n.resource_type == resource_type]
-        owned = sum(1 for n in of_type if report.resolutions[n.unique_id].owned)
+        owned = sum(1 for n in of_type if _valid(report.resolutions[n.unique_id], broken))
         report.coverage[resource_type] = (owned, len(of_type))
     return report
 

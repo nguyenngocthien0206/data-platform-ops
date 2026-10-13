@@ -261,6 +261,42 @@ def test_an_invalid_registry_exits_2(check: Callable[..., tuple[int, str, Path]]
     assert "metadata check cannot run" in output
 
 
+def test_init_registry_writes_a_starter_that_the_check_turns_into_a_todo_list(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(CONFIG_PATH_ENV_VAR, str(tmp_path / "no-settings.yaml"))
+    manifest = str(project / "target" / "manifest.json")
+    out = tmp_path / "ownership"
+    result = runner.invoke(
+        app, ["metadata", "init-registry", "--manifest", manifest, "--out", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    rules = yaml.safe_load((out / "ownership.yaml").read_text(encoding="utf-8"))["datasets"]
+    assert len(rules) < 25
+
+    check = ["metadata", "check", "--manifest", manifest, "--registry-dir", str(out)]
+    todo = runner.invoke(app, [*check, "--report-only", "--summary-json", str(tmp_path / "s.json")])
+    assert todo.exit_code == 0
+    summary = json.loads((tmp_path / "s.json").read_text(encoding="utf-8"))
+    assert (summary["owned"], summary["total"], len(summary["errors"])) == (0, 25, len(rules))
+
+    # Filling in the TODOs is all it takes to pass.
+    for rule in rules:
+        rule["team"] = "platform"
+        if rule["owner"] == "TODO":
+            rule["owner"] = "an"
+    (out / "ownership.yaml").write_text(yaml.safe_dump({"datasets": rules}), encoding="utf-8")
+    team = {"id": "platform", "name": "P", "channel": "#p", "members": ["an", "linh", "quan"]}
+    (out / "teams.yaml").write_text(yaml.safe_dump({"teams": [team]}), encoding="utf-8")
+    done = runner.invoke(app, check)
+    assert done.exit_code == 0, done.output
+
+    again = runner.invoke(
+        app, ["metadata", "init-registry", "--manifest", manifest, "--out", str(out)]
+    )
+    assert again.exit_code == 2 and "--force" in again.output
+
+
 # -- a real run on ClickHouse -------------------------------------------------------
 
 

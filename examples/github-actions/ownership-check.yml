@@ -6,6 +6,9 @@
 # The toolkit runs from its public image and reads the manifest that `dbt parse`
 # writes, so the job needs no warehouse access and no secret.
 #
+# Start the registry with `platform-ops metadata init-registry`, which writes one
+# TODO rule per group of datasets (see the toolkit's metadata README).
+#
 # Roll it out in two steps. First keep REPORT_ONLY "true": problems show on the
 # pull request but nothing is blocked, and the summary artifact records the
 # baseline (the share of datasets with an owner). Once the registry is complete,
@@ -22,7 +25,7 @@ permissions:
   contents: read
 
 env:
-  TOOLKIT_IMAGE: ghcr.io/nguyenngocthien0206/data-platform-ops:1.1.0
+  TOOLKIT_IMAGE: ghcr.io/nguyenngocthien0206/data-platform-ops:1.2.0
   DBT_PROJECT_DIR: "."          # the folder holding dbt_project.yml
   REGISTRY_DIR: ownership       # the folder holding teams.yaml and ownership.yaml
   REPORT_ONLY: "true"
