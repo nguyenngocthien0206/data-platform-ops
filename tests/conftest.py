@@ -11,6 +11,7 @@ from __future__ import annotations
 import textwrap
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -27,7 +28,6 @@ SETTINGS_YAML = textwrap.dedent(
     paths:
       duckdb: data/test.duckdb
       reports: reports
-      iceberg_warehouse: warehouse
       dbt_project: dbt
       dbt_target: dbt/target
     simulation:
@@ -70,17 +70,14 @@ SETTINGS_YAML = textwrap.dedent(
         resolve_hours: {SEV1: 6, SEV2: 18, SEV3: 40}
         load_factor: 0.5
     reconcile:
-      engines: [postgres]
-      rows: {customers: 50000, orders: 300000, payments: 300000}
-      legacy_year: 2025
-      legacy_timezone: America/New_York
-      fanout: 16
+      workers: 4
       leaf_width: 256
       rounding_tolerance: 0.01
+      clean_nights_for_cutover: 3
+      examples_per_class: 5
       canonical:
         engines:
           postgres: {rtrim: false, casefold: false}
-          duckdb: {rtrim: false, casefold: false}
         columns: {}
       thresholds:
         min_row_match_rate: 0.999
@@ -135,7 +132,11 @@ def repo_settings() -> Settings:
 
 
 def make_isolated_config(
-    root: Path, scale_factor: float, weeks: int | None = None, namespace: str = ""
+    root: Path,
+    scale_factor: float,
+    weeks: int | None = None,
+    namespace: str = "",
+    overrides: dict[str, dict[str, Any]] | None = None,
 ) -> Path:
     """A throwaway copy of the repo config whose outputs all land under ``root``.
 
@@ -143,7 +144,9 @@ def make_isolated_config(
     tests drive the actual CLI against it, so they exercise exactly what a user
     runs without touching the real warehouse or ``dbt/target``.
     """
-    return write_isolated_config(root, scale_factor, weeks, namespace=namespace)
+    return write_isolated_config(
+        root, scale_factor, weeks, namespace=namespace, overrides=overrides
+    )
 
 
 @pytest.fixture(scope="session")
@@ -172,15 +175,30 @@ def servers_or_skip() -> Callable[[Settings], None]:
     return require_servers
 
 
+# The demo's parallel run is six weeks; the suite's is one, so its company
+# still goes through every stage: the delivered job, the fix and backfill, a
+# one-off fault and its repair, and a cutover decision.
+SHORT_PARALLEL_RUN: dict[str, dict[str, Any]] = {
+    "company": {"parallel_run_weeks": 1, "fix_after_nights": 2},
+    "reconcile": {"clean_nights_for_cutover": 2, "workers": 4},
+}
+
+
+@pytest.fixture(scope="session")
+def short_parallel_run() -> dict[str, dict[str, Any]]:
+    """The overrides the shared company runs with, for tests that build another."""
+    return SHORT_PARALLEL_RUN
+
+
 @pytest.fixture(scope="session")
 def company_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Settings]:
     """The company run the way ``make demo`` runs it, at scale 0.01 over two weeks, shared.
 
     Through the real CLI: ``company run`` (seed Postgres, backfill ClickHouse,
-    then each day's data, ingestion, and a full dbt build on the first day and
-    an incremental one on the last), then ``metadata check``. Every test that
-    only reads a built company uses this one, because it is the most expensive
-    thing the suite builds.
+    then each day's data, ingestion and a dbt build on the first day; the
+    second week is the parallel run, built and reconciled every night), then
+    ``metadata check``. Every test that only reads a built company uses this
+    one, because it is the most expensive thing the suite builds.
     """
     from typer.testing import CliRunner
 
@@ -189,7 +207,9 @@ def company_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Sett
     from platform_ops.simulation.company import remove_company
 
     root = tmp_path_factory.mktemp("company")
-    settings_path = make_isolated_config(root, 0.01, weeks=2, namespace="t_suite_")
+    settings_path = make_isolated_config(
+        root, 0.01, weeks=2, namespace="t_suite_", overrides=SHORT_PARALLEL_RUN
+    )
     settings = load_settings(settings_path)
     require_servers(settings)
     patch = pytest.MonkeyPatch()

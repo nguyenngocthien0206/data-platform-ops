@@ -2,10 +2,10 @@
 # and no longer depends on the host's Python, uv or security policies.
 #
 # The code is baked into the image. Generated state (the data generator's
-# scratch file, the 1.x DuckDB and Iceberg warehouses, dbt's target and logs)
-# lives on named volumes declared in docker-compose.yml, and reports/ is
-# bind-mounted so they show up on the host. The company's data itself lives in
-# the Postgres and ClickHouse services.
+# scratch file, the 1.x DuckDB warehouse of the paused modules, dbt's target
+# and logs) lives on named volumes declared in docker-compose.yml, and reports/
+# is bind-mounted so they show up on the host. The company's data itself lives
+# in the Postgres and ClickHouse services.
 # Build and run it through the docker-* make targets.
 
 FROM python:3.11.16-slim-bookworm

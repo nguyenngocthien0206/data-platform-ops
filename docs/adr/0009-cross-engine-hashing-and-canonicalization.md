@@ -36,3 +36,7 @@ The segmented diff is a verification tool, not a discovery tool. When a defect i
 Local times inside the hour the clocks go back are ambiguous, and engines resolve that ambiguity differently. The legacy data avoids that hour; a real migration would need to declare which occurrence it means, per column, before signing off.
 
 MD5 over row strings is not collision-free in principle, but a collision would have to hit both 32-bit sums of the same segment at once, and the leaf comparison uses the full canonical values, not the hashes.
+
+## Later note (version 2.0, Phase 12)
+
+The engines are now Postgres and ClickHouse; SQL Server and DuckDB left with 1.x. ClickHouse renders every value byte-identically to Python and Postgres, proven by the golden-row test, which on its first run caught one trap: ClickHouse's `if()` reads a NULL condition as false, so a NULL boolean rendered as `false` until the renderer checked for NULL first. Decimals use `toDecimalString`, because `toString` drops trailing zeros, and a `FixedString` loses its zero-byte padding before rendering. The `local_ts` kind is gone: the company stores its timestamps as UTC instants, and the time zone defect now lives in the migration job, where real ones do. Segments are no longer key ranges but buckets of the MD5 of the canonical key, so dates and composite keys segment like integers (ADR 0017).

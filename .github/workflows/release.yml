@@ -23,7 +23,7 @@ jobs:
 
   metabase:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
@@ -41,8 +41,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # At scale 0.1: the full timeline (the parallel run included) on a
+      # runner with a few cores. The release checks behaviour; the numbers are
+      # the scale 1.0 runs recorded in docs/PROGRESS.md.
       - name: The company on Postgres and ClickHouse
-        run: make docker-demo
+        run: make docker-demo SCALE=0.1
 
       - name: Every dashboard in Metabase
         run: make docker-metabase-check

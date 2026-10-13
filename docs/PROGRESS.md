@@ -6,12 +6,29 @@ Last updated: 2026-10-13
 
 ## Current phase
 
-Phase 11b: Metabase from the exposures and one ClickHouse user per team (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phase 11a is merged (PR #15).
-Branch: `phase-11b-metabase` (off `main` at `d09f23b`; its first commit is the README rewrite for 2.0).
+Phase 12: Reconciliation from Postgres to ClickHouse, with a parallel run before cutover (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a and 11b are merged (PRs #15 and #16).
+Branch: `phase-12-reconcile` (off `main` at `7be6670`).
 
 Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
+
+- Phase 12 implemented (branch `phase-12-reconcile`, uncommitted):
+  - **The parallel run is the last 6 weeks of the company's window** (`company.parallel_run_weeks`). The ingestion runs as the migration team delivered it from day 0, with four defects (`company.delivered_job`, `simulation/ingest.py`): payments' `created_at` read as New York time, payments' `amount` through a float and truncated, customers' `email` right-trimmed, the last key of every 25,000-key page of web sessions lost. Seven nights into the parallel run the fixed job ships and backfills raw (`Ingestion.backfill`, keeping the load log). Seven one-off faults follow every other night (`simulation/migration.py`), planted after the ingestion and before the build, repaired the next day.
+  - **Every night of the parallel run** dbt builds, and `reconcile/parallel.py` compares the 9 operational tables (Postgres `app` against ClickHouse `raw` with `FINAL`) and the 12 legacy reports (against the marts), six pairs at a time, as the `platform` user. Table differences are graded against the night's ground truth; report differences are explained through dbt lineage or flagged as logic differences. The cutover is recommended after 14 consecutive clean nights. Nights are recorded in `ops.reconcile_nights`, `_examples`, `_grades`, `_labels`, `_cutover`.
+  - **The reconciliation core rebuilt for 2.0**: a ClickHouse renderer byte-identical to Postgres and Python (golden-row test with a `FixedString` column), segments by the MD5 of the canonical key so dates and composite keys segment like integers, pairs declared in `config/reconcile.yaml` with columns and types read from both catalogues (`reconcile/specs.py`).
+  - `make demo` replays the parallel run; `make reconcile` (`platform-ops reconcile run`) writes `reports/reconciliation.md` from the recorded nights; `--strict` fails when the cutover is not recommended. Reconcile is no longer paused.
+  - Removed: Iceberg (`pyiceberg`, `migrate.py`, `legacy.py`, the `iceberg_warehouse` path), the DuckDB connector, the 1.x run and its faults.
+  - Two marts now follow their legacy reports (found while building the comparison, before any defect was planted): `marketing_fct_campaign_performance.return_on_ad_spend` divided at the dividend's scale (ClickHouse truncated where Postgres rounded) and gave 0 where the legacy report gives NULL for a campaign with no attributed order.
+  - `PLATFORM_OPS_SCALE_FACTOR` overrides the scale for one run; `make docker-demo SCALE=0.1`; the release workflow's Metabase job runs the demo at 0.1 with a 90-minute timeout.
+  - ADR 0017 (the parallel run and the cutover rule), a later note on ADR 0009; SPEC Phase 12 acceptance updated; reconcile and simulation READMEs and the root README updated.
+- Phase 12 verification:
+  - `make lint` clean. `make docker-test`: 354 passed, 37 skipped, 5 min 28 s; every skip is a paused module (cost, dashboards, incidents).
+  - `make docker-clean docker-demo` at scale 1.0: 37 min 56 s and 38 min 37 s (from 4 min 35 s in Phase 11b). 44 dbt builds, 10,142,605 rows ingested (the backfill reloads everything once), 141 datasets owned, 376 lineage edges.
+  - Two clean runs: every relation identical across 168 entries (the ClickHouse tables and views, the legacy tables and reports, the ops tables including the reconciliation's, and every user's grants), and `reports/reconciliation.md` byte-identical.
+  - The sign-off: 42 nights from 2026-02-23 to 2026-04-05; the delivered job's 7 nights fail (476,961 timezone shifts, 26,335 truncated amounts, 351 trimmed emails, 74 lost sessions on the first night, all found); the fix on 2026-03-02; each one-off fault found on its night; cutover recommended on 2026-03-30. Over the run 3,576,917 planted discrepancies, 3,576,917 detected, 100% recall, precision and classification accuracy; no report difference without an upstream cause. M6 (six amounts off by a cent) was found but is within the rounding threshold, so its night counted as clean, and the report says so.
+  - Segmented against naive: on matching pairs 11,200 rows moved instead of 378,892,260 for the tables (99.997%), 14,422 instead of 39,488,818 for the reports; on differing pairs 79.822% saved for the tables, 12.577% for the reports.
+  - One night's reconciliation on the demo at scale 1.0: 102 s one pair at a time, 23 s six at a time.
 
 - Phase 11b implemented (branch `phase-11b-metabase`, uncommitted):
   - **Users** (`simulation/access.py`): one ClickHouse user per team plus `metabase`, `dbt` and `loader`, namespaced, created again (`CREATE USER OR REPLACE`) at the start of `seed`, `build` and `company run`. `reader` profile (`readonly = 2`) for teams and Metabase, `writer` for the pipelines, both with the dbt profile's session settings. Business teams and Metabase read marts and reference; platform reads every layer; dbt reads raw and owns its databases plus `system.parts`; loader inserts into raw with `READ ON POSTGRES` and `CREATE TEMPORARY TABLE`; Metabase also reads `system.processes` behind a row policy limiting it to its own queries.
@@ -114,9 +131,26 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 
 ## In progress
 
-Phase 11b, waiting for the owner's review and commits.
+Phase 12, waiting for the owner's review and commits.
 
 ## Decisions made
+
+### Phase 12 (owner, at planning, 2026-10-14)
+
+1. **The parallel run is inside the demo company's timeline**, not a separate scenario: one company, one history, and its cost (backfill, nightly builds, the reconciliation's queries) lands in ClickHouse's query log for Phase 13.
+2. **6 weeks, cutover after 14 consecutive clean nights.**
+3. **Reports reconciled every night**, so dbt builds every night of the parallel run.
+4. **Report differences are graded by lineage**: explained by an upstream table that differs the same night, or flagged as a logic difference.
+5. **Run time**: measured at 102 s per night one pair at a time and 23 s six at a time; with a 45 to 50 minute estimate, the owner kept 6 weeks at scale 1.0 and asked the release CI to run the demo smaller.
+
+### Phase 12, made during implementation
+
+- **`make demo` runs the parallel run, `make reconcile` writes the sign-off from the recorded nights** (the SPEC's acceptance said `make reconcile` runs the window; changed with the plan, since the window is part of the company's history).
+- **Every defect and fault touches data no dbt test checks.** The first full run paged orders, and dbt's relationship tests caught the orphaned order lines and payments; a padded order status failed `accepted_values`. A failing build stays fatal, so the defects moved: the paging bug to web sessions (order lines could not be used either: their keys are `order_id * 10 + line` and never fall on a page boundary), the padding to product names.
+- **The float defect's truth was measured against ClickHouse**: `toDecimal64(toFloat64(x), 2)` scales the float by 100 in floating point and truncates. A first model (truncating the float's exact binary value) disagreed with ClickHouse on 245,308 of 575,208 payments and showed as 71% recall; the corrected one agrees on all of them.
+- **The golden-row test caught a ClickHouse trap**: `if()` reads a NULL condition as false, so a NULL boolean rendered as `false`.
+- **The ops store for the reconciliation is prepared on the first parallel night**, not when the run starts, so a missing password is still reported before anything is touched.
+- **Faults are repaired the next day, whether or not the diff found them**: the grading then exposes a miss instead of the simulation hiding it.
 
 ### Phase 11b (owner, at planning, 2026-10-13)
 
@@ -397,6 +431,6 @@ None open.
 
 ## Next step
 
-1. The owner reviews Phase 11b, commits it in the proposed sequence, and merges. Existing `.env` files need the new variables from `.env.example` (the eight `CLICKHOUSE_PASSWORD_*`, `METABASE_PORT`, `MB_ADMIN_EMAIL`, `MB_ADMIN_PASSWORD`).
-2. Plan Phase 12: reconciliation from Postgres to ClickHouse, with the parallel run before cutover.
+1. The owner reviews Phase 12, commits it in the proposed sequence, and merges.
+2. Plan Phase 13: cost attribution and FinOps on ClickHouse's query log, with the workload generator back (the Metabase cards' SQL and the teams' ad hoc queries under their users), compute and storage per team, the migration's before-and-after cost (the parallel run is now in the query log), and BigQuery and Snowflake priced on the same workload.
 3. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).

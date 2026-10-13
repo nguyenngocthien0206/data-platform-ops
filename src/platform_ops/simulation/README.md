@@ -8,8 +8,9 @@ Everything that makes the simulated company behave like a real one. In version 2
 
 1. **History.** The company's ClickHouse users are created (a missing password stops the run here, before anything is written), the legacy Postgres is seeded with a year of data up to the window start (5 January 2026), every company database in ClickHouse is dropped, and the raw layer is backfilled from Postgres. Dropping everything matters: a dbt snapshot survives `--full-refresh`, so nothing less would start clean.
 2. **Every simulated day** for 13 weeks: the day's orders, payments, sessions and tickets reach Postgres, and at 01:00 a few products and customers change in place; at 02:00 the ingestion pulls everything newer than its watermark into ClickHouse; every 28 days and on the last day, dbt builds the project (the first build in full, later ones incrementally where a model is).
+3. **The last six weeks are the migration's parallel run** (Phase 12): dbt builds every night and the migration is reconciled every night, at both levels, ending in the cutover decision (`reconcile/README.md`). The ingestion runs as the migration team first delivered it until a week into the parallel run, when the fixed job ships and backfills raw; one-off faults follow and are repaired the next day (below).
 
-The build cadence is a setting (`company.build_every_days`) because a build per day costs minutes and changes nothing the later phases measure. It is the kind of trade-off a platform team makes with the business: how fresh the dashboards need to be against how much compute that freshness burns.
+Outside the parallel run the build cadence is a setting (`company.build_every_days`), because a build per day costs minutes and changes nothing the later phases measure. It is the kind of trade-off a platform team makes with the business: how fresh the dashboards need to be against how much compute that freshness burns. The parallel run is the exception, because the reports are compared every night.
 
 ## Raw data and the legacy Postgres (`raw_data.py`, `legacy_db.py`)
 
@@ -96,6 +97,13 @@ In 1.x, `platform-ops simulation run` simulated 13 weeks of the platform on Duck
 
 From two runs of `make simulate` in 1.x, at `v1.2.0`: 91 days, 4 real dbt builds and 87 replayed, 24,934 dbt queries, 10,192 dashboard queries and 687 ad hoc queries, 5,427,803 raw rows loaded and 3,497 changed in place, in 280 and 290 seconds.
 
-## Fault injectors (`faults.py`, `migration_faults.py`)
+## The migration's planted discrepancies (`migration.py`, `ingest.py`)
 
-`faults.py` breaks the raw data on purpose for the incident scenario, and `migration_faults.py` plants labelled discrepancies in a migration for the reconciliation to find. Both still target 1.x and return with their modules: the migration faults move into the Postgres to ClickHouse load in Phase 12, and the incident faults onto real dbt runs on ClickHouse in Phase 14.
+What the parallel run has to find, with its ground truth:
+
+- **The delivered job's four defects**, applied by the ingestion itself while it runs as delivered (`company.delivered_job`): payments' `created_at` read as New York time, payment amounts passed through a float and truncated on the way back, customers' emails right-trimmed, and the last key of every 25,000-key page of web sessions lost. A missing session breaks no dbt test (nothing references a session), so only the reconciliation can find it. The first full run paged orders instead, and dbt's relationship tests caught the orphaned order lines and payments at once, which is the right outcome for that defect but not the one a parallel run is for; order lines could not be used either, because their keys (`order_id * 10 + line`) never fall on a page boundary. Their truth is computed from the legacy rows with the defect's own rule. The float one had to be measured, not assumed: ClickHouse scales the float by 100 in floating point and truncates, which a first model (truncating the float's exact value) got wrong on 245,308 of 575,208 payments; the rule in `migration.py` now matches ClickHouse on all of them.
+- **Seven one-off faults** (`CATALOGUE`), one every other night after the fix: invented orders, deleted customers, an overwritten payment method, upper-cased emails, padded product names, amounts off by a cent, shifted ticket times. Each touches a column no dbt test checks, because what a parallel run is for is what the tests let through: the first version padded order statuses, and dbt's `accepted_values` test stopped the build before the reconciliation saw it. Each picks rows from the history by a stable hash of the seed, is planted after the night's ingestion and before its build (so the reports see it too), and is repaired the next day: invented rows deleted, the others reloaded from Postgres.
+
+## Incident faults (`faults.py`), paused until Phase 14
+
+`faults.py` breaks the raw data on purpose for the 1.x incident scenario. It returns with the incident module, onto real dbt runs on ClickHouse.

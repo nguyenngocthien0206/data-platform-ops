@@ -35,7 +35,8 @@ incidents_app = typer.Typer(
     help="Data incident detection, grouping and routing.", no_args_is_help=True
 )
 reconcile_app = typer.Typer(
-    help="Legacy to lakehouse migration reconciliation.", no_args_is_help=True
+    help="The migration's reconciliation: the parallel run and the cutover sign-off.",
+    no_args_is_help=True,
 )
 
 company_app = typer.Typer(
@@ -73,7 +74,6 @@ def _fail(message: str, code: int = 1) -> NoReturn:
 # no longer exists, so its command says when it returns instead of failing
 # somewhere deep inside. 1.x is available at tag v1.2.0.
 PAUSED_UNTIL: dict[str, int] = {
-    "reconcile": 12,
     "cost": 13,
     "simulation": 13,
     "dashboard": 13,
@@ -154,7 +154,8 @@ def seed() -> None:
     settings, clock = _start("seed")
     logger = get_logger("seed")
     legacy = LegacyCompany(settings)
-    ingestion = Ingestion(settings)
+    # As the company's run starts: the delivered job when a parallel run is planned.
+    ingestion = Ingestion(settings, delivered=settings.company.parallel_run_weeks > 0)
     try:
         seeded, ingested = start_over(settings, legacy, ingestion)
     except MissingPasswordError as error:
@@ -203,20 +204,39 @@ DAYS_OPTION = typer.Option(None, "--days", help="Simulated days to replay (defau
 
 @company_app.command("run")
 def company_run(days: int | None = DAYS_OPTION) -> None:
-    """Seed the history, then replay the window: daily data, ingestion, dbt builds."""
+    """Seed the history, then replay the window: daily data, ingestion, dbt builds.
+
+    The last weeks are the migration's parallel run: dbt builds every night and
+    the migration is reconciled every night, ending in the cutover decision and
+    reports/reconciliation.md.
+    """
     from platform_ops.common.dbt_invoke import DbtError, invocation_from_settings
     from platform_ops.common.servers import MissingPasswordError
     from platform_ops.metadata.lineage import build_graph, store_edges
     from platform_ops.metadata.manifest import load_manifest
+    from platform_ops.reconcile.parallel import ParallelRun
+    from platform_ops.reconcile.report import write_report
     from platform_ops.simulation.company import run_company
 
     settings, _ = _start("company")
+    parallel = ParallelRun(settings) if settings.company.parallel_run_weeks else None
     try:
-        summary = run_company(settings, days)
+        summary = run_company(settings, days, nightly=parallel)
     except MissingPasswordError as error:
         _missing_passwords(error)
     except DbtError as error:
         _fail(str(error))
+    if parallel is not None and parallel.results:
+        cutover = parallel.finish()
+        decision = (
+            f"cutover recommended on {cutover.run_at:%Y-%m-%d}"
+            if cutover.recommended and cutover.run_at
+            else "cutover not recommended"
+        )
+        typer.echo(
+            f"parallel run: {len(parallel.results)} nights reconciled, {decision}; "
+            f"wrote {write_report(settings)}"
+        )
 
     graph = build_graph(load_manifest(invocation_from_settings(settings).manifest_path))
     edges = store_edges(settings, graph)
@@ -588,48 +608,33 @@ def incidents_run() -> None:
         _fail("not every injected fault maps to exactly one incident; see the report")
 
 
-ENGINE_OPTION = typer.Option(
-    None,
-    "--engine",
-    help="Legacy engine to reconcile (repeatable). Defaults to reconcile.engines in settings.",
-)
 STRICT_OPTION = typer.Option(
-    False, "--strict", help="Exit non-zero when the migration as delivered is not signed off."
+    False, "--strict", help="Exit non-zero when the parallel run does not recommend the cutover."
 )
 
 
 @reconcile_app.command("run")
-def reconcile_run(engine: list[str] | None = ENGINE_OPTION, strict: bool = STRICT_OPTION) -> None:
-    """Run the migration scenario and the diff, write the sign-off report.
+def reconcile_run(strict: bool = STRICT_OPTION) -> None:
+    """Write the cutover sign-off from the parallel run's nights (run by `make demo`).
 
-    The verdict lives in the report; the command succeeds whether or not the
-    migration is signed off, unless --strict is given.
+    The parallel run is part of the company's history: `company run` replays
+    it and reconciles every night. This writes reports/reconciliation.md from
+    what those nights recorded, and succeeds whether or not the cutover is
+    recommended, unless --strict is given.
     """
-    from typing import cast
-
-    from platform_ops.common.config import Engine
-    from platform_ops.reconcile.run import ReconcileError, run_and_report
-
-    _check_paused("reconcile")
+    from platform_ops.reconcile.report import NoParallelRun, write_report
 
     settings, _ = _start("reconcile")
-    allowed = ("postgres", "duckdb")
-    unknown = [e for e in engine or [] if e not in allowed]
-    if unknown:
-        _fail(f"unknown engine {unknown}; choose from {list(allowed)}")
-    engines = [cast(Engine, e) for e in engine] if engine else None
     try:
-        summary, _ = run_and_report(settings, engines)
-    except ReconcileError as error:
-        _fail(str(error))
-    verdict = "signed off" if summary.signed_off else "NOT signed off"
-    typer.echo(
-        f"reconciled {', '.join(summary.engines)}: migration as delivered {verdict}; "
-        f"detection recall {summary.recall:.2%}, classification accuracy "
-        f"{summary.classification_accuracy:.2%}; wrote {summary.report_path}"
-    )
-    if strict and not summary.signed_off:
-        _fail("the migration as delivered does not meet the sign-off thresholds")
+        path = write_report(settings)
+    except NoParallelRun as error:
+        _fail(str(error), EXIT_UNUSABLE)
+    text = path.read_text(encoding="utf-8")
+    recommended = "**Cutover recommended" in text
+    verdict = "cutover recommended" if recommended else "cutover NOT recommended"
+    typer.echo(f"{verdict}; wrote {path}")
+    if strict and not recommended:
+        _fail("the parallel run does not meet the cutover criteria")
 
 
 def main() -> None:

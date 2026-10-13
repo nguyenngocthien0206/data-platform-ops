@@ -1,78 +1,63 @@
 # reconcile
 
-> **Paused in version 2.0 until Phase 12.** Phase 12 reconciles the company's legacy Postgres, its tables and its 12 hand-written reports, against ClickHouse and the marts that replace them, over a parallel run before cutover. Until then `make reconcile` exits with code 2 and says so. Everything below describes 1.x, at tag `v1.2.0`.
-
-Before a legacy system is switched off, someone who owns the data has to sign that the new copy holds what the old one held. `make reconcile` produces the evidence for that signature: it loads a year of legacy orders, customers and payments into Postgres, migrates them into Iceberg with a job that has realistic bugs, plants a few more discrepancies in the target, then finds and explains every difference with a segmented checksum diff. The result is `reports/reconciliation.md`, a sign-off document that states its acceptance thresholds before it states any numbers.
+Before a legacy system is switched off, someone who owns the data has to sign that the new one holds what the old one held, and keeps holding it. In version 2.0 the company migrates its reporting from a legacy Postgres to ClickHouse, and the last six weeks of its window are the **parallel run**: both systems run, dbt builds every night, and every night this module compares them. The result is `reports/reconciliation.md`, a sign-off that states its acceptance criteria before any number, then the night the cutover can be recommended, and why ([ADR 0017](../../../docs/adr/0017-the-parallel-run-and-the-cutover-rule.md)).
 
 ## How it fits together
 
 | Step | Module | Output |
 |---|---|---|
-| Describe | `schema.py`: the three legacy tables, their DDL per engine and their logical column kinds | |
-| Generate | `legacy.py`: a year of legacy data with local timestamps, padded text, high-precision decimals, NULLs next to keys | legacy tables in Postgres |
-| Migrate | `migrate.py`: export, transform in DuckDB, write to Iceberg (PyIceberg, SQLite catalog) with four defects | Iceberg tables, ground truth |
-| Break more | `simulation/migration_faults.py`: seven labelled one-off faults in the target | ground truth |
-| Render | `canonical.py`: one canonical string per value and one row hash, rendered identically by Postgres, SQL Server, DuckDB and Python | |
-| Connect | `connectors.py`: `SourceConnector` for Postgres, SQL Server and DuckDB (Iceberg is read through DuckDB) | |
-| Diff | `diff.py`: segment summaries level by level, rows fetched only for differing leaves | `ops.reconcile_segments` |
-| Classify | `classify.py`: missing, extra, rounding, time zone shift, whitespace, case, value mismatch | `ops.reconcile_discrepancies` |
-| Judge | `metrics.py`: match rates, verdict against thresholds, grading against ground truth | `ops.reconcile_tables`, `ops.reconcile_metrics`, `ops.reconcile_ground_truth` |
-| Report | `report.py` | `reports/reconciliation.md` |
+| Declare | `config/reconcile.yaml`, `schema.py`, `specs.py`: the 9 operational tables and the 12 reports to compare, their keys; columns and types read from both catalogues | |
+| Break | `simulation/migration.py`, `simulation/ingest.py`: the delivered job's four defects, then seven one-off faults planted and repaired | ground truth per night |
+| Render | `canonical.py`: one canonical string per value and one row hash, identical in Postgres, ClickHouse and Python | |
+| Connect | `connectors.py`: Postgres hashes each row once into a temp table; ClickHouse renders on the fly, as the platform team's read-only user | |
+| Diff | `diff.py`: segment summaries level by level over the MD5 of the key, rows fetched only for differing leaves | |
+| Classify | `classify.py`: missing, extra, rounding, time zone shift, whitespace, case, value mismatch | |
+| Judge | `metrics.py`, `parallel.py`: verdict per pair against the thresholds, grading against ground truth, report differences explained through dbt lineage, the cutover rule | `ops.reconcile_nights`, `_examples`, `_grades`, `_labels`, `_cutover` |
+| Report | `report.py`, from the ops store | `reports/reconciliation.md` |
 
 Nothing in the diff reads the ground truth. Only the grading does, the same split as the incident module.
 
 ## The decisions that shape the numbers
 
-**One canonical string per value, in every engine.** A checksum diff only works if two engines hash the same data the same way, and they disagree on almost everything: decimal padding, boolean spelling, time zones, text encoding. Every value is rendered first (decimals at fixed scale, timestamps as UTC with microseconds, a NULL sentinel that never equals an empty string) and the row is hashed as MD5 of its UTF-8 bytes, summed per segment as two 32-bit halves. A golden-row test holds Python, DuckDB, Postgres and SQL Server to byte-identical output (ADR 0009).
+**The parallel run is part of the company's history.** The ingestion runs as the migration team first delivered it from the first day of the window, with four defects a real copy job ships with: payments' `created_at` read as New York time, payment amounts passed through a float and truncated on the way back, customers' emails right-trimmed, and the last key of every 25,000-key page of web sessions lost, which no dbt test notices. Nobody compares anything until the parallel run starts, seven weeks in, so that is when they are found. A week later the fixed job ships and backfills raw, and seven one-off faults follow, every other night, each repaired the next day, the way a team works through its morning report. Because it all happens in the company's own run, the backfill, the nightly builds and the reconciliation's queries are in ClickHouse's query log, which is the cost of the migration that Phase 13 puts a number on.
 
-**Equality is a policy the data owner signs.** Whether trailing spaces or letter case count as differences is not a technical question. The rules live in `settings.yaml` per engine and column, both sides use the legacy engine's rules, and the report prints them. SQL Server folds case because the business has been living with its case-insensitive collation for years; Postgres does not.
+**Two levels, and the second one is the one the business signs.** The operational tables say whether the copy is right. The reports say whether the new dashboards show what the old reports showed. A report difference is explained when a table its mart is built from differs the same night (dbt lineage); a difference with no upstream cause is a logic difference between the legacy SQL and the dbt model, and blocks a clean night. Two were found before any defect was planted, while the comparison was being built: a ratio that ClickHouse truncated where Postgres rounded, and a return on ad spend of 0 where the legacy report said "none". The marts now follow the legacy reports, because changing a definition is a decision for after cutover, not a side effect of the migration.
 
-**Two passes, because that is how sign-off really goes.** The first pass diffs the job as delivered. It fails, and the systematic defects it finds are a message for the migration team, not for the reconciliation: fix the job. The second pass re-runs the migration with the defects fixed, leaving only the planted one-off faults, which is when a reviewer can actually read every remaining difference.
+**One canonical string per value, in every engine.** A checksum diff only works if two engines hash the same data the same way, and they disagree on almost everything: decimal padding, boolean spelling, time formats, `NULL` in a condition. Every value is rendered first (decimals at fixed scale, timestamps as UTC with microseconds, a NULL sentinel that never equals an empty string) and each row is hashed as MD5 of its UTF-8 bytes, summed per segment as two 32-bit halves. A golden-row test holds Python, Postgres and ClickHouse to byte-identical output (ADR 0009).
 
-**Only differing segments are opened.** Keys are split into ranges, each engine returns a count and two hash sums per range, and only ranges that disagree are split again, 16 ways, down to 256 keys. Each engine hashes its rows once into a temporary table and groups that at every level, which took the diff from 53 to 20 seconds at scale 1.0.
+**Equality is a policy the data owner signs.** Whether trailing spaces or letter case count as differences is not a technical question. The rules live in `settings.yaml` per column, both sides use them, and the report prints them.
+
+**Only differing segments are opened.** Rows fall into 16 segments by the first hex digit of their key's MD5, 256 by the first two, and so on. Each engine returns a count and two hash sums per segment, and only segments that disagree are split again, down to about 256 rows. An integer key, a date and a key of three columns all segment the same way.
+
+**The cutover rule is fixed before the run.** A night is clean when every table and every report is within the thresholds and no report difference is unexplained; the cutover is recommended on the night that completes 14 consecutive clean nights.
 
 ## Results at scale 1.0
 
-From two actual runs of `make reconcile` (50,000 customers, 300,000 orders, 300,000 payments), which wrote byte-identical reports.
+From an actual `make docker-demo` at the default scale, the 42 nights of the parallel run (2026-02-23 to 2026-04-05), as `reports/reconciliation.md` records them.
 
-`make reconcile` took about 52 seconds; the full `make demo`, all four modules from a clean state, took 6 minutes 54 seconds and 9 minutes 1 second in two runs on the same laptop. <!-- readme-check: runtime -->
+**Verdict: cutover recommended on 2026-03-30**, the night that completed 14 consecutive clean nights. The whole demo, parallel run included, took 37 minutes 56 seconds in the container on the development laptop. <!-- readme-check: runtime -->
 
-**Verdict: not signed off.** Both passes fail the thresholds, which allow no missing, extra, shifted or mismatched values.
+**The delivered job fails on its first compared night, and every defect is found that night.** On 2026-02-23 the 9 tables gave 476,961 timezone shifts (every payment), 26,335 one-cent truncations, 351 trimmed emails and 74 lost web sessions, all found and correctly classified. Four reports failed with them, each explained by an upstream table: 28,379 orders differ in the cash reconciliation, where the shifted payment times flip late-payment flags and the truncated amounts leave paid totals a cent short, and the lost sessions take a session or two off campaign, traffic and engagement figures. The fixed job shipped on 2026-03-02 and its backfill made that night clean.
 
-| Pass | Table | Rows with differences | Missing | Extra | Row match |
-|---|---|---:|---:|---:|---:|
-| As delivered | customers | 2,510 | 6 | 0 | 94.968% |
-| As delivered | orders | 1,440 | 12 | 5 | 99.516% |
-| As delivered | payments | 195,492 | 0 | 0 | 34.836% |
-| Job fixed | customers | 13 | 6 | 0 | 99.962% |
-| Job fixed | orders | 6 | 0 | 5 | 99.998% |
-| Job fixed | payments | 14 | 0 | 0 | 99.995% |
+**Every one-off fault is found the night it lands.** Invented orders, deleted customers, an overwritten payment method, upper-cased emails, padded product names and shifted ticket times each failed their table on their night (the deleted customers also failed five customer-based reports, explained), and were gone the next. The six payments off by a cent were found too, but six rounding differences are within the 100 the criteria allow, so that night counted as clean: the thresholds are the data owner's statement of what matters.
 
-**Detection against ground truth.** Every one of the 199,465 planted discrepancies in the first pass, and all 44 in the second, was found and put in the right class: 100% recall, 100% precision, 100% classification accuracy. Each job defect was found in full: the daylight saving bug in 195,478 payments, the float cast in 1,434 large orders, trimmed padding in 2,497 company names, and the 12 orders lost at batch boundaries.
+| Over the whole run | |
+|---|---:|
+| Planted discrepancies (tables) | 3,576,917 |
+| Detected | 3,576,917 |
+| Recall, precision, classification accuracy | 100.000% |
+| Reports differing without an upstream cause | 0 |
 
-| Pass | Table | Rows moved, segmented | Rows moved, naive | Saving |
-|---|---|---:|---:|---:|
-| As delivered | customers | 100,412 | 99,994 | -0.418% |
-| As delivered | orders | 434,047 | 599,993 | 27.658% |
-| As delivered | payments | 602,502 | 600,000 | -0.417% |
-| Job fixed | customers | 9,556 | 99,994 | 90.443% |
-| Job fixed | orders | 3,851 | 600,005 | 99.358% |
-| Job fixed | payments | 7,742 | 600,000 | 98.710% |
+**The segmented diff is what makes it nightly.** On pairs that matched, it moved 11,200 rows from the engines instead of 378,892,260 for the tables (a 99.997% saving) and 14,422 instead of 39,488,818 for the reports. On pairs that differed it still saved 79.822% for the tables, and 12.577% for the reports, whose differences spread over most segments.
 
-What the numbers say:
-
-- **A systematic defect makes the smart diff no smarter than a dumb one.** Trimmed padding touches 2,497 of 50,000 customers, which lands in every 256-key segment; the daylight saving bug touches 195,478 of 300,000 payments. In the first pass the diff moves as many customer and payment rows as a full comparison would, and saves only 27.658% on orders; every top-level segment of customers and payments already differs, so the first level says as much. That is the cue to stop diffing and send the job back.
-- **Once the job is fixed, the diff pays for itself.** With only a few dozen one-off faults left, it saves between 90.443% and 99.358% of the rows a full comparison would move, which is what makes a nightly verification of a large migration affordable instead of a one-off before cutover.
-- **The float cast is the quiet one.** Ordinary amounts survive a trip through DOUBLE; only the largest orders, above ten billion, lose their sixth decimal. That still adds up to 1,434 rounding differences, over the threshold of 100, so orders fails on them as well as on the rows dropped at batch boundaries. Whether a sixth-decimal difference on an enterprise invoice is acceptable is a call for finance, and the threshold is where they make it.
+One night's reconciliation of all 21 pairs took 23 seconds six pairs at a time, and 102 seconds one at a time. <!-- readme-check: runtime -->
 
 ## Running it
 
 ```bash
-make up                             # Postgres, the default legacy engine
-make reconcile                      # both passes, ops tables, reports/reconciliation.md
-uv run platform-ops reconcile run --strict   # exits non-zero when not signed off, for CI
+make demo                                     # the company's window, the parallel run included
+make reconcile                                # reports/reconciliation.md from the recorded nights
+uv run platform-ops reconcile run --strict    # exits non-zero when the cutover is not recommended
 ```
 
-Until version 2.0, SQL Server was an optional second legacy engine, with a case-insensitive policy that reported the planted upper-case emails as equal. Version 2.0 removed it: the company's legacy system is Postgres.
-
-Tunables live under `reconcile:` in `config/settings.yaml`: legacy row counts, the legacy time zone, fanout and leaf width, the rounding tolerance, the canonical rules and the sign-off thresholds.
+Tunables live under `reconcile:` in `config/settings.yaml` (workers, leaf width, rounding tolerance, the canonical rules, the thresholds, the clean nights the cutover needs) and under `company:` (the parallel run's length, when the fix ships, the delivered job's defects). What is compared is in `config/reconcile.yaml`.

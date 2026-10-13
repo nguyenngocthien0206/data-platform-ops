@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -23,12 +24,14 @@ def write_isolated_config(
     weeks: int | None = None,
     repo: Path = REPO_ROOT,
     namespace: str = "",
+    overrides: dict[str, dict[str, Any]] | None = None,
 ) -> Path:
     """Write ``root/config/settings.yaml`` (plus teams, ownership and ``.env``) and return it.
 
     ``namespace`` prefixes every Postgres schema and ClickHouse database the
     company and the toolkit use (version 2.0), so a test shares the servers
-    with the demo without touching its data.
+    with the demo without touching its data. ``overrides`` replaces keys inside
+    a section, for example a shorter parallel run: ``{"company": {...}}``.
     """
     config_dir = root / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -40,15 +43,16 @@ def write_isolated_config(
         "duckdb": str(root / "warehouse.duckdb"),
         "generator": str(root / "generator.duckdb"),
         "reports": str(root / "reports"),
-        "iceberg_warehouse": str(root / "iceberg"),
         "dbt_project": str(repo / "dbt"),
         "dbt_target": str(root / "target"),
     }
     if namespace:
         raw.setdefault("company", {})["namespace"] = namespace
+    for section, values in (overrides or {}).items():
+        raw.setdefault(section, {}).update(values)
     settings_path = config_dir / "settings.yaml"
     settings_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-    for name in ("teams.yaml", "ownership.yaml"):
+    for name in ("teams.yaml", "ownership.yaml", "reconcile.yaml"):
         shutil.copyfile(repo / "config" / name, config_dir / name)
     # Local service credentials (Postgres, ClickHouse) live in .env at the root.
     if (repo / ".env").is_file():

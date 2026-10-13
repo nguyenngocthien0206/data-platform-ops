@@ -1,148 +1,117 @@
-"""The legacy tables being migrated, described once for every engine.
+"""What is reconciled: pairs of relations, their key, and each column's kind (version 2.0).
 
-Each column has a logical kind. The kind decides how a value is stored in each
-engine (the DDL below) and how it is rendered before hashing
-(``canonical.py``). The migration target stores some columns differently on
-purpose: that difference is exactly what the reconciliation has to see through.
+``config/reconcile.yaml`` declares the pairs: the company's operational tables
+(legacy Postgres ``app`` against ClickHouse ``raw``) and its reports (Postgres
+``reporting`` against the dbt marts). The columns are not typed by hand: they
+are read from Postgres's own catalogue and mapped to a logical kind, which
+decides how a value is rendered before hashing (``canonical.py``). ClickHouse's
+physical types are read too, because a few of them need their own rendering
+(``FixedString`` padding, an integer measure stored as a ``Decimal``).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Literal
 
-import pyarrow as pa
+import yaml
+from pydantic import BaseModel, ConfigDict, Field
 
-Kind = Literal["int", "decimal", "text", "bool", "local_ts", "utc_ts"]
-Dialect = Literal["postgres", "duckdb"]
+Kind = Literal["int", "decimal", "text", "bool", "ts", "date"]
+Level = Literal["table", "report"]
 
 
 @dataclass(frozen=True)
 class Column:
     name: str
     kind: Kind
-    precision: int = 0
     scale: int = 0
-    length: int = 0
+    # The column's name on the ClickHouse side, when it differs.
+    target_name: str = ""
+    # The column's physical type on the ClickHouse side.
+    target_type: str = ""
 
-    def ddl_type(self, dialect: Dialect) -> str:
-        if self.kind == "int":
-            return "BIGINT"
-        if self.kind == "decimal":
-            number = "NUMERIC" if dialect == "postgres" else "DECIMAL"
-            return f"{number}({self.precision}, {self.scale})"
-        if self.kind == "text":
-            return f"VARCHAR({self.length})"
-        if self.kind == "bool":
-            return "BOOLEAN"
-        if self.kind == "local_ts":
-            return "TIMESTAMP"
-        return "TIMESTAMPTZ"
+    @property
+    def target(self) -> str:
+        return self.target_name or self.name
 
 
 @dataclass(frozen=True)
 class TableSpec:
     name: str
-    key: str
+    level: Level
+    key: tuple[str, ...]
     columns: tuple[Column, ...]
+    source: str  # a qualified Postgres relation
+    target: str  # a qualified ClickHouse relation
+    # Read the target with FINAL: a ReplacingMergeTree keeps a row twice until
+    # it merges, and only the latest version is the copy.
+    final: bool = False
+    # For a report: the operational tables its mart is built from (lineage).
+    upstream: tuple[str, ...] = field(default=())
 
     @property
     def value_columns(self) -> tuple[Column, ...]:
         """Every column except the key, in table order."""
-        return tuple(c for c in self.columns if c.name != self.key)
+        return tuple(c for c in self.columns if c.name not in self.key)
 
     def column(self, name: str) -> Column:
-        for column in self.columns:
-            if column.name == name:
-                return column
-        raise KeyError(f"{self.name}.{name}")
-
-    def ddl(self, dialect: Dialect, qualified_name: str) -> str:
-        body = ",\n    ".join(
-            f"{c.name} {c.ddl_type(dialect)}"
-            + (" NOT NULL PRIMARY KEY" if c.name == self.key else "")
-            for c in self.columns
-        )
-        return f"CREATE TABLE {qualified_name} (\n    {body}\n)"
+        return next(c for c in self.columns if c.name == name)
 
 
-def _text(name: str, length: int) -> Column:
-    return Column(name, "text", length=length)
+def kind_from_postgres(data_type: str) -> Kind:
+    """The logical kind of a Postgres column type (``information_schema`` spelling)."""
+    if data_type in ("bigint", "integer", "smallint"):
+        return "int"
+    if data_type in ("numeric", "double precision", "real"):
+        return "decimal"
+    if data_type == "boolean":
+        return "bool"
+    if data_type.startswith("timestamp"):
+        return "ts"
+    if data_type == "date":
+        return "date"
+    return "text"
 
 
-def _decimal(name: str, precision: int, scale: int) -> Column:
-    return Column(name, "decimal", precision=precision, scale=scale)
+# -- the declaration in config/reconcile.yaml ----------------------------------------------
 
 
-CUSTOMERS = TableSpec(
-    "customers",
-    "customer_id",
-    (
-        Column("customer_id", "int"),
-        _text("first_name", 40),
-        _text("last_name", 40),
-        _text("email", 120),
-        _text("company_name", 80),
-        _text("country", 2),
-        Column("is_active", "bool"),
-        _decimal("credit_limit", 12, 2),
-        Column("created_local", "local_ts"),
-        Column("updated_at", "utc_ts"),
-    ),
-)
-
-ORDERS = TableSpec(
-    "orders",
-    "order_id",
-    (
-        Column("order_id", "int"),
-        Column("customer_id", "int"),
-        _text("status", 20),
-        _text("channel", 20),
-        _text("currency", 3),
-        _decimal("amount", 20, 6),
-        _decimal("fx_rate", 18, 8),
-        Column("is_gift", "bool"),
-        Column("ordered_local", "local_ts"),
-        Column("created_at", "utc_ts"),
-    ),
-)
-
-PAYMENTS = TableSpec(
-    "payments",
-    "payment_id",
-    (
-        Column("payment_id", "int"),
-        Column("order_id", "int"),
-        _text("method", 20),
-        _text("status", 20),
-        _decimal("amount", 12, 2),
-        _decimal("fee", 10, 4),
-        Column("is_refund", "bool"),
-        Column("paid_local", "local_ts"),
-        Column("settled_at", "utc_ts"),
-    ),
-)
-
-TABLES: tuple[TableSpec, ...] = (CUSTOMERS, ORDERS, PAYMENTS)
-TABLES_BY_NAME = {t.name: t for t in TABLES}
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
-def arrow_schema(table: TableSpec) -> pa.Schema:
-    """The Arrow types a legacy table is exchanged in, matching its DDL."""
-    fields = []
-    for c in table.columns:
-        if c.kind == "int":
-            arrow_type: pa.DataType = pa.int64()
-        elif c.kind == "decimal":
-            arrow_type = pa.decimal128(c.precision, c.scale)
-        elif c.kind == "bool":
-            arrow_type = pa.bool_()
-        elif c.kind == "local_ts":
-            arrow_type = pa.timestamp("us")
-        elif c.kind == "utc_ts":
-            arrow_type = pa.timestamp("us", tz="UTC")
-        else:
-            arrow_type = pa.string()
-        fields.append(pa.field(c.name, arrow_type))
-    return pa.schema(fields)
+class PairConfig(_Strict):
+    """One pair to reconcile. ``source`` and ``target`` are relation names without
+    their (namespaced) schema; ``rename`` maps source column names to target ones."""
+
+    name: str
+    source: str
+    target: str
+    key: list[str] = Field(min_length=1)
+    rename: dict[str, str] = Field(default_factory=dict)
+    # Columns whose decimals are compared at this scale (default: their own).
+    scale: dict[str, int] = Field(default_factory=dict)
+    # Columns left out of the comparison, each with the reason in the YAML.
+    skip: list[str] = Field(default_factory=list)
+
+
+class ReconcileConfig(_Strict):
+    tables: list[PairConfig]
+    reports: list[PairConfig]
+
+    @classmethod
+    def load(cls, path: Path) -> ReconcileConfig:
+        data: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return cls.model_validate(data)
+
+
+DEFAULT_DECIMAL_SCALE = 2
+_SCALE = re.compile(r"Decimal\(\d+,\s*(\d+)\)")
+
+
+def target_scale(clickhouse_type: str) -> int | None:
+    found = _SCALE.search(clickhouse_type)
+    return int(found[1]) if found else None

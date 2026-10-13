@@ -79,7 +79,7 @@ cost: ## Collect, price, attribute, write the cost report (paused)
 incidents: ## Inject faults, detect and group incidents, write metrics (paused)
 	$(RUN) platform-ops incidents run
 
-reconcile: ## Run the migration scenario and the diff, write the sign-off report (paused)
+reconcile: ## Write the cutover sign-off from the parallel run (after make demo)
 	$(RUN) platform-ops reconcile run
 
 dashboard: ## Launch the Streamlit dashboards (paused)
@@ -116,13 +116,15 @@ clean: ## Remove generated data, reports and build artifacts
 	rm -rf .pytest_cache .ruff_cache .mypy_cache
 	find reports -type f ! -name .gitkeep -delete 2>/dev/null || true
 
-# Version 2.0, Phase 11a: the company runs on Postgres and ClickHouse, and the
+# Version 2.0: the company runs on Postgres and ClickHouse, its last six weeks
+# are the migration's parallel run (reconciled every night, Phase 12), and the
 # ownership check and lineage run on its project. `company run` seeds and
 # builds itself, so `demo` needs no separate `seed` and `build` steps. The 1.x
 # modules return phase by phase; `paused` says which and when.
 pipeline: company ## Every module that runs in this phase, in order, on the current state
 	$(RUN) platform-ops metadata check
 	$(RUN) platform-ops metadata lineage
+	$(RUN) platform-ops reconcile run
 	@$(RUN) platform-ops paused
 	@echo "pipeline complete."
 
@@ -144,8 +146,10 @@ docker-build: check-env ## Build the toolkit image
 docker-up: check-env ## Start the database engines for the container (DOCKER_ENGINES)
 	$(COMPOSE) up -d --wait $(DOCKER_ENGINES)
 
-docker-demo: docker-up ## Full end to end run in the container on a clean state
-	$(COMPOSE) run --rm app make clean pipeline
+# SCALE=0.1 runs it smaller, for a check of behaviour rather than numbers (the
+# release workflow); results are always quoted at config/settings.yaml's scale.
+docker-demo: docker-up ## Full end to end run in the container on a clean state (SCALE=...)
+	$(COMPOSE) run --rm $(if $(SCALE),-e PLATFORM_OPS_SCALE_FACTOR=$(SCALE)) app make clean pipeline
 
 docker-test: docker-up ## Run the tests in the container, skips listed with their reason
 	$(COMPOSE) run --rm app make test PYTEST_ARGS=-rs
