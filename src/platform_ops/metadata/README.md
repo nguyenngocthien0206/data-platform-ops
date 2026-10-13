@@ -36,14 +36,14 @@ A check that blocks every merge on day one gets switched off by the end of the w
    platform-ops metadata init-registry --manifest target/manifest.json --out ownership/
    ```
 
-   It writes one rule per group, not per dataset: each source system, each folder of models (split by name prefix where a folder mixes `dim_` and `fct_`), each installed package, the seeds, the snapshots, and each exposure with the owner its dbt definition names. Every rule says `owner: TODO, team: TODO`. On the bundled project, 139 datasets come out as 63 rules. It never overwrites an existing registry without `--force`.
+   It writes one rule per group, not per dataset: each source system, each folder of models (split by name prefix where a folder mixes `dim_` and `fct_`), each installed package, the seeds, the snapshots, and each exposure with the owner its dbt definition names. Every rule says `owner: TODO, team: TODO`. On the bundled project, 141 datasets come out as 65 rules. It never overwrites an existing registry without `--force`.
 2. **Name the teams and owners, sources and staging first.** Fill in `ownership/teams.yaml`, then the rules for sources and staging: they hold most root causes, so they decide who gets paged once incidents run on this registry (Phase 11). Split a rule when a group has several owners; the more specific rule wins.
 3. **Add the workflow in report-only mode** (`REPORT_ONLY: "true"`). Problems show on pull requests and nothing is blocked.
 4. **Record the baseline** from the `ownership-summary` artifact: `owned_share` is the share of datasets whose rule names a real team and member. A rule still on `TODO` counts as unowned, so the starter registry reads 0%, and the number rises as the team works through the list.
 5. **Close the TODOs.** `metadata check --report-only` lists one problem per remaining rule, each pointing at its line in `ownership.yaml`.
 6. **Make it required.** Set `REPORT_ONLY: "false"` and add the job to the branch protection rules. From then on, a new model cannot merge without an owner, which is the whole point.
 
-`tests/fixtures/dbt_clickhouse` is a small project on ClickHouse, laid out nothing like the bundled one, with its registry in its own `ownership/` folder. The tests parse it and run the check against variants of its registry, and run it for real on the ClickHouse service (`docker compose --profile clickhouse up -d`).
+`tests/test_ownership_standalone.py` runs the check this way on the company's own project, which is on ClickHouse since version 2.0: it parses the project, then checks variants of its registry through the real CLI, with `--manifest`, `--registry-dir` and `--format github`. Until 2.0 a small fixture project on ClickHouse played that part.
 
 ## Lineage (`lineage.py`, `manifest.py`)
 
@@ -57,22 +57,24 @@ A check that blocks every merge on day one gets switched off by the end of the w
 
 ## Results from the first full build
 
-From an actual `make build` followed by `platform-ops metadata check` at scale 1.0:
+From an actual `make demo` at scale 1.0 (version 2.0: the company's project on ClickHouse, results in the Postgres ops store):
 
 | | |
 |---|---:|
 | Sources owned | 9 of 9 |
 | Models owned | 118 of 118 |
 | Exposures owned | 12 of 12 |
-| Rows in `ops.node_ownership` | 139 |
-| Edges in `ops.lineage_edges` | 372 |
+| Seeds owned | 1 of 1 |
+| Snapshots owned | 1 of 1 |
+| Rows in `ops.node_ownership` | 141 |
+| Edges in `ops.lineage_edges` | 376 |
 
 | Team | Datasets owned |
 |---|---:|
-| platform | 34 |
+| platform | 36 |
 | product | 27 |
 | sales | 26 |
 | marketing | 26 |
 | finance | 26 |
 
-11 datasets are critical, 127 important and 1 best effort. The best-effort one is `finance_fct_revenue_v0`, an abandoned model whose name still matches the critical revenue rule and which an exact rule demotes. The platform team owns more datasets than any business team, and all of them sit upstream of everything else, which is the load Phase 3 is expected to measure.
+11 datasets are critical, 129 important and 1 best effort. The best-effort one is `finance_fct_revenue_v0`, an abandoned model whose name still matches the critical revenue rule and which an exact rule demotes. The platform team owns more datasets than any business team, and all of them sit upstream of everything else, which is the load Phase 3 is expected to measure.

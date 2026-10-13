@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import duckdb
 import networkx as nx
 
-from platform_ops.common.config import Tier, TierWeights
+from platform_ops.common.config import Settings, Tier, TierWeights
 from platform_ops.common.db import OPS_SCHEMA, transaction
 from platform_ops.metadata.manifest import Node
 
@@ -139,3 +139,30 @@ def persist_edges(connection: duckdb.DuckDBPyConnection, graph: nx.DiGraph[str])
                 f"INSERT INTO {OPS_SCHEMA}.lineage_edges VALUES (?, ?, ?, ?)", rows
             )
     return len(rows)
+
+
+LINEAGE_DDL = """
+    parent_id text NOT NULL,
+    child_id text NOT NULL,
+    parent_type text NOT NULL,
+    child_type text NOT NULL"""
+
+
+def store_edges(settings: Settings, graph: nx.DiGraph[str]) -> int:
+    """Replace ``ops.lineage_edges`` in the toolkit's Postgres store (version 2.0).
+
+    Replaced in one transaction, never appended, so a reader never sees edges
+    from an older manifest mixed with the current one.
+    """
+    from platform_ops.common.store import open_store, replace_ops_table
+
+    rows = edge_rows(graph)
+    with open_store(settings) as store:
+        return replace_ops_table(
+            store,
+            settings,
+            "lineage_edges",
+            LINEAGE_DDL,
+            ("parent_id", "child_id", "parent_type", "child_type"),
+            rows,
+        )
