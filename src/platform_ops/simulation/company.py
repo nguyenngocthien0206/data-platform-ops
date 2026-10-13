@@ -3,7 +3,8 @@
 ``platform-ops company run`` replays the company's days the way its platform
 lives them:
 
-1. **History.** The legacy Postgres is seeded with everything up to the window
+1. **History.** The company's ClickHouse users are created (``access``), the
+   legacy Postgres is seeded with everything up to the window
    start, every company database in ClickHouse is dropped (a dbt snapshot
    survives ``--full-refresh``, so nothing less starts clean), and the raw
    layer is backfilled from Postgres.
@@ -31,11 +32,9 @@ from datetime import datetime, timedelta
 from platform_ops.common.config import Settings
 from platform_ops.common.dbt_invoke import invocation_from_settings, run_dbt
 from platform_ops.common.servers import clickhouse_client
+from platform_ops.simulation.access import DBT_LAYERS, drop_users, ensure_users
 from platform_ops.simulation.ingest import Ingestion
 from platform_ops.simulation.legacy_db import LegacyCompany
-
-# The ClickHouse databases dbt builds into, one per layer, after the raw one.
-DBT_LAYERS = ("reference", "staging", "intermediate", "marts", "snapshots")
 
 
 @dataclass
@@ -55,7 +54,12 @@ def company_databases(settings: Settings) -> list[str]:
 
 
 def start_over(settings: Settings, legacy: LegacyCompany, ingestion: Ingestion) -> tuple[int, int]:
-    """Seed Postgres, empty ClickHouse, backfill raw. Returns (rows seeded, rows ingested)."""
+    """Users, then seed Postgres, empty ClickHouse, backfill raw.
+
+    Returns (rows seeded, rows ingested). The users come first, so a missing
+    password stops the run before anything is written.
+    """
+    ensure_users(settings)
     seeded = sum(legacy.seed().values())
     client = clickhouse_client(settings)
     try:
@@ -70,7 +74,7 @@ def start_over(settings: Settings, legacy: LegacyCompany, ingestion: Ingestion) 
 
 def remove_company(settings: Settings) -> None:
     """Drop everything the company has on both servers: its ClickHouse databases,
-    its legacy and reporting schemas, and the toolkit's ops schema.
+    its users, its legacy and reporting schemas, and the toolkit's ops schema.
 
     The tests use it to clean up their namespace; it is never part of a run.
     """
@@ -85,6 +89,7 @@ def remove_company(settings: Settings) -> None:
             client.command(f"DROP DATABASE IF EXISTS `{database}`")
     finally:
         client.close()
+    drop_users(settings)
     for dbname, schemas in (
         (None, (company.legacy_schema, company.reporting_schema)),
         (company.ops_database, (company.ops_schema,)),

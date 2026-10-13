@@ -7,6 +7,12 @@ own results live in a separate database on the same Postgres server (see
 or ``.env``, the same values Compose starts the containers with; a real
 environment variable always wins, so the toolkit's container reaches the
 servers by their Compose service names.
+
+Inside ClickHouse the company has one user per team, plus ``metabase``, ``dbt``
+and ``loader`` (``simulation.access``), so ClickHouse's query log records who
+ran what. Each one's password comes from its own variable,
+``CLICKHOUSE_PASSWORD_<USER>``, with no default: a missing one is an error that
+names the variable, never a silent fallback to another account.
 """
 
 from __future__ import annotations
@@ -81,6 +87,33 @@ def connect_postgres(settings: Settings, dbname: str | None = None) -> psycopg.C
     return connection
 
 
+class MissingPasswordError(RuntimeError):
+    """A company user's password is not set; the message names every missing variable."""
+
+    def __init__(self, variables: list[str]) -> None:
+        self.variables = variables
+        super().__init__("set these in .env (see .env.example): " + ", ".join(variables))
+
+
+def password_variable(user: str) -> str:
+    """The variable holding a company user's password, e.g. ``CLICKHOUSE_PASSWORD_DBT``."""
+    return f"CLICKHOUSE_PASSWORD_{user.upper()}"
+
+
+def user_password(settings: Settings, user: str) -> str | None:
+    """A company user's password from the environment or ``.env``; ``None`` when unset."""
+    return env_value(password_variable(user), settings.root / ".env")
+
+
+def require_passwords(settings: Settings, users: list[str]) -> dict[str, str]:
+    """Every listed user's password, or one error naming all the missing variables."""
+    found = {user: user_password(settings, user) for user in users}
+    missing = [password_variable(user) for user, password in found.items() if not password]
+    if missing:
+        raise MissingPasswordError(missing)
+    return {user: password for user, password in found.items() if password}
+
+
 # ClickHouse settings every toolkit session uses, the same ones dbt's profile
 # sets, so SQL means what it means in standard SQL: an outer join returns NULL
 # for a missing row (not the type's default), and a bare UNION is UNION DISTINCT.
@@ -90,15 +123,25 @@ CLICKHOUSE_SESSION_SETTINGS: dict[str, Any] = {
 }
 
 
-def clickhouse_client(settings: Settings) -> Any:
-    """A clickhouse-connect HTTP client with the toolkit's session settings."""
+def clickhouse_client(settings: Settings, user: str | None = None) -> Any:
+    """A clickhouse-connect HTTP client with the toolkit's session settings.
+
+    Without ``user`` it connects as the server's admin, which the toolkit uses
+    to set the company up and to read what it measures. With ``user`` (a base
+    name such as ``loader``) it connects as that company user, namespaced, with
+    that user's own password.
+    """
     import clickhouse_connect
 
     params = clickhouse_params(settings)
+    username, password = params.user, params.password
+    if user is not None:
+        username = settings.company.name(user)
+        password = require_passwords(settings, [user])[user]
     return clickhouse_connect.get_client(
         host=params.host,
         port=params.port,
-        username=params.user,
-        password=params.password,
+        username=username,
+        password=password,
         settings=CLICKHOUSE_SESSION_SETTINGS,
     )
