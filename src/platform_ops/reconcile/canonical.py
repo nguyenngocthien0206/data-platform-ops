@@ -5,8 +5,8 @@ Two engines never agree on how to print a value: ``2.3`` against ``2.30``,
 ``true``. So before anything is hashed, every value is rendered to one agreed
 string, the same way in every engine:
 
-- decimal: fixed scale, rounded half away from zero (what all three engines do
-  when casting to a smaller scale), no negative zero;
+- decimal: fixed scale, rounded half away from zero (what the engines do when
+  casting to a smaller scale), no negative zero;
 - timestamp: UTC, ``YYYY-MM-DDTHH:MM:SS.ffffffZ``. A legacy local timestamp is
   first converted from the configured legacy zone;
 - text: optionally right-trimmed, optionally lower-cased, then ``\\`` becomes
@@ -17,10 +17,9 @@ string, the same way in every engine:
 A row is its canonical values joined by ``|``. Its hash is the MD5 of the row's
 UTF-8 bytes, reduced to two unsigned 32-bit integers taken from hex digits 1 to
 8 and 9 to 16. A segment is summarised as its row count and the sums of both
-integers. Sums, not XOR, because SQL Server has no XOR aggregate, and a sum is
-additive: a parent segment's sums always equal the sum of its children's. Each
-row adds under 2**32, so even SQL Server's BIGINT sum cannot overflow below two
-billion rows per segment.
+integers. Sums, not XOR, because a sum is additive: a parent segment's sums
+always equal the sum of its children's. Each row adds under 2**32, so a BIGINT
+sum cannot overflow below two billion rows per segment.
 
 This module has one Python reference implementation and one SQL renderer per
 engine. The golden-row test holds all of them to byte-identical output.
@@ -136,9 +135,7 @@ def _text_sql(dialect: Dialect, expr: str, rule: Rule) -> str:
     return f"REPLACE(REPLACE({expr}, '\\', '\\\\'), '|', '\\|')"
 
 
-def _value_sql(
-    dialect: Dialect, column: Column, rule: Rule, local_zone: str | None, zone_names: dict[str, str]
-) -> str:
+def _value_sql(dialect: Dialect, column: Column, rule: Rule, local_zone: str | None) -> str:
     c = column.name
     kind = column.kind
     if dialect == "postgres":
@@ -156,50 +153,27 @@ def _value_sql(
         if kind == "local_ts":
             return f"to_char({c}, {fmt})"
         return f"to_char({c} AT TIME ZONE 'UTC', {fmt})"
-    if dialect == "duckdb":
-        if kind == "int":
-            return f"CAST({c} AS VARCHAR)"
-        if kind == "decimal":
-            return f"CAST(CAST({c} AS DECIMAL(38, {rule.scale})) AS VARCHAR)"
-        if kind == "text":
-            return _text_sql(dialect, c, rule)
-        if kind == "bool":
-            return f"CASE {c} WHEN TRUE THEN 'true' WHEN FALSE THEN 'false' END"
-        fmt = _quote(TIMESTAMP_FORMAT)
-        # The session runs in UTC (connectors set it), so a TIMESTAMPTZ prints as UTC.
-        if kind == "local_ts" and local_zone:
-            return f"strftime({c} AT TIME ZONE {_quote(local_zone)}, {fmt})"
-        return f"strftime({c}, {fmt})"
-    # SQL Server
+    # DuckDB
     if kind == "int":
-        return f"CONVERT(VARCHAR(20), {c})"
+        return f"CAST({c} AS VARCHAR)"
     if kind == "decimal":
-        return f"CONVERT(VARCHAR(50), CONVERT(DECIMAL(38, {rule.scale}), {c}))"
+        return f"CAST(CAST({c} AS DECIMAL(38, {rule.scale})) AS VARCHAR)"
     if kind == "text":
         return _text_sql(dialect, c, rule)
     if kind == "bool":
-        return f"CASE {c} WHEN 1 THEN 'true' WHEN 0 THEN 'false' END"
+        return f"CASE {c} WHEN TRUE THEN 'true' WHEN FALSE THEN 'false' END"
+    fmt = _quote(TIMESTAMP_FORMAT)
+    # The session runs in UTC (connectors set it), so a TIMESTAMPTZ prints as UTC.
     if kind == "local_ts" and local_zone:
-        zone = _quote(zone_names.get(local_zone, local_zone))
-        instant = f"SWITCHOFFSET({c} AT TIME ZONE {zone}, '+00:00')"
-    elif kind == "local_ts":
-        instant = c
-    else:
-        instant = f"SWITCHOFFSET({c}, '+00:00')"
-    # Style 126 drops the fraction when it is zero, so microseconds are added by hand.
-    moment = f"CONVERT(DATETIME2(6), {instant})"
-    micro = f"RIGHT('000000' + CONVERT(VARCHAR(6), DATEPART(MICROSECOND, {moment})), 6)"
-    return f"CONVERT(VARCHAR(19), {moment}, 126) + '.' + {micro} + 'Z'"
+        return f"strftime({c} AT TIME ZONE {_quote(local_zone)}, {fmt})"
+    return f"strftime({c}, {fmt})"
 
 
 def _hash_part_sql(dialect: Dialect, row: str, part: int) -> str:
     start = 1 if part == 1 else 9
     if dialect == "postgres":
         return f"('x' || substr(md5({row}), {start}, 8))::bit(32)::bigint"
-    if dialect == "duckdb":
-        return f"CAST('0x' || substr(md5({row}), {start}, 8) AS BIGINT)"
-    byte = 1 if part == 1 else 5
-    return f"CONVERT(BIGINT, SUBSTRING(HASHBYTES('MD5', {row}), {byte}, 4))"
+    return f"CAST('0x' || substr(md5({row}), {start}, 8) AS BIGINT)"
 
 
 @dataclass(frozen=True)
@@ -218,17 +192,12 @@ def render(
     table: TableSpec,
     rules: dict[str, Rule],
     local_zone: str | None,
-    zone_names: dict[str, str] | None = None,
 ) -> RenderedTable:
-    names = zone_names or {}
     values = tuple(
-        f"COALESCE({_value_sql(dialect, c, rules[c.name], local_zone, names)}, {_quote(NULL)})"
+        f"COALESCE({_value_sql(dialect, c, rules[c.name], local_zone)}, {_quote(NULL)})"
         for c in table.columns
     )
-    if dialect == "sqlserver":
-        row = "CONVERT(VARCHAR(MAX), CONCAT(" + ", '|', ".join(values) + "))"
-    else:
-        row = " || '|' || ".join(values)
+    row = " || '|' || ".join(values)
     return RenderedTable(
         key=table.key,
         values=values,

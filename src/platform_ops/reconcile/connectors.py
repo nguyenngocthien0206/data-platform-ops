@@ -8,13 +8,12 @@ rows of differing leaf segments cross the wire (CLAUDE.md: push computation
 into the database).
 
 The legacy side also has to be written and read in bulk, for the generator and
-for the migration job. That is :class:`LegacyStore`. Postgres, SQL Server and
-DuckDB are legacy stores; the Iceberg target is read through DuckDB.
+for the migration job. That is :class:`LegacyStore`. Postgres and DuckDB are
+legacy stores; the Iceberg target is read through DuckDB.
 """
 
 from __future__ import annotations
 
-import json
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -25,7 +24,7 @@ import duckdb
 import pyarrow as pa
 
 from platform_ops.reconcile.canonical import RenderedTable
-from platform_ops.reconcile.schema import Dialect, TableSpec, arrow_schema
+from platform_ops.reconcile.schema import Dialect, TableSpec
 
 LEGACY_SCHEMA = "legacy"
 
@@ -68,7 +67,7 @@ class LegacyStore(Protocol):
 
 
 class _SqlConnector:
-    """Shared SQL for the three engines; subclasses supply the dialect bits."""
+    """Shared SQL for the engines; subclasses supply the dialect bits."""
 
     engine: str
     dialect: Dialect
@@ -87,9 +86,6 @@ class _SqlConnector:
 
     def _members(self, expr: str, values: Sequence[int]) -> tuple[str, list[Any]]:
         raise NotImplementedError
-
-    def _fetch_value(self, expr: str) -> str:
-        return expr
 
     def _create_hash_table(self, name: str, source_sql: str) -> None:
         self._rows(f"CREATE TEMP TABLE {name} AS {source_sql}")
@@ -150,7 +146,7 @@ class _SqlConnector:
         self, table: TableSpec, rendered: RenderedTable, lo: int, width: int, buckets: Sequence[int]
     ) -> dict[int, tuple[str, ...]]:
         condition, params = self._members(self._bucket(table.key, lo, width), buckets)
-        values = ", ".join(self._fetch_value(v) for v in rendered.values)
+        values = ", ".join(rendered.values)
         sql = f"SELECT {table.key}, {values} FROM {self.relation(table)} WHERE {condition}"
         return {int(row[0]): tuple(str(v) for v in row[1:]) for row in self._rows(sql, params)}
 
@@ -312,163 +308,6 @@ def read_export_csv(path: Path, table: TableSpec) -> pa.Table:
         reader.close()
 
 
-# -- SQL Server ----------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class SqlServerParams:
-    host: str
-    port: int
-    user: str
-    password: str
-    database: str
-
-
-class SqlServerConnector(_SqlConnector):
-    dialect: Dialect = "sqlserver"
-    insert_batch_rows = 1000  # SQL Server's limit for one VALUES list
-
-    def __init__(
-        self, params: SqlServerParams, *, local_zone: str | None, zone_names: dict[str, str]
-    ) -> None:
-        import pymssql
-
-        self.engine = "sqlserver"
-        self._prepared = {}
-        self.local_zone = local_zone
-        self.zone_names = zone_names
-        self.params = params
-        self.connection = pymssql.connect(
-            server=params.host,
-            port=str(params.port),
-            user=params.user,
-            password=params.password,
-            autocommit=True,
-        )
-        self._use_database(create=False)
-
-    def _use_database(self, *, create: bool) -> None:
-        from platform_ops.reconcile.schema import SQLSERVER_COLLATION
-
-        cursor = self.connection.cursor()
-        database = self.params.database
-        if create:
-            cursor.execute("USE master")
-            cursor.execute(
-                f"IF DB_ID('{database}') IS NOT NULL BEGIN "
-                f"ALTER DATABASE [{database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; "
-                f"DROP DATABASE [{database}]; END"
-            )
-            # A UTF-8 default collation makes every VARCHAR, literals included,
-            # hash as UTF-8 bytes like the other engines.
-            cursor.execute(f"CREATE DATABASE [{database}] COLLATE {SQLSERVER_COLLATION}")
-        # USE is resolved when the batch compiles, even inside IF, so check first.
-        cursor.execute(f"SELECT DB_ID('{database}')")
-        row = cursor.fetchone()
-        if row is not None and row[0] is not None:
-            cursor.execute(f"USE [{database}]")
-
-    def close(self) -> None:
-        self.connection.close()
-
-    def relation(self, table: TableSpec) -> str:
-        return f"dbo.{table.name}"
-
-    def _rows(self, sql: str, params: Sequence[Any] = ()) -> list[tuple[Any, ...]]:
-        cursor = self.connection.cursor()
-        cursor.execute(sql, tuple(params) if params else None)
-        rows: list[tuple[Any, ...]] = cursor.fetchall()
-        return rows
-
-    def _members(self, expr: str, values: Sequence[int]) -> tuple[str, list[Any]]:
-        return (
-            f"{expr} IN (SELECT CONVERT(BIGINT, value) FROM OPENJSON(%s))",
-            [json.dumps(list(values))],
-        )
-
-    def _hash_table_name(self, table: TableSpec) -> str:
-        return f"#rowhash_{table.name}"
-
-    def _create_hash_table(self, name: str, source_sql: str) -> None:
-        select, _, rest = source_sql.partition(" FROM ")
-        self.connection.cursor().execute(f"{select} INTO {name} FROM {rest}")
-
-    def _drop_hash_table(self, name: str) -> None:
-        self.connection.cursor().execute(
-            f"IF OBJECT_ID('tempdb..{name}') IS NOT NULL DROP TABLE {name}"
-        )
-
-    def _fetch_value(self, expr: str) -> str:
-        # pymssql decodes VARCHAR in the wrong code page; NVARCHAR arrives intact.
-        return f"CONVERT(NVARCHAR(MAX), {expr})"
-
-    def recreate(self, tables: dict[str, pa.Table], specs: Sequence[TableSpec]) -> None:
-        self._prepared = {}
-        self._use_database(create=True)
-        cursor = self.connection.cursor()
-        for spec in specs:
-            cursor.execute(spec.ddl("sqlserver", self.relation(spec)))
-            rows = tables[spec.name].to_pylist()
-            names = ", ".join(c.name for c in spec.columns)
-            for start in range(0, len(rows), self.insert_batch_rows):
-                chunk = rows[start : start + self.insert_batch_rows]
-                values = ",\n".join(
-                    "(" + ", ".join(_mssql_literal(row[c.name], c.kind) for c in spec.columns) + ")"
-                    for row in chunk
-                )
-                cursor.execute(f"INSERT INTO {self.relation(spec)} ({names}) VALUES {values}")
-
-    def export(self, table: TableSpec, work_dir: Path) -> pa.Table:
-        selected = []
-        for c in table.columns:
-            if c.kind == "text":
-                selected.append(f"CONVERT(NVARCHAR(MAX), {c.name})")
-            elif c.kind == "utc_ts":
-                selected.append(f"CONVERT(DATETIME2(6), SWITCHOFFSET({c.name}, '+00:00'))")
-            elif c.kind == "decimal":
-                # As text, so no float ever sits between the engine and Arrow.
-                selected.append(f"CONVERT(VARCHAR(50), {c.name})")
-            else:
-                selected.append(c.name)
-        rows = self._rows(
-            f"SELECT {', '.join(selected)} FROM {self.relation(table)} ORDER BY {table.key}"
-        )
-        return _arrow_from_rows(table, rows)
-
-
-def _mssql_literal(value: Any, kind: str) -> str:
-    if value is None:
-        return "NULL"
-    if kind == "bool":
-        return "1" if value else "0"
-    if kind in ("int", "decimal"):
-        return str(value)
-    if kind == "local_ts":
-        return f"'{value:%Y-%m-%d %H:%M:%S.%f}'"
-    if kind == "utc_ts":
-        return f"'{value:%Y-%m-%d %H:%M:%S.%f}+00:00'"
-    return "N'" + str(value).replace("'", "''") + "'"
-
-
-def _arrow_from_rows(table: TableSpec, rows: list[tuple[Any, ...]]) -> pa.Table:
-    """Rows from a DB-API cursor into Arrow, typed like the other exports."""
-    from datetime import UTC
-    from decimal import Decimal
-
-    schema = arrow_schema(table)
-    arrays = []
-    for i, column in enumerate(table.columns):
-        values = [row[i] for row in rows]
-        if column.kind == "decimal":
-            values = [None if v is None else Decimal(v) for v in values]
-        elif column.kind == "bool":
-            values = [None if v is None else bool(v) for v in values]
-        elif column.kind == "utc_ts":
-            values = [None if v is None else v.replace(tzinfo=UTC) for v in values]
-        arrays.append(pa.array(values, type=schema.field(i).type))
-    return pa.Table.from_arrays(arrays, schema=schema)
-
-
 # -- building connectors from settings -------------------------------------------------
 
 
@@ -482,16 +321,4 @@ def postgres_params(env_file: Path) -> PostgresParams:
         user=env_value("POSTGRES_USER", env_file, "platform_ops") or "platform_ops",
         password=env_value("POSTGRES_PASSWORD", env_file, "") or "",
         dbname=env_value("POSTGRES_DB", env_file, "legacy") or "legacy",
-    )
-
-
-def sqlserver_params(env_file: Path, database: str = "legacy") -> SqlServerParams:
-    from platform_ops.common.env import env_value
-
-    return SqlServerParams(
-        host=env_value("MSSQL_HOST", env_file, "localhost") or "localhost",
-        port=int(env_value("MSSQL_PORT", env_file, "1433") or 1433),
-        user="sa",
-        password=env_value("MSSQL_SA_PASSWORD", env_file, "") or "",
-        database=database,
     )

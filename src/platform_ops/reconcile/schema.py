@@ -14,12 +14,7 @@ from typing import Literal
 import pyarrow as pa
 
 Kind = Literal["int", "decimal", "text", "bool", "local_ts", "utc_ts"]
-Dialect = Literal["postgres", "sqlserver", "duckdb"]
-
-# SQL Server stores text as UTF-8 in this collation, so its bytes (and so its
-# hashes) match Postgres and DuckDB. CI because the legacy system is
-# case-insensitive, which the canonical case folding models (ADR 0009).
-SQLSERVER_COLLATION = "Latin1_General_100_CI_AS_SC_UTF8"
+Dialect = Literal["postgres", "duckdb"]
 
 
 @dataclass(frozen=True)
@@ -37,16 +32,12 @@ class Column:
             number = "NUMERIC" if dialect == "postgres" else "DECIMAL"
             return f"{number}({self.precision}, {self.scale})"
         if self.kind == "text":
-            if dialect == "sqlserver":
-                return f"VARCHAR({self.length}) COLLATE {SQLSERVER_COLLATION}"
             return f"VARCHAR({self.length})"
         if self.kind == "bool":
-            return "BIT" if dialect == "sqlserver" else "BOOLEAN"
+            return "BOOLEAN"
         if self.kind == "local_ts":
-            return "DATETIME2(6)" if dialect == "sqlserver" else "TIMESTAMP"
-        return {"postgres": "TIMESTAMPTZ", "sqlserver": "DATETIMEOFFSET(6)"}.get(
-            dialect, "TIMESTAMPTZ"
-        )
+            return "TIMESTAMP"
+        return "TIMESTAMPTZ"
 
 
 @dataclass(frozen=True)

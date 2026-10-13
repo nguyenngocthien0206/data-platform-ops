@@ -1,6 +1,8 @@
 # 0001: Postgres as the default legacy source, SQL Server behind a profile
 
-Status: accepted
+Status: superseded in version 2.0 (Phase 11a, 2026-10-13). The simulated company's
+legacy system is Postgres, so SQL Server, its Compose service, driver and CI
+workflow were removed. The reasoning below held for 1.x.
 Date: 2026-09-23
 
 ## Context

@@ -4,10 +4,9 @@ The golden rows hold every value that has bitten a migration somewhere: NULL
 next to an empty string, trailing spaces, mixed case, non-ASCII names, the
 separator and escape characters inside text, a literal ``\\N``, negative
 half-way decimals, a value that rounds to zero from below, and local times on
-both sides of daylight saving. Python, DuckDB, Postgres and SQL Server must
-render each value to the same string and sum the same hashes. Postgres and
-SQL Server run when they are reachable (``make up``, and the ``sqlserver``
-Compose profile); otherwise their cases are skipped with the reason.
+both sides of daylight saving. Python, DuckDB and Postgres must render each
+value to the same string and sum the same hashes. Postgres runs when it is
+reachable (``make up``); otherwise its cases are skipped with the reason.
 """
 
 from __future__ import annotations
@@ -33,15 +32,12 @@ from platform_ops.reconcile.canonical import (
 from platform_ops.reconcile.connectors import (
     DuckDBConnector,
     PostgresConnector,
-    SqlServerConnector,
     postgres_params,
-    sqlserver_params,
 )
 from platform_ops.reconcile.schema import Column, TableSpec
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ZONE = "America/New_York"
-ZONE_NAMES = {ZONE: "Eastern Standard Time"}
 
 GOLDEN = TableSpec(
     "golden",
@@ -204,7 +200,7 @@ def test_row_hash_is_md5_split_into_two_unsigned_32_bit_halves() -> None:
 
 def _check(connector: Any, policy: str) -> None:
     rules = POLICIES[policy]
-    rendered = render(connector.dialect, GOLDEN, rules, ZONE, ZONE_NAMES)
+    rendered = render(connector.dialect, GOLDEN, rules, ZONE)
     expected = _expected(policy)
     got = connector.fetch(GOLDEN, rendered, 0, 1_000_000, [0])
     for key in sorted(expected):
@@ -239,28 +235,3 @@ def postgres() -> Iterator[PostgresConnector]:
 @pytest.mark.parametrize("policy", sorted(POLICIES))
 def test_postgres_matches_the_reference(postgres: PostgresConnector, policy: str) -> None:
     _check(postgres, policy)
-
-
-@pytest.fixture(scope="module")
-def sqlserver() -> Iterator[SqlServerConnector]:
-    pytest.importorskip("pymssql", reason="install with `uv sync --extra sqlserver`")
-    try:
-        connector = SqlServerConnector(
-            sqlserver_params(REPO_ROOT / ".env", database="golden_check"),
-            local_zone=ZONE,
-            zone_names=ZONE_NAMES,
-        )
-    except Exception as error:
-        pytest.skip(f"SQL Server not reachable ({type(error).__name__}); see the sqlserver profile")
-    connector.recreate({"golden": _arrow()}, [GOLDEN])
-    yield connector
-    cursor = connector.connection.cursor()
-    cursor.execute("USE master")
-    cursor.execute("ALTER DATABASE golden_check SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
-    cursor.execute("DROP DATABASE golden_check")
-    connector.close()
-
-
-@pytest.mark.parametrize("policy", sorted(POLICIES))
-def test_sqlserver_matches_the_reference(sqlserver: SqlServerConnector, policy: str) -> None:
-    _check(sqlserver, policy)

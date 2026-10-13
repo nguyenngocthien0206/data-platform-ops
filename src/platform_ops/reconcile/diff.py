@@ -85,11 +85,10 @@ def diff_table(
     *,
     fanout: int,
     leaf_width: int,
-    zone_names: dict[str, str] | None = None,
 ) -> TableDiff:
     result = TableDiff(table.name)
-    source_sql = render(source.dialect, table, rules, source.local_zone, zone_names)
-    target_sql = render(target.dialect, table, rules, target.local_zone, zone_names)
+    source_sql = render(source.dialect, table, rules, source.local_zone)
+    target_sql = render(target.dialect, table, rules, target.local_zone)
 
     ranges = [r for r in (source.key_range(table), target.key_range(table)) if r is not None]
     result.queries += 2
