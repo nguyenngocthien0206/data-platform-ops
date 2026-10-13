@@ -18,5 +18,7 @@ Each choice that shapes a number, a boundary or how the toolkit is run is record
 | [0012](0012-the-toolkit-in-a-container.md) | The toolkit in a container, with its state on volumes | 7 |
 | [0013](0013-ci-and-release-from-the-same-container.md) | CI and release from the same container, the tag pushed by a person | 8 |
 | [0014](0014-the-ownership-gate-in-the-consuming-repository.md) | The ownership gate runs in the consuming repository, on its manifest | 10 |
+| [0015](0015-clickhouse-modelling-and-watermark-ingestion.md) | ClickHouse modelling per layer, and ingestion by watermark | 11a |
+| [0016](0016-users-per-team-and-bi-from-exposures.md) | One ClickHouse user per team, and the BI built from the dbt exposures | 11b |
 
 To add one, take the next number, name the file `NNNN-short-title.md`, start with `Status` and `Date`, and add a row here.

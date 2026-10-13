@@ -20,7 +20,7 @@ Version 1.x (up to [`v1.2.0`](https://github.com/nguyenngocthien0206/data-platfo
 | Incremental ingestion into ClickHouse | running | 11a, done |
 | The dbt project on ClickHouse | running | 11a, done |
 | Ownership check and lineage | running, results in the Postgres ops store | 11a, done |
-| Metabase dashboards, one ClickHouse user per team | in progress | 11b |
+| Metabase dashboards built from the exposures, one ClickHouse user per team | running | 11b, done |
 | Reconciliation, Postgres reports against ClickHouse marts | paused | 12 |
 | Cost and FinOps on ClickHouse's query log, the Streamlit dashboards | paused | 13 |
 | Incidents on real dbt runs | paused | 14 |
@@ -40,6 +40,8 @@ flowchart LR
     subgraph warehouse["Target: ClickHouse"]
         raw[("raw<br/>ReplacingMergeTree")] --> dbt["dbt project<br/>118 models, a seed, a snapshot,<br/>12 dashboards as exposures"]
     end
+
+    dbt -- "marts, as the metabase user" --> mb["Metabase<br/>one dashboard per exposure"]
 
     app -- "updated_at watermark<br/>through postgresql()" --> raw
 
@@ -67,6 +69,8 @@ flowchart LR
 
 The company has no change data capture, like many teams at the start of a migration, so an ingestion job pulls new and changed rows by an `updated_at` watermark and re-reads an hour before it to catch late commits. Raw tables in ClickHouse are `ReplacingMergeTree`, so a row read twice or changed in place keeps only its latest version. Staging reads them as views; every other model is a `MergeTree` table sorted by its own key, and the four large event tables rebuild only their last two monthly partitions. Those engine and key choices are made per layer and written down, because they decide what every team's queries cost once Phase 13 prices them, and a sort key chosen by the platform team is paid for by whoever reads the table.
 
+Nobody queries ClickHouse as an admin. Each team has its own user, and so do Metabase, dbt and the ingestion: the business teams and Metabase read only the marts, dbt owns the databases it builds, and the loader may only write raw ([ADR 0016](docs/adr/0016-users-per-team-and-bi-from-exposures.md)). The query log therefore records who ran every query, which is what Phase 13 needs to show each team its own load. Metabase's dashboards are generated from the dbt exposures, one per exposure in its owning team's collection, so adding a dashboard means adding an exposure and goes through the same review as the models it reads.
+
 The modules still never talk to each other. They share the registry and the lineage graph and write their results to the `ops` schema of a separate Postgres database, which is also where incidents will live once they run against the company's real dbt jobs. Every place a real deployment talks to an outside system sits behind a small interface with a local default ([ADR 0010](docs/adr/0010-local-first-design.md)).
 
 ## Quickstart
@@ -80,11 +84,14 @@ cp .env.example .env      # local passwords for Postgres and ClickHouse
 make setup                # Python dependencies
 make up                   # Postgres (legacy and ops store) and ClickHouse
 make demo                 # the company's 91 days, then the ownership check and lineage
+make metabase             # the company's BI on http://localhost:3000, 12 dashboards
 make paused               # the 1.x modules not moved yet, and when they return
 make test                 # unit and integration tests
 ```
 
 `make demo` seeds the legacy Postgres with a year of history, then replays 91 simulated days: each day's orders, payments, sessions and in-place changes reach Postgres, the ingestion pulls them into ClickHouse at 02:00, and dbt builds the project on ClickHouse every four weeks and on the last day. It starts from scratch every time, so two runs leave identical data on both servers. Afterwards, the legacy reports are in Postgres (`reporting` schema of the `legacy` database), the marts in ClickHouse (`marts` database, HTTP on port 8123), and the ownership and lineage tables in the `ops` schema of the `platform_ops` database.
+
+`make metabase` starts Metabase (a separate, heavier service that `make demo` does not need), then builds its dashboards from the exposures; log in with `MB_ADMIN_EMAIL` and `MB_ADMIN_PASSWORD` from `.env`. It can be run again at any time and makes Metabase match the project.
 
 `make test` and `make lint` also run natively; without the servers up, the tests that need them skip with the reason.
 
@@ -97,6 +104,7 @@ cp .env.example .env
 make docker-build         # the toolkit image; the first build downloads the dependencies
 make docker-demo          # Postgres and ClickHouse up, then the demo from a clean state
 make docker-test          # the full suite, skips listed with their reason
+make docker-metabase-check  # after docker-demo: every dashboard provisioned, run and opened in a browser
 ```
 
 `make docker-lint` and `make docker-metadata-check` run the same checks as CI ([ADR 0013](docs/adr/0013-ci-and-release-from-the-same-container.md)). The company's data lives in the Postgres and ClickHouse volumes, the toolkit's scratch state on its own volumes; `make docker-clean` removes the latter, and `make help` lists every target.
@@ -110,6 +118,8 @@ From the Phase 11a verification at the default scale, in the container on one la
 **Ownership moved with the project.** All 141 datasets of the ClickHouse project have exactly one owner: 9 sources, 118 models, 12 exposures, the seed and the snapshot. The lineage graph has 376 edges. The same check runs on a company dbt repository's manifest in its own CI ([ADR 0014](docs/adr/0014-the-ownership-gate-in-the-consuming-repository.md)), so moving the warehouse did not reopen the question of who answers for each table.
 
 **The old and new reports already have to agree.** Each of the 12 legacy reports is tested against the dbt mart that replaces it, row count and every numeric total, at the test scale. The first comparison caught averages a few cents off: ClickHouse's `avg` returns a float and rounds a half to even, while the legacy Postgres rounds an exact value half away from zero. A finance user comparing the old revenue report with the new dashboard would have found it in the first week of the parallel run, so the marts now compute averages the legacy way. Phase 12 turns this test into the nightly sign-off of the cutover.
+
+**The BI is built from the project, and checked in a browser.** The 12 exposures became 12 Metabase dashboards with 69 cards in four team collections. On the development laptop Metabase took 68 seconds to become healthy, provisioning took 21 seconds, and the check ran every card through Metabase without an error, then opened every dashboard in headless Chromium. The first screenshots caught a chart that a passing query would not: a year of daily orders by country is about 4,600 rows, and Metabase draws only the first 2,000, so the line simply stopped in July. Daily charts now show the last 91 days, and the check fails any chart that reaches the limit.
 
 **Incremental is not yet faster, and that is expected.** At this size an incremental build takes 30 seconds and a full refresh 26, because about 290 dbt nodes of fixed overhead dominate. What incremental models save is bytes read, which Phase 13 measures from ClickHouse's own query log rather than assuming.
 
@@ -147,6 +157,8 @@ Each choice that shapes a number is recorded, with what it costs ([index](docs/a
 | [0012](docs/adr/0012-the-toolkit-in-a-container.md) | The toolkit in a container, with its state on volumes |
 | [0013](docs/adr/0013-ci-and-release-from-the-same-container.md) | CI and release from the same container, the tag pushed by a person |
 | [0014](docs/adr/0014-the-ownership-gate-in-the-consuming-repository.md) | The ownership gate runs in the consuming repository, on its manifest |
+| [0015](docs/adr/0015-clickhouse-modelling-and-watermark-ingestion.md) | ClickHouse modelling per layer, and ingestion by watermark |
+| [0016](docs/adr/0016-users-per-team-and-bi-from-exposures.md) | One ClickHouse user per team, and the BI built from the dbt exposures |
 
 ## Repository layout
 
@@ -156,12 +168,14 @@ dbt/               the company's dbt project on ClickHouse
 src/platform_ops/  common, metadata, simulation (the company, its legacy Postgres and
                    the ingestion), cost, incidents, reconcile, dashboard
 dashboards/        the Streamlit app (paused until Phase 13)
-scripts/           vendor fixtures, README check, dashboard browser check, release notes
+scripts/           vendor fixtures, README check, browser checks of the dashboards and of
+                   Metabase, release notes
 tests/             unit, integration and contract tests
 examples/          a GitHub Actions ownership check for a company dbt repository
 docs/              SPEC, PROGRESS, the ADRs and the Phase 6 review record
 .github/workflows/ CI and the release
-Dockerfile         the toolkit image; docker-compose.yml runs it next to Postgres and ClickHouse
+Dockerfile         the toolkit image; docker-compose.yml runs it next to Postgres, ClickHouse
+                   and, behind a profile, Metabase
 ```
 
 The build plan is in [docs/SPEC.md](docs/SPEC.md), [docs/PROGRESS.md](docs/PROGRESS.md) records what was decided along the way and why, and [CHANGELOG.md](CHANGELOG.md) lists what each release contains.

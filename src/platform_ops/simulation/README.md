@@ -1,12 +1,12 @@
 # simulation
 
-Everything that makes the simulated company behave like a real one. In version 2.0 that company runs its reporting on a legacy Postgres and is migrating to self-managed ClickHouse: the data generator feeds Postgres, hand-written reports read it, an ingestion job pulls it into ClickHouse, and dbt builds the analytics there. The workload generator and the fault injectors of 1.x live here too and come back with the modules that use them (Phases 12 to 14).
+Everything that makes the simulated company behave like a real one. In version 2.0 that company runs its reporting on a legacy Postgres and is migrating to self-managed ClickHouse: the data generator feeds Postgres, hand-written reports read it, an ingestion job pulls it into ClickHouse, dbt builds the analytics there, and Metabase shows them, each under its own ClickHouse user. The workload generator and the fault injectors of 1.x live here too and come back with the modules that use them (Phases 12 to 14).
 
 ## The company's days (`company.py`)
 
 `platform-ops company run` (and `make demo`) replays the company from scratch, always the same way:
 
-1. **History.** The legacy Postgres is seeded with a year of data up to the window start (5 January 2026), every company database in ClickHouse is dropped, and the raw layer is backfilled from Postgres. Dropping everything matters: a dbt snapshot survives `--full-refresh`, so nothing less would start clean.
+1. **History.** The company's ClickHouse users are created (a missing password stops the run here, before anything is written), the legacy Postgres is seeded with a year of data up to the window start (5 January 2026), every company database in ClickHouse is dropped, and the raw layer is backfilled from Postgres. Dropping everything matters: a dbt snapshot survives `--full-refresh`, so nothing less would start clean.
 2. **Every simulated day** for 13 weeks: the day's orders, payments, sessions and tickets reach Postgres, and at 01:00 a few products and customers change in place; at 02:00 the ingestion pulls everything newer than its watermark into ClickHouse; every 28 days and on the last day, dbt builds the project (the first build in full, later ones incrementally where a model is).
 
 The build cadence is a setting (`company.build_every_days`) because a build per day costs minutes and changes nothing the later phases measure. It is the kind of trade-off a platform team makes with the business: how fresh the dashboards need to be against how much compute that freshness burns.
@@ -56,6 +56,30 @@ Reading a row twice is harmless. Every raw table is a `ReplacingMergeTree` versi
 
 In the demo at scale 1.0, the ingestion moved 5,511,656 rows into ClickHouse for 5,431,300 rows written or changed in Postgres: the overlap re-read about 80,000 on purpose.
 
+## Users (`access.py`)
+
+Nobody queries ClickHouse as an admin. There is one user per team in `config/teams.yaml`, plus `metabase`, `dbt` and `loader`, all created again at the start of every run with their grants ([ADR 0016](../../../docs/adr/0016-users-per-team-and-bi-from-exposures.md)):
+
+| User | May | Profile |
+|---|---|---|
+| `sales`, `marketing`, `finance`, `product` | read the marts and the reference data | reader |
+| `platform` | read every layer, raw included | reader |
+| `metabase` | read the marts and the reference data, and its own entries in `system.processes` | reader |
+| `dbt` | read raw, own the databases it builds, read `system.parts` | writer |
+| `loader` | insert into raw, read Postgres through `postgresql()` | writer |
+
+The `reader` profile is `readonly = 2`: no writes, though a session may still change settings. Both profiles carry the session settings the dbt profile uses, so a query means the same whoever runs it. The extra grants were found by running each user with nothing more and reading ClickHouse's refusal: dbt-clickhouse's `insert_overwrite` reads `system.parts`, and Metabase's driver looks its own queries up in `system.processes`, which a row policy keeps from showing anyone else's.
+
+Each password comes from `CLICKHOUSE_PASSWORD_<USER>` in `.env`, with no default. That is deliberate: a shared fallback password is how test accounts end up in production, and an error that names the missing variable costs one line in `.env`.
+
+## Dashboards (`bi.py`, `metabase.py`)
+
+`bi.py` turns each dbt exposure into a dashboard definition: one dashboard per exposure in its owning team's collection (from the ownership registry), one native SQL card per model it reads. A card's SQL follows a rule from the model's columns: a generated rollup is a line per period and dimension value (a daily one over its last 91 days), anything else is a table sorted by its key, and a `dashboard` entry in the model's `config.meta` overrides both. Three marts carry one: daily sales, monthly revenue and the acquisition funnel.
+
+`metabase.py` makes a running Metabase match those definitions (`make metabase`): it creates the admin account on first start, connects ClickHouse as the `metabase` user, creates a collection per team, and creates or updates every card and dashboard by name, archiving anything no exposure asks for any more. `platform-ops metabase check` runs every card through Metabase's API, and `make docker-metabase-check` adds a headless browser that opens every dashboard and saves screenshots to `reports/screenshots/metabase/`.
+
+From an actual run on the demo at scale 1.0: 12 dashboards and 69 cards in four team collections (the platform team owns no exposure). Metabase took 68 seconds to become healthy, provisioning took 21 seconds, and the check ran all 69 cards without an error. The browser check is what found that a year of daily orders by country, about 4,600 rows, was cut off at Metabase's 2,000-row chart limit; daily charts now cover their last 91 days, and the check fails any chart that reaches the limit.
+
 ## Mart rollups (`codegen.py`)
 
 Each business team has a handful of hand-written core facts. Dashboards want the same numbers cut by day, week and month and by one dimension or another, which is mechanical work, so `codegen.py` generates those cuts from a short declarative spec: 12 families producing 57 models, each sorted in ClickHouse by its period and dimension. The output is committed because dbt reads models from disk. Regenerate after changing the spec:
@@ -68,7 +92,7 @@ A test compares the committed files with a fresh render, so a hand edit to a gen
 
 ## Workload (`workload.py`), paused until Phase 13
 
-In 1.x, `platform-ops simulation run` simulated 13 weeks of the platform on DuckDB: dbt at 02:00, the 12 dashboards refreshing every 12 or 24 hours, and five people running ad hoc SQL during office hours, from careful queries to `SELECT *` on large tables ([ADR 0007](../../../docs/adr/0007-simulated-workload-real-builds-daily-replay.md)). It is paused while the company runs on ClickHouse; Phase 13 brings it back to replay the Metabase dashboards' queries and the teams' ad hoc SQL under their own ClickHouse users, so the cost module can read who ran what from ClickHouse's query log.
+In 1.x, `platform-ops simulation run` simulated 13 weeks of the platform on DuckDB: dbt at 02:00, the 12 dashboards refreshing every 12 or 24 hours, and five people running ad hoc SQL during office hours, from careful queries to `SELECT *` on large tables ([ADR 0007](../../../docs/adr/0007-simulated-workload-real-builds-daily-replay.md)). It is paused while the company runs on ClickHouse; Phase 13 brings it back to replay the Metabase dashboards' cards (the same SQL `bi.py` generates) and the teams' ad hoc SQL under their own ClickHouse users, so the cost module can read who ran what from ClickHouse's query log.
 
 From two runs of `make simulate` in 1.x, at `v1.2.0`: 91 days, 4 real dbt builds and 87 replayed, 24,934 dbt queries, 10,192 dashboard queries and 687 ad hoc queries, 5,427,803 raw rows loaded and 3,497 changed in place, in 280 and 290 seconds.
 
