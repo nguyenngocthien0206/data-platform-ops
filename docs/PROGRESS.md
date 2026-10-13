@@ -2,16 +2,34 @@
 
 Handoff file between sessions. Read this first, then `docs/SPEC.md`.
 
-Last updated: 2026-09-29
+Last updated: 2026-10-13
 
 ## Current phase
 
-Phase 11: The company on Postgres and ClickHouse (version 2.0). Defined in the SPEC, not yet planned in detail.
+Phase 11a: The company on Postgres and ClickHouse (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phase 11b (Metabase from the exposures, one ClickHouse user per team) is planned after 11a merges.
 Branch: `phase-11-replatform` (off `main` at `8a2c23b`).
 
 Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
+
+- Phase 11a implemented (branch `phase-11-replatform`, uncommitted):
+  - **Legacy Postgres** (`simulation/legacy_db.py`): the DuckDB generator stays as an in-memory scratch engine and its tables are copied into the `app` schema of the legacy database with `COPY`, one primary key per table and an `updated_at` column. Each simulated day upserts the day's new rows and the in-place changes (`INSERT ... ON CONFLICT DO UPDATE`).
+  - **Legacy reports** (`simulation/legacy_reporting/*.sql`): 12 hand-written Postgres views in the `reporting` schema, one per dbt exposure, plus two shared helper views.
+  - **Incremental ingestion** (`simulation/ingest.py`): `INSERT INTO raw.<t> SELECT ... FROM postgresql(...)` for rows with `updated_at` in (watermark minus 60 minutes, now]. Raw tables are `ReplacingMergeTree(updated_at) ORDER BY` the key, unpartitioned; staging reads them with `FINAL`. Every load is recorded in `ops.ingestion_loads`.
+  - **dbt on ClickHouse**: `dbt-clickhouse` replaces `dbt-duckdb`. Staging is views; every other model is a `MergeTree` table sorted by its key. The four event tables (`int_order_items_enriched`, `int_sessions_enriched`, `sales_fct_order_items`, `marketing_fct_sessions`) are incremental with `insert_overwrite` on monthly partitions, rebuilding the current and previous month. The 57 generated models come from the updated `codegen.py`; the 61 hand-written ones were ported by hand. The project gained a seed (`country_codes`) and a snapshot (`snap_customers`).
+  - **`platform-ops company run`** replays the window: seed and backfill, then every day the new data, ingestion at 02:00, and a dbt build every 28 days and on the last day (5 builds). `seed` and `company run` start by dropping every company database in ClickHouse.
+  - **The ops store** is the Postgres database `platform_ops`, schema `ops` (`common/store.py`). `metadata check` and `metadata lineage` write there.
+  - **Ownership** runs on the company project; the ClickHouse fixture project is deleted and its standalone tests run on the company project (`tests/test_ownership_standalone.py`).
+  - **Paused until their phase**: reconcile (12), cost, simulation and dashboard (13), incidents (14). Their commands exit 2 naming the phase and `v1.2.0`; `platform-ops paused` and `make paused` list them; their end-to-end tests skip with the same reason; their unit tests still run.
+  - **SQL Server removed**: Compose service, `pymssql`, `sqlserver.yml`, its tests, and its code in the reconciliation (connector, renderers, DDL, Windows zone names). `dbt-duckdb` removed; `dbt-clickhouse` is a main dependency. ClickHouse is no longer behind a profile; `make up` starts Postgres and ClickHouse.
+  - README banner (2.0 in progress, the numbers below are 1.x, `v1.2.0` has the 1.x demo); ADR 0001 marked superseded; ADR 0014, the metadata and reconcile READMEs updated.
+- Phase 11a verification:
+  - `make lint` clean. `make docker-test`: 323 passed, 38 skipped, 2 min 43 s; every skip is a paused module's end-to-end test, with its phase. Native full suite 3 min 54 s.
+  - `make docker-clean docker-demo` at scale 1.0: 4 min 35 s and 4 min 27 s. 3,507,865 rows of history, 1,919,938 new and 3,497 changed in Postgres over 91 days, 5,511,656 rows ingested (the overlap re-reads about 80,000), 5 dbt builds, 141 datasets owned, 376 lineage edges.
+  - Two clean runs: all 155 relations identical (every ClickHouse table and view by row count and `sum(cityHash64(*))`, raw read with `FINAL`; every legacy table and report and every ops table in Postgres by row count and an MD5 of its rows).
+  - On the demo's data at scale 1.0: an incremental `platform-ops build` 30 s, `--full-refresh` 26 s. Storage: raw 152 MiB, intermediate 253 MiB, marts 282 MiB, the snapshot 4.7 MiB (78,360 rows).
+  - Tested at scale 0.01: every layer has its planned engine, key and partition; ClickHouse's `query_log` carries each model's node id; freshness on simulated time; each of the 12 legacy reports matches its mart in row count and every numeric total; the snapshot keeps earlier versions; an incremental build equals a full rebuild; an in-place change keeps only the latest version; the overlap catches a late commit and misses an older one.
 
 - Phase 2 merged (PR #4). Reference numbers at scale 1.0: `make simulate` 280 to 290 s, `make cost` 20 to 24 s, byte-identical `cost.md` across two runs, unused list exactly the 12 abandoned models.
 - Phase 3 implemented: fault injector with repair (`simulation/faults.py`), and `incidents/` with ingestion, grouping, severity, routing, notifier, lifecycle, the 21-day scenario, metrics and report. `platform-ops incidents run` is live; ADR 0008 and `src/platform_ops/incidents/README.md` written.
@@ -83,9 +101,29 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 
 ## In progress
 
-Nothing. Waiting for the owner's go-ahead to plan Phase 11.
+Phase 11a, waiting for the owner's review and commits.
 
 ## Decisions made
+
+### Phase 11 (owner, at planning, 2026-10-13)
+
+1. **Split in two.** 11a: legacy Postgres and its reports, ingestion, the dbt project on ClickHouse, the ops store, ownership on the company project. 11b: Metabase from the exposures and one ClickHouse user per team.
+2. **One dbt project now.** The company's project moves to ClickHouse in 11a; cost, incidents, the dashboards and reconciliation pause until Phases 12 to 14, and `make demo` says so.
+3. **The ops store is Postgres**, database `platform_ops`, on the same server as the legacy database. It is also the Phase 14 store.
+4. **One legacy report per dbt exposure**, about 12.
+
+### Phase 11a, made during implementation
+
+- **Money stays in Decimal.** A float discount rate made revenue sums depend on ClickHouse's aggregation order, so two runs differed in the last bits; the rate and resolution hours are now Decimal.
+- **Averages are exact and round half away from zero**, like Postgres (`avg_half_up` macro). ClickHouse's `avg` returns a Float64 and `round` on a float rounds half to even, so `avg_order_value` drifted from the legacy reports by cents. The report-versus-mart test found it.
+- **Session settings** in the dbt profile and the toolkit's client: `join_use_nulls = 1` (an outer join returns NULL, not a default) and `union_default_mode = DISTINCT`. `prefer_column_name_to_alias` was tried and dropped: it breaks dbt-clickhouse's own metadata queries. Columns an alias would shadow are qualified instead.
+- **`allow_nullable_key`** only on the table folders (intermediate, marts, abandoned): the legacy columns are nullable and keys derive from them. Views reject the setting.
+- **The query comment goes first** (`append: false`): a seed's `INSERT` carries its CSV rows inline, and a trailing comment was read as one more row.
+- **The snapshot uses the timestamp strategy** on `updated_at`: the check strategy stamps rows with the wall clock.
+- **Raw tables are not partitioned.** `ReplacingMergeTree` deduplicates only within a partition, and a changed row moves in `updated_at`.
+- **Starting over drops every company database** in ClickHouse, because a snapshot survives `--full-refresh`.
+- **The reconciliation library still runs** on DuckDB in its tests (self-contained, no warehouse); only its command is paused. SQL Server went from its internals too, since nothing could run it.
+- **A `namespace` setting** prefixes every Postgres schema and ClickHouse database, so the tests share the servers with the demo without touching it.
 
 ### Version 2.0 (owner, 2026-10-13)
 
@@ -296,7 +334,9 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 For version 2.0:
 
 - Every figure in the README, the module READMEs, the ADRs, the CHANGELOG's 1.x sections and the owner's CV describes 1.x on DuckDB. They stay true for `v1.2.0` and are replaced by 2.0's own results in Phase 15.
-- Until each 2.0 phase lands, its module still runs on the 1.x stack; `make demo` will say which modules it skipped.
+- Until each 2.0 phase lands, its module is paused: its command exits 2 and names the phase, `make demo` lists them, and its end-to-end tests skip. `readme-check` reads 1.x reports and is paused with them.
+- At scale 1.0 an incremental build is not faster than a full refresh (30 s against 26 s): about 290 nodes of fixed overhead dominate, and the incremental models rebuild two months each time. The point of the incremental models shows in bytes read, which Phase 13 measures.
+- The dashboard, browser-check and cost, incident and reconcile targets fail by design until their phase (exit 2 with the reason).
 
 Kept on purpose (design limits, documented in the ADRs):
 
@@ -315,7 +355,6 @@ Found by the Phase 7 browser check, stated as known limits in `dashboards/README
 Kept on purpose since Phases 8 and 9:
 
 - `make docker-browser-check` and `readme-check` stay out of CI (the docs check in CI was dropped from Phase 9).
-- SQL Server regressions are caught only when someone runs `sqlserver.yml`; run it before each release.
 
 ## Open questions for the owner
 
@@ -323,5 +362,6 @@ None open.
 
 ## Next step
 
-1. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0: the check works on any dbt project): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).
-2. When the owner says to start, plan Phase 11 (the company on Postgres and ClickHouse) on `phase-11-replatform`. Questions to settle in that plan: where the toolkit's `ops` result tables live in 2.0 (ClickHouse or the Postgres store), which legacy reports exist on Postgres and how many, the engine and keys per model group, how the 120 DuckDB models are ported (by hand, with a script for the generated ones), and the Metabase version and how its dashboards are provisioned.
+1. The owner reviews Phase 11a, commits it in the proposed sequence, and merges.
+2. Plan Phase 11b: Metabase (pinned version, ClickHouse driver checked) behind a Compose profile, dashboards created from the exposures by a script, one ClickHouse user per team plus `metabase` and `dbt`, and a deterministic replay of dashboard queries in `make demo`.
+3. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).
