@@ -23,13 +23,15 @@ import duckdb
 import pytest
 from typer.testing import CliRunner
 
+from platform_ops.cli import paused_reason
 from platform_ops.common.config import Settings, load_settings
 from platform_ops.incidents.notify import SLACK_ENV_VAR
 from platform_ops.incidents.run import run_incidents
 from platform_ops.incidents.scenario import ScenarioResult
 from platform_ops.simulation.faults import CATALOGUE
 
-pytestmark = pytest.mark.integration
+# Version 2.0: the module reads the 1.x DuckDB warehouse until its phase moves it.
+pytestmark = [pytest.mark.integration, pytest.mark.skip(reason=paused_reason("incidents"))]
 
 runner = CliRunner()
 

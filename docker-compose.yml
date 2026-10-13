@@ -1,21 +1,16 @@
-# Legacy sources for the Phase 4 migration reconciliation, and the toolkit
-# itself in a container.
+# The simulated company (version 2.0) and the toolkit itself in a container.
 #
-# Postgres is the default and always starts. SQL Server sits behind a profile
-# because its official image is x86_64 only: on Apple Silicon it runs under
-# emulation, slowly and sometimes not at all. Making it optional means a
-# contributor on a Mac can still run the full reconcile path against Postgres,
-# so the migration work is never gated on one person's hardware.
-# See docs/adr/0001-postgres-as-default-legacy-source.md.
-#
-# The toolkit services sit behind profiles too, so a plain `docker compose up`
-# still starts only Postgres. Use the docker-* make targets to run them.
+# Postgres holds the company's legacy database and, in a database of its own,
+# the toolkit's results (ops). ClickHouse is the warehouse the company migrates
+# to. Both always start. The toolkit services sit behind profiles, so a plain
+# `docker compose up` starts only the two servers. Use the docker-* make
+# targets to run them.
 
 name: data-platform-ops
 
 # Shared by every container that runs the toolkit image. Generated state lives
 # on named volumes (fast disk inside the Docker VM, where a bind mount from a
-# Windows or macOS host would be slow for a DuckDB file); reports/ is bind-mounted
+# Windows or macOS host would be slow for DuckDB files); reports/ is bind-mounted
 # so the reports show up on the host. Service addresses are the Compose service
 # names and container ports; a real environment variable wins over .env.
 #
@@ -28,8 +23,6 @@ x-toolkit: &toolkit
   environment:
     POSTGRES_HOST: postgres
     POSTGRES_PORT: "5432"
-    MSSQL_HOST: sqlserver
-    MSSQL_PORT: "1433"
     CLICKHOUSE_HOST: clickhouse
     CLICKHOUSE_PORT: "8123"
     # .streamlit/config.toml binds to localhost for the native run; inside the
@@ -43,6 +36,8 @@ x-toolkit: &toolkit
     - ./reports:/app/reports
   depends_on:
     postgres:
+      condition: service_healthy
+    clickhouse:
       condition: service_healthy
 
 services:
@@ -110,36 +105,13 @@ services:
       retries: 12
       start_period: 10s
 
-  sqlserver:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: dpo-sqlserver
-    profiles: ["sqlserver"]
-    environment:
-      ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
-      MSSQL_PID: Developer
-    ports:
-      - "${MSSQL_PORT:-1433}:1433"
-    volumes:
-      - sqlserver_data:/var/opt/mssql
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-
-  # The pilot's warehouse engine (Phase 10). The tests run a small dbt project
-  # on it (tests/fixtures/dbt_clickhouse), so its artifacts are real. The
-  # defaults match that project's profile, so an older .env still works.
+  # The company's warehouse (version 2.0): the incremental ingestion reads
+  # Postgres from here through postgresql(), at postgres:5432, and dbt builds
+  # the company's project on it. The defaults match the dbt profile, so an
+  # older .env still works.
   clickhouse:
     image: clickhouse/clickhouse-server:26.8.16.41
     container_name: dpo-clickhouse
-    profiles: ["clickhouse"]
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-platform_ops}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change_me_locally}
@@ -161,7 +133,6 @@ services:
 
 volumes:
   postgres_data:
-  sqlserver_data:
   clickhouse_data:
   app_data:
   app_warehouse:

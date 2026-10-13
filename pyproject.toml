@@ -11,8 +11,11 @@ dependencies = [
     "typer>=0.12",
     "pydantic>=2.7",
     "pyyaml>=6.0",
+    # DuckDB generates the company's data in memory before it is copied into
+    # Postgres, and still backs the 1.x modules paused until Phases 12 to 14.
     "duckdb>=1.0",
-    "dbt-duckdb>=1.8",
+    # Version 2.0: the company's dbt project runs on ClickHouse.
+    "dbt-clickhouse>=1.10",
     "sqlglot>=25.0",
     "networkx>=3.3",
     "pyiceberg[sql-sqlite]>=0.7",
@@ -27,16 +30,6 @@ dependencies = [
 
 [project.scripts]
 platform-ops = "platform_ops.cli:main"
-
-[project.optional-dependencies]
-# Only for the optional SQL Server legacy source (`docker compose --profile
-# sqlserver`). pymssql ships its own TDS driver, so nothing else is installed on
-# the host, unlike pyodbc, which needs Microsoft's ODBC driver.
-sqlserver = ["pymssql>=2.3"]
-# Only for the ClickHouse fixture project the tests run (`docker compose
-# --profile clickhouse`). The ownership check itself reads a manifest and never
-# needs an adapter.
-clickhouse = ["dbt-clickhouse>=1.10"]
 
 [dependency-groups]
 dev = [
@@ -79,7 +72,7 @@ warn_unreachable = true
 # Third-party packages that ship no type information. Kept as a narrow list on
 # purpose: anything not named here must type check properly.
 [[tool.mypy.overrides]]
-module = ["duckdb.*", "pyiceberg.*", "pyarrow", "pyarrow.*", "pymssql", "pandas", "pandas.*"]
+module = ["duckdb.*", "pyiceberg.*", "pyarrow", "pyarrow.*", "pandas", "pandas.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -1,9 +1,15 @@
-"""Shared fixtures. Nothing here touches Docker or the network."""
+"""Shared fixtures.
+
+Most of them touch nothing outside the test's temp directory. The company
+fixtures (version 2.0) need the Postgres and ClickHouse servers (``make up``);
+they skip with the reason when a server does not answer, and keep to their own
+namespace, so they never touch the demo's data.
+"""
 
 from __future__ import annotations
 
 import textwrap
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -68,14 +74,12 @@ SETTINGS_YAML = textwrap.dedent(
       rows: {customers: 50000, orders: 300000, payments: 300000}
       legacy_year: 2025
       legacy_timezone: America/New_York
-      legacy_timezone_windows: Eastern Standard Time
       fanout: 16
       leaf_width: 256
       rounding_tolerance: 0.01
       canonical:
         engines:
           postgres: {rtrim: false, casefold: false}
-          sqlserver: {rtrim: false, casefold: true}
           duckdb: {rtrim: false, casefold: false}
         columns: {}
       thresholds:
@@ -130,14 +134,16 @@ def repo_settings() -> Settings:
     return load_settings(REPO_ROOT / "config" / "settings.yaml")
 
 
-def make_isolated_config(root: Path, scale_factor: float, weeks: int | None = None) -> Path:
+def make_isolated_config(
+    root: Path, scale_factor: float, weeks: int | None = None, namespace: str = ""
+) -> Path:
     """A throwaway copy of the repo config whose outputs all land under ``root``.
 
     See :func:`platform_ops.common.sandbox.write_isolated_config`. Integration
     tests drive the actual CLI against it, so they exercise exactly what a user
     runs without touching the real warehouse or ``dbt/target``.
     """
-    return write_isolated_config(root, scale_factor, weeks)
+    return write_isolated_config(root, scale_factor, weeks, namespace=namespace)
 
 
 @pytest.fixture(scope="session")
@@ -146,38 +152,56 @@ def isolated_config() -> Callable[..., Path]:
     return make_isolated_config
 
 
-@pytest.fixture(scope="session")
-def full_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Settings:
-    """One warehouse built the way ``make demo`` builds it, at scale 0.01, shared.
+def require_servers(settings: Settings) -> None:
+    """Skip, with the reason, unless the company's Postgres and ClickHouse both answer."""
+    from platform_ops.common.servers import clickhouse_client, connect_postgres
 
-    Simulate three weeks, price them, run the incident scenario and the
-    reconciliation (DuckDB as the legacy engine, so no Docker). It is the most
-    expensive thing the suite builds, so every test that only reads such a
-    warehouse uses this one: the dashboard pages, and the first of the two
-    incident runs whose reports must match. Tests that need an independent run
-    still build their own.
+    try:
+        connect_postgres(settings).close()
+    except Exception as error:
+        pytest.skip(f"Postgres not reachable ({type(error).__name__}); run `make up`")
+    try:
+        clickhouse_client(settings).close()
+    except Exception as error:
+        pytest.skip(f"ClickHouse not reachable ({type(error).__name__}); run `make up`")
+
+
+@pytest.fixture(scope="session")
+def servers_or_skip() -> Callable[[Settings], None]:
+    """Expose :func:`require_servers` to module fixtures that build their own company."""
+    return require_servers
+
+
+@pytest.fixture(scope="session")
+def company_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Settings]:
+    """The company run the way ``make demo`` runs it, at scale 0.01 over two weeks, shared.
+
+    Through the real CLI: ``company run`` (seed Postgres, backfill ClickHouse,
+    then each day's data, ingestion, and a full dbt build on the first day and
+    an incremental one on the last), then ``metadata check``. Every test that
+    only reads a built company uses this one, because it is the most expensive
+    thing the suite builds.
     """
     from typer.testing import CliRunner
 
     from platform_ops.cli import app
     from platform_ops.common.config import CONFIG_PATH_ENV_VAR
+    from platform_ops.simulation.company import remove_company
 
-    settings_path = make_isolated_config(tmp_path_factory.mktemp("full"), 0.01, weeks=3)
+    root = tmp_path_factory.mktemp("company")
+    settings_path = make_isolated_config(root, 0.01, weeks=2, namespace="t_suite_")
+    settings = load_settings(settings_path)
+    require_servers(settings)
     patch = pytest.MonkeyPatch()
     patch.setenv(CONFIG_PATH_ENV_VAR, str(settings_path))
-    patch.delenv("SLACK_WEBHOOK_URL", raising=False)
     runner = CliRunner()
     try:
-        for command in (
-            ["simulation", "run"],
-            ["cost", "report"],
-            ["incidents", "run"],
-            ["reconcile", "run", "--engine", "duckdb"],
-        ):
+        for command in (["company", "run"], ["metadata", "check"]):
             result = runner.invoke(app, command)
             assert result.exit_code == 0, f"{' '.join(command)} failed:\n{result.output}"
     finally:
-        # Restored before returning: a session fixture must not leave its config
+        # Restored before yielding: a session fixture must not leave its config
         # in the environment for every test that runs after it.
         patch.undo()
-    return load_settings(settings_path)
+    yield settings
+    remove_company(settings)

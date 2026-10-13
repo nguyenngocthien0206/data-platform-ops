@@ -74,6 +74,7 @@ def test_composite_sends_to_every_notifier() -> None:
     assert seen == ["a:INC-001", "b:INC-001"]
 
 
+@pytest.mark.skip(reason=cli.paused_reason("dashboard"))
 def test_dashboard_runs_streamlit_headless_without_telemetry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
