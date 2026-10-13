@@ -24,7 +24,24 @@ platform-ops metadata check \
 
 With `--manifest` the check reads no settings, opens no database and writes nothing but the optional summary. `--format github` turns each finding into an annotation on the pull request, on the model's file or on the rule's line in `ownership.yaml`. The exit code is 0 when every dataset has one valid owner, 1 when there are owners to fix, and 2 when the check cannot run (no manifest, an invalid registry), so a broken setup is never mistaken for a missing owner.
 
-Roll it out in two steps, because a check that blocks every merge on day one gets switched off. First run it with `--report-only`: problems show on pull requests, nothing is blocked, and `--summary-json` records the baseline, the share of datasets with an owner per resource type. When the registry is complete, drop `--report-only` and make the job required in branch protection. [`examples/github-actions/ownership-check.yml`](../../../examples/github-actions/ownership-check.yml) is a workflow to copy, written for a ClickHouse project; another adapter only changes the `pip install` line and the parse-only profile.
+[`examples/github-actions/ownership-check.yml`](../../../examples/github-actions/ownership-check.yml) is a workflow to copy, written for a ClickHouse project; another adapter only changes the `pip install` line and the parse-only profile.
+
+### Rolling out on a repository
+
+A check that blocks every merge on day one gets switched off by the end of the week, and a registry written by hand for hundreds of models never gets finished. The rollout is ordered to avoid both.
+
+1. **Write a starter registry.** In the dbt repository, after `dbt parse`:
+
+   ```bash
+   platform-ops metadata init-registry --manifest target/manifest.json --out ownership/
+   ```
+
+   It writes one rule per group, not per dataset: each source system, each folder of models (split by name prefix where a folder mixes `dim_` and `fct_`), each installed package, the seeds, the snapshots, and each exposure with the owner its dbt definition names. Every rule says `owner: TODO, team: TODO`. On the bundled project, 139 datasets come out as 63 rules. It never overwrites an existing registry without `--force`.
+2. **Name the teams and owners, sources and staging first.** Fill in `ownership/teams.yaml`, then the rules for sources and staging: they hold most root causes, so they decide who gets paged once incidents run on this registry (Phase 11). Split a rule when a group has several owners; the more specific rule wins.
+3. **Add the workflow in report-only mode** (`REPORT_ONLY: "true"`). Problems show on pull requests and nothing is blocked.
+4. **Record the baseline** from the `ownership-summary` artifact: `owned_share` is the share of datasets whose rule names a real team and member. A rule still on `TODO` counts as unowned, so the starter registry reads 0%, and the number rises as the team works through the list.
+5. **Close the TODOs.** `metadata check --report-only` lists one problem per remaining rule, each pointing at its line in `ownership.yaml`.
+6. **Make it required.** Set `REPORT_ONLY: "false"` and add the job to the branch protection rules. From then on, a new model cannot merge without an owner, which is the whole point.
 
 `tests/fixtures/dbt_clickhouse` is a small project on ClickHouse, laid out nothing like the bundled one, with its registry in its own `ownership/` folder. The tests parse it and run the check against variants of its registry, and run it for real on the ClickHouse service (`docker compose --profile clickhouse up -d`).
 
