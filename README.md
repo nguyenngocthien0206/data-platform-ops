@@ -1,33 +1,47 @@
 # data-platform-ops
 
-> **Version 2.0 is in progress.** The simulated company now looks like a real
-> one: its reporting runs on a legacy Postgres, and it is moving to self-managed
-> ClickHouse with one dbt project. On `main`, `make demo` runs that company
-> (Postgres, incremental ingestion into ClickHouse, dbt on ClickHouse) and the
-> ownership check and lineage on it. Cost, incidents, reconciliation and the
-> dashboards are paused until their phase moves them; `make paused` says when.
->
-> Everything below describes 1.x, and its numbers come from a 1.x run. To run
-> it, check out tag `v1.2.0`. Progress is in [docs/PROGRESS.md](docs/PROGRESS.md).
-
 A data platform team is usually judged on three things it only half controls: what the warehouse costs, how fast broken data gets fixed, and whether a migration can be signed off. All three depend on the same missing piece, which is knowing who owns each dataset and what depends on it. Without that, the bill lands on whoever builds the shared tables, alerts page whoever wrote the last model in the chain, and a migration is approved on a spot check and a hope.
 
 This toolkit builds that missing piece once, as a shared metadata layer (an ownership registry and a lineage graph), and puts three modules on top of it:
 
 - **cost** charges every query to exactly one team, under both cloud pricing styles, and finds the waste;
 - **incidents** turns a storm of failing data tests into one incident per root cause and pages the person who can fix it;
-- **reconcile** proves, row by row and engine by engine, what a migration got wrong, cheaply enough to run every night.
+- **reconcile** proves, row by row, what a migration got wrong, cheaply enough to run every night.
 
-Everything runs on a laptop against a simulated company of five teams and about 120 dbt models, offline, from one command. Every number below comes from that run.
+Everything runs on a laptop against a simulated company of five teams and about 120 dbt models, offline, from one command.
+
+## Where the project stands: version 2.0 in progress
+
+Version 1.x (up to [`v1.2.0`](https://github.com/nguyenngocthien0206/data-platform-ops/tree/v1.2.0)) ran the simulated company on DuckDB, with the three modules complete. Version 2.0 rebuilds that company to look like the real one the toolkit is meant for: its reporting runs on a **legacy Postgres** as hand-written SQL, and it is **migrating to self-managed ClickHouse**, where the analytics become one dbt project. Each module then moves onto that migration, one phase at a time.
+
+| Piece | On `main` today | Phase |
+|---|---|---|
+| Legacy Postgres, its 12 hand-written reports | running | 11a, done |
+| Incremental ingestion into ClickHouse | running | 11a, done |
+| The dbt project on ClickHouse | running | 11a, done |
+| Ownership check and lineage | running, results in the Postgres ops store | 11a, done |
+| Metabase dashboards, one ClickHouse user per team | in progress | 11b |
+| Reconciliation, Postgres reports against ClickHouse marts | paused | 12 |
+| Cost and FinOps on ClickHouse's query log, the Streamlit dashboards | paused | 13 |
+| Incidents on real dbt runs | paused | 14 |
+| Documentation and release 2.0.0 | | 15 |
+
+A paused module's command exits with code 2 and says which phase brings it back; `make paused` lists them. To run the complete 1.x toolkit, check out `v1.2.0` and follow its README. The full plan is in [docs/SPEC.md](docs/SPEC.md), and [docs/PROGRESS.md](docs/PROGRESS.md) records every decision and measurement along the way.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph company["Simulated company"]
-        gen["Raw data generator<br/>fixed seed, simulated clock"] --> raw[("DuckDB<br/>raw schema")]
-        raw --> dbt["dbt project<br/>about 120 models, tests,<br/>12 dashboards as exposures"]
+    subgraph legacy["Legacy: Postgres"]
+        gen["Data generator<br/>fixed seed, simulated clock"] --> app[("app schema<br/>operational tables")]
+        app --> rep["reporting schema<br/>12 hand-written views"]
     end
+
+    subgraph warehouse["Target: ClickHouse"]
+        raw[("raw<br/>ReplacingMergeTree")] --> dbt["dbt project<br/>118 models, a seed, a snapshot,<br/>12 dashboards as exposures"]
+    end
+
+    app -- "updated_at watermark<br/>through postgresql()" --> raw
 
     subgraph meta["Shared metadata layer"]
         reg["Ownership registry<br/>config/ownership.yaml"]
@@ -35,26 +49,25 @@ flowchart LR
     end
 
     dbt --> lin
-    reg --> cost & inc
-    lin --> cost & inc
+    reg & lin --> ops[("Postgres<br/>platform_ops.ops")]
 
-    subgraph modules["Modules"]
-        cost["cost<br/>collect, price, attribute, recommend"]
-        inc["incidents<br/>ingest, group, score, route"]
-        rec["reconcile<br/>canonicalize, segmented diff, classify"]
+    subgraph modules["Modules, returning in 2.0"]
+        rec["reconcile (12)"]
+        cost["cost and FinOps (13)"]
+        inc["incidents (14)"]
     end
 
-    dbt -. query history .-> cost
+    rep -. legacy reports .-> rec
+    dbt -. marts .-> rec
+    dbt -. query_log .-> cost
     dbt -. test results .-> inc
-    legacy[("Postgres or SQL Server<br/>legacy system")] --> rec
-    rec <--> ice[("Iceberg<br/>PyIceberg, SQLite catalog")]
-
-    cost & inc & rec --> ops[("DuckDB<br/>ops schema")]
-    ops --> reports["reports/*.md"]
-    ops --> dash["Streamlit dashboards"]
+    reg & lin -.-> cost & inc
+    rec & cost & inc -.-> ops
 ```
 
-The modules never talk to each other. They share the registry and the lineage graph, and they all write their results as tables in the `ops` schema, which the reports and the dashboards read. Every place a real deployment would talk to an outside system (query history, billing, paging, legacy databases) sits behind a small interface with a local default, so a cloud adapter replaces one piece without touching the logic around it ([ADR 0010](docs/adr/0010-local-first-design.md)).
+The company has no change data capture, like many teams at the start of a migration, so an ingestion job pulls new and changed rows by an `updated_at` watermark and re-reads an hour before it to catch late commits. Raw tables in ClickHouse are `ReplacingMergeTree`, so a row read twice or changed in place keeps only its latest version. Staging reads them as views; every other model is a `MergeTree` table sorted by its own key, and the four large event tables rebuild only their last two monthly partitions. Those engine and key choices are made per layer and written down, because they decide what every team's queries cost once Phase 13 prices them, and a sort key chosen by the platform team is paid for by whoever reads the table.
+
+The modules still never talk to each other. They share the registry and the lineage graph and write their results to the `ops` schema of a separate Postgres database, which is also where incidents will live once they run against the company's real dbt jobs. Every place a real deployment talks to an outside system sits behind a small interface with a local default ([ADR 0010](docs/adr/0010-local-first-design.md)).
 
 ## Quickstart
 
@@ -63,17 +76,17 @@ You need [uv](https://docs.astral.sh/uv/), Docker, GNU make and a machine with 1
 On Windows, install [Git for Windows](https://git-scm.com/download/win) and GNU make (`winget install ezwinports.make`). The Makefile runs its recipes with Git's bash, so `make` works the same from PowerShell, cmd or Git Bash; if Git is not in `C:/Program Files/Git`, pass its bash as `make GIT_BASH="<path>/bin/bash.exe" <target>`.
 
 ```bash
-cp .env.example .env      # local passwords for the legacy databases
+cp .env.example .env      # local passwords for Postgres and ClickHouse
 make setup                # Python dependencies
-make up                   # Postgres, the default legacy system
-make demo                 # all four steps from a clean state, a few minutes
-make dashboard            # http://localhost:8501
-make readme-check         # every results number in the READMEs, against reports/
+make up                   # Postgres (legacy and ops store) and ClickHouse
+make demo                 # the company's 91 days, then the ownership check and lineage
+make paused               # the 1.x modules not moved yet, and when they return
+make test                 # unit and integration tests
 ```
 
-`make demo` writes `reports/cost.md`, `reports/incidents.md` with a postmortem draft per SEV1 in `reports/postmortems/`, and `reports/reconciliation.md`. Two runs write byte-identical reports. `make test` and `make lint` run natively too; without the databases up, the tests that need them skip.
+`make demo` seeds the legacy Postgres with a year of history, then replays 91 simulated days: each day's orders, payments, sessions and in-place changes reach Postgres, the ingestion pulls them into ClickHouse at 02:00, and dbt builds the project on ClickHouse every four weeks and on the last day. It starts from scratch every time, so two runs leave identical data on both servers. Afterwards, the legacy reports are in Postgres (`reporting` schema of the `legacy` database), the marts in ClickHouse (`marts` database, HTTP on port 8123), and the ownership and lineage tables in the `ops` schema of the `platform_ops` database.
 
-SQL Server is optional: `docker compose --profile sqlserver up -d`, `uv sync --extra sqlserver`, then `uv run --extra sqlserver platform-ops reconcile run --engine sqlserver`.
+`make test` and `make lint` also run natively; without the servers up, the tests that need them skip with the reason.
 
 ## Run it in Docker
 
@@ -82,18 +95,27 @@ The same demo with nothing on the host but Docker and GNU make (plus Git for Win
 ```bash
 cp .env.example .env
 make docker-build         # the toolkit image; the first build downloads the dependencies
-make docker-demo          # Postgres and SQL Server up, then all four steps from a clean state
-make docker-dashboard     # http://localhost:8501
-make docker-readme-check
+make docker-demo          # Postgres and ClickHouse up, then the demo from a clean state
+make docker-test          # the full suite, skips listed with their reason
 ```
 
-To run the released image instead of building one, set `TOOLKIT_IMAGE`, for example `TOOLKIT_IMAGE=ghcr.io/nguyenngocthien0206/data-platform-ops:1.0.0 make docker-demo`.
+`make docker-lint` and `make docker-metadata-check` run the same checks as CI ([ADR 0013](docs/adr/0013-ci-and-release-from-the-same-container.md)). The company's data lives in the Postgres and ClickHouse volumes, the toolkit's scratch state on its own volumes; `make docker-clean` removes the latter, and `make help` lists every target.
 
-`make docker-test` runs the full suite with both databases up, so nothing skips, and `make docker-lint` runs the same checks as CI ([ADR 0013](docs/adr/0013-ci-and-release-from-the-same-container.md)). `make docker-browser-check` loads every dashboard page in headless Chromium, in the light and the dark theme, and saves screenshots to `reports/screenshots/`. Generated data lives on Docker volumes and the reports land in `reports/` on the host; `make docker-clean` removes both. `make help` lists every target.
+## Version 2.0 so far
 
-## Results
+From the Phase 11a verification at the default scale, in the container on one laptop. These numbers come from the console and the database, not from a report file, and every one of them is recorded in [docs/PROGRESS.md](docs/PROGRESS.md).
 
-From `make demo` at the default scale, over a 91-day simulated window for cost, three simulated weeks for incidents, and a year of legacy data for the migration.
+**The company runs, and repeats itself exactly.** `make docker-demo` took 4 minutes 35 seconds and 4 minutes 27 seconds from a clean state. It seeded 3,507,865 rows of history into Postgres, then over 91 days added 1,919,938 rows and changed 3,497 in place, ingested 5,511,656 rows into ClickHouse (the overlap window re-reads about 80,000 on purpose), and ran 5 dbt builds. Two clean runs left all 155 relations identical: every ClickHouse table and view, every legacy table and report, and every ops table. That repeatability is what lets the later phases put a cost or a sign-off on a number and have a reviewer reproduce it.
+
+**Ownership moved with the project.** All 141 datasets of the ClickHouse project have exactly one owner: 9 sources, 118 models, 12 exposures, the seed and the snapshot. The lineage graph has 376 edges. The same check runs on a company dbt repository's manifest in its own CI ([ADR 0014](docs/adr/0014-the-ownership-gate-in-the-consuming-repository.md)), so moving the warehouse did not reopen the question of who answers for each table.
+
+**The old and new reports already have to agree.** Each of the 12 legacy reports is tested against the dbt mart that replaces it, row count and every numeric total, at the test scale. The first comparison caught averages a few cents off: ClickHouse's `avg` returns a float and rounds a half to even, while the legacy Postgres rounds an exact value half away from zero. A finance user comparing the old revenue report with the new dashboard would have found it in the first week of the parallel run, so the marts now compute averages the legacy way. Phase 12 turns this test into the nightly sign-off of the cutover.
+
+**Incremental is not yet faster, and that is expected.** At this size an incremental build takes 30 seconds and a full refresh 26, because about 290 dbt nodes of fixed overhead dominate. What incremental models save is bytes read, which Phase 13 measures from ClickHouse's own query log rather than assuming.
+
+## Results (1.x, at `v1.2.0`)
+
+From `make demo` of version 1.x, on DuckDB, at the default scale: a 91-day simulated window for cost, three simulated weeks for incidents, and a year of legacy data for the migration. They stay true for `v1.2.0`, and Phase 15 replaces them with 2.0's own results.
 
 The latest clean runs took 7 minutes 49 seconds natively and 7 minutes 16 seconds in the container, on the same laptop, with byte-identical reports. <!-- readme-check: runtime -->
 
@@ -111,7 +133,7 @@ Each choice that shapes a number is recorded, with what it costs ([index](docs/a
 
 | ADR | Decision |
 |---|---|
-| [0001](docs/adr/0001-postgres-as-default-legacy-source.md) | Postgres as the default legacy source, SQL Server behind a profile |
+| [0001](docs/adr/0001-postgres-as-default-legacy-source.md) | Postgres as the default legacy source, SQL Server behind a profile (superseded in 2.0) |
 | [0002](docs/adr/0002-ownership-resolution-and-platform-team.md) | Most specific ownership rule wins; the platform team owns the shared layers |
 | [0003](docs/adr/0003-source-freshness-on-simulated-time.md) | Source freshness on simulated time |
 | [0004](docs/adr/0004-deterministic-data-generation.md) | Deterministic data generation |
@@ -130,15 +152,16 @@ Each choice that shapes a number is recorded, with what it costs ([index](docs/a
 
 ```
 config/            settings, teams and the ownership registry
-dbt/               the simulated company's dbt project
-src/platform_ops/  common, metadata, simulation, cost, incidents, reconcile, dashboard
-dashboards/        the Streamlit app
+dbt/               the company's dbt project on ClickHouse
+src/platform_ops/  common, metadata, simulation (the company, its legacy Postgres and
+                   the ingestion), cost, incidents, reconcile, dashboard
+dashboards/        the Streamlit app (paused until Phase 13)
 scripts/           vendor fixtures, README check, dashboard browser check, release notes
 tests/             unit, integration and contract tests
 examples/          a GitHub Actions ownership check for a company dbt repository
 docs/              SPEC, PROGRESS, the ADRs and the Phase 6 review record
-.github/workflows/ CI, the on-demand SQL Server job, and the release
-Dockerfile         the toolkit image; docker-compose.yml runs it next to the databases
+.github/workflows/ CI and the release
+Dockerfile         the toolkit image; docker-compose.yml runs it next to Postgres and ClickHouse
 ```
 
 The build plan is in [docs/SPEC.md](docs/SPEC.md), [docs/PROGRESS.md](docs/PROGRESS.md) records what was decided along the way and why, and [CHANGELOG.md](CHANGELOG.md) lists what each release contains.

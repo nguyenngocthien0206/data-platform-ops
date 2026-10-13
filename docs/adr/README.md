@@ -4,7 +4,7 @@ Each choice that shapes a number, a boundary or how the toolkit is run is record
 
 | ADR | Decision | Phase |
 |---|---|---|
-| [0001](0001-postgres-as-default-legacy-source.md) | Postgres as the default legacy source, SQL Server behind a profile | 0 |
+| [0001](0001-postgres-as-default-legacy-source.md) | Postgres as the default legacy source, SQL Server behind a profile (superseded in 2.0) | 0 |
 | [0002](0002-ownership-resolution-and-platform-team.md) | Most specific ownership rule wins; the platform team owns the shared layers | 1 |
 | [0003](0003-source-freshness-on-simulated-time.md) | Source freshness on simulated time | 1 |
 | [0004](0004-deterministic-data-generation.md) | Deterministic data generation | 1 |
