@@ -40,6 +40,10 @@ models:
         data_tests: [unique, not_null]
 
   - name: sales_fct_daily_sales
+    config:
+      meta:
+        # How Metabase charts it (simulation/bi.py); a table otherwise.
+        dashboard: {display: line, x: order_date, y: [net_revenue]}
     columns:
       - name: order_date
         data_tests: [unique, not_null]

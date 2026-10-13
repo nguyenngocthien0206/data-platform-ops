@@ -31,6 +31,9 @@ models:
         data_tests: [unique, not_null]
 
   - name: marketing_acquisition_funnel
+    config:
+      meta:
+        dashboard: {display: bar, x: month, y: [signups], breakout: referral_source}
     data_tests:
       - unique_combination_of_columns:
           arguments:

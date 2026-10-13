@@ -18,6 +18,9 @@ models:
         data_tests: [non_negative]
 
   - name: finance_fct_revenue_monthly
+    config:
+      meta:
+        dashboard: {display: line, x: revenue_month, y: [recognized_revenue, returned_revenue]}
     columns:
       - name: revenue_month
         data_tests: [unique, not_null]
