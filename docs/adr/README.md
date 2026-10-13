@@ -4,7 +4,7 @@ Each choice that shapes a number, a boundary or how the toolkit is run is record
 
 | ADR | Decision | Phase |
 |---|---|---|
-| [0001](0001-postgres-as-default-legacy-source.md) | Postgres as the default legacy source, SQL Server behind a profile | 0 |
+| [0001](0001-postgres-as-default-legacy-source.md) | Postgres as the default legacy source, SQL Server behind a profile (superseded in 2.0) | 0 |
 | [0002](0002-ownership-resolution-and-platform-team.md) | Most specific ownership rule wins; the platform team owns the shared layers | 1 |
 | [0003](0003-source-freshness-on-simulated-time.md) | Source freshness on simulated time | 1 |
 | [0004](0004-deterministic-data-generation.md) | Deterministic data generation | 1 |
@@ -18,5 +18,7 @@ Each choice that shapes a number, a boundary or how the toolkit is run is record
 | [0012](0012-the-toolkit-in-a-container.md) | The toolkit in a container, with its state on volumes | 7 |
 | [0013](0013-ci-and-release-from-the-same-container.md) | CI and release from the same container, the tag pushed by a person | 8 |
 | [0014](0014-the-ownership-gate-in-the-consuming-repository.md) | The ownership gate runs in the consuming repository, on its manifest | 10 |
+| [0015](0015-clickhouse-modelling-and-watermark-ingestion.md) | ClickHouse modelling per layer, and ingestion by watermark | 11a |
+| [0016](0016-users-per-team-and-bi-from-exposures.md) | One ClickHouse user per team, and the BI built from the dbt exposures | 11b |
 
 To add one, take the next number, name the file `NNNN-short-title.md`, start with `Status` and `Date`, and add a row here.

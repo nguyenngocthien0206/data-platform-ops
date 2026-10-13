@@ -45,6 +45,12 @@ company_app = typer.Typer(
 
 app.add_typer(metadata_app, name="metadata")
 app.add_typer(company_app, name="company")
+
+metabase_app = typer.Typer(
+    help="Metabase, the company's BI, built from the dbt exposures (version 2.0).",
+    no_args_is_help=True,
+)
+app.add_typer(metabase_app, name="metabase")
 app.add_typer(simulation_app, name="simulation")
 app.add_typer(cost_app, name="cost")
 app.add_typer(incidents_app, name="incidents")
@@ -97,6 +103,10 @@ def _start(name: str) -> tuple[Settings, SimulatedClock]:
     return settings, clock
 
 
+def _missing_passwords(error: Exception) -> NoReturn:
+    _fail(f"the company's ClickHouse users need their passwords: {error}", EXIT_UNUSABLE)
+
+
 def _manifest(settings: Settings, parse: bool) -> Path:
     from platform_ops.common.dbt_invoke import DbtError, invocation_from_settings, run_dbt
 
@@ -135,7 +145,8 @@ def show_config() -> None:
 
 @app.command()
 def seed() -> None:
-    """Seed the legacy Postgres up to the window start, empty ClickHouse, backfill raw."""
+    """Create the ClickHouse users, seed the legacy Postgres, empty ClickHouse, backfill raw."""
+    from platform_ops.common.servers import MissingPasswordError
     from platform_ops.simulation.company import start_over
     from platform_ops.simulation.ingest import Ingestion
     from platform_ops.simulation.legacy_db import LegacyCompany
@@ -146,6 +157,8 @@ def seed() -> None:
     ingestion = Ingestion(settings)
     try:
         seeded, ingested = start_over(settings, legacy, ingestion)
+    except MissingPasswordError as error:
+        _missing_passwords(error)
     finally:
         legacy.close()
         ingestion.close()
@@ -162,13 +175,19 @@ FULL_REFRESH_OPTION = typer.Option(
 
 @app.command()
 def build(full_refresh: bool = FULL_REFRESH_OPTION) -> None:
-    """Run dbt build on ClickHouse, then refresh ops.lineage_edges in the store."""
+    """Run dbt build on ClickHouse as the dbt user, then refresh ops.lineage_edges."""
     from platform_ops.common.dbt_invoke import DbtError, invocation_from_settings, run_dbt
+    from platform_ops.common.servers import MissingPasswordError
     from platform_ops.metadata.lineage import build_graph, store_edges
     from platform_ops.metadata.manifest import load_manifest
+    from platform_ops.simulation.access import ensure_users
 
     settings, clock = _start("build")
     logger = get_logger("build")
+    try:
+        ensure_users(settings)
+    except MissingPasswordError as error:
+        _missing_passwords(error)
     invocation = invocation_from_settings(settings)
     try:
         run_dbt(invocation, ["build", "--full-refresh"] if full_refresh else ["build"])
@@ -185,7 +204,8 @@ DAYS_OPTION = typer.Option(None, "--days", help="Simulated days to replay (defau
 @company_app.command("run")
 def company_run(days: int | None = DAYS_OPTION) -> None:
     """Seed the history, then replay the window: daily data, ingestion, dbt builds."""
-    from platform_ops.common.dbt_invoke import DbtError
+    from platform_ops.common.dbt_invoke import DbtError, invocation_from_settings
+    from platform_ops.common.servers import MissingPasswordError
     from platform_ops.metadata.lineage import build_graph, store_edges
     from platform_ops.metadata.manifest import load_manifest
     from platform_ops.simulation.company import run_company
@@ -193,9 +213,10 @@ def company_run(days: int | None = DAYS_OPTION) -> None:
     settings, _ = _start("company")
     try:
         summary = run_company(settings, days)
+    except MissingPasswordError as error:
+        _missing_passwords(error)
     except DbtError as error:
         _fail(str(error))
-    from platform_ops.common.dbt_invoke import invocation_from_settings
 
     graph = build_graph(load_manifest(invocation_from_settings(settings).manifest_path))
     edges = store_edges(settings, graph)
@@ -205,6 +226,57 @@ def company_run(days: int | None = DAYS_OPTION) -> None:
         f"{summary.rows_ingested:,} ingested into ClickHouse, {len(summary.builds)} dbt builds; "
         f"lineage {edges:,} edges"
     )
+
+
+@metabase_app.command("prepare")
+def metabase_prepare() -> None:
+    """Create the Postgres database Metabase keeps its own state in (before it starts)."""
+    from platform_ops.simulation.metabase import prepare_app_database
+
+    settings, _ = _start("metabase")
+    prepare_app_database(settings)
+    typer.echo(f"Metabase application database ready: {settings.company.metabase_database}")
+
+
+@metabase_app.command("provision")
+def metabase_provision() -> None:
+    """Make Metabase show one dashboard per dbt exposure, on ClickHouse. Safe to repeat."""
+    from platform_ops.common.servers import MissingPasswordError
+    from platform_ops.simulation.metabase import MetabaseError, metabase_url, provision
+
+    settings, _ = _start("metabase")
+    try:
+        summary = provision(settings)
+    except MissingPasswordError as error:
+        _missing_passwords(error)
+    except (MetabaseError, ValueError) as error:
+        _fail(f"metabase provision cannot run: {error}", EXIT_UNUSABLE)
+    typer.echo(
+        f"Metabase at {metabase_url(settings)}: {summary.dashboards} dashboards, "
+        f"{summary.cards} cards in {len(summary.collections)} team collections"
+        + (f"; archived {summary.archived} no longer in the project" if summary.archived else "")
+    )
+
+
+@metabase_app.command("check")
+def metabase_check() -> None:
+    """Run every card of every dashboard through Metabase; fail on any error."""
+    from platform_ops.common.servers import MissingPasswordError
+    from platform_ops.simulation.metabase import MetabaseError, check
+
+    settings, _ = _start("metabase")
+    try:
+        result = check(settings)
+    except MissingPasswordError as error:
+        _missing_passwords(error)
+    except (MetabaseError, ValueError) as error:
+        _fail(f"metabase check cannot run: {error}", EXIT_UNUSABLE)
+    for failure in result.failures:
+        typer.secho(f"error: {failure}", fg=typer.colors.RED, err=True)
+    summary = f"{result.dashboards} dashboards, {result.cards} cards, {result.rows:,} rows"
+    if result.failures:
+        _fail(f"metabase check failed with {len(result.failures)} error(s): {summary}")
+    typer.echo(f"metabase check passed: {summary}")
 
 
 PORT_OPTION = typer.Option(8501, "--port", help="Port to serve the dashboards on.")

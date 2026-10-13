@@ -1,6 +1,9 @@
 # Publish a release when a version tag is pushed (the owner pushes it).
 #
-# The full CI runs first. Then, only if the tag equals the version in
+# The full CI runs first, and so does the Metabase check, which pull requests
+# skip because it is slow: the demo builds the company, then every dashboard is
+# provisioned, every card run through Metabase, and every dashboard opened in a
+# browser. Then, only if the tag equals the version in
 # pyproject.toml and CHANGELOG.md has notes for it, the image goes to GitHub
 # Container Registry (amd64, like the SQL Server image) and a GitHub Release is
 # created with that version's changelog section as its notes. Nothing is
@@ -18,8 +21,46 @@ jobs:
   checks:
     uses: ./.github/workflows/ci.yml
 
+  metabase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Local settings for Compose
+        run: cp .env.example .env
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the toolkit image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: data-platform-ops:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: The company on Postgres and ClickHouse
+        run: make docker-demo
+
+      - name: Every dashboard in Metabase
+        run: make docker-metabase-check
+
+      - name: Dashboard screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: metabase-screenshots
+          path: reports/screenshots/metabase/
+          if-no-files-found: ignore
+
+      - name: Stop the services
+        if: always()
+        run: make down
+
   publish:
-    needs: checks
+    needs: [checks, metabase]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

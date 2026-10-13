@@ -1,5 +1,7 @@
 # dashboards
 
+> **Paused in version 2.0 until Phase 13.** The pages read the 1.x results in DuckDB, which the paused modules no longer write, so `make dashboard` exits with code 2 and says so. They return reading the ops store in Postgres as the modules move. The company's own dashboards are a different thing: they come to Metabase in Phase 11b. Everything below describes 1.x, at tag `v1.2.0`.
+
 One Streamlit app with a page per module, for people who would rather look at the results than read Markdown. It reads only the `ops` schema that `make demo` fills, never raw data or dbt models, and writes nothing.
 
 ```bash

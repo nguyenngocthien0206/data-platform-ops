@@ -265,6 +265,11 @@ class CompanySettings(_Strict):
     ingest_overlap_minutes: Annotated[int, Field(ge=0)] = 60
     # dbt builds on this cadence over the simulated window, and on its last day.
     build_every_days: Annotated[int, Field(ge=1)] = 28
+    # Metabase (Phase 11b) keeps its own state in this Postgres database, and
+    # reaches ClickHouse at this address inside Docker. Its URL and admin login
+    # come from the environment (METABASE_URL, MB_ADMIN_EMAIL, MB_ADMIN_PASSWORD).
+    metabase_database: str = "metabase"
+    clickhouse_from_metabase: str = "clickhouse:8123"
 
     def name(self, base: str) -> str:
         """A schema or database name with the namespace applied."""

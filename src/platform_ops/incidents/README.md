@@ -1,5 +1,7 @@
 # incidents
 
+> **Paused in version 2.0 until Phase 14.** The company now runs on Postgres and ClickHouse, and this module still runs its scenario on the 1.x DuckDB warehouse, so `make incidents` exits with code 2 and says so. Phase 14 moves it onto real dbt runs on ClickHouse, with the live incident store in Postgres and notifications to Slack and Telegram. Everything below describes 1.x, at tag `v1.2.0`.
+
 When one bad raw table fails a dozen checks, who gets woken up, and how many times? `make incidents` breaks the simulated company's raw data on purpose, eight times over three simulated weeks. It runs dbt the way production would, and turns the failures into incidents: one per real problem, scored by how much of the business it reaches, and paged to the person who can fix it. Then it grades itself against the faults it injected and writes `reports/incidents.md`, plus a postmortem draft for every SEV1.
 
 ## How it fits together

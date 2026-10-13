@@ -6,12 +6,25 @@ Last updated: 2026-10-13
 
 ## Current phase
 
-Phase 11a: The company on Postgres and ClickHouse (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phase 11b (Metabase from the exposures, one ClickHouse user per team) is planned after 11a merges.
-Branch: `phase-11-replatform` (off `main` at `8a2c23b`).
+Phase 11b: Metabase from the exposures and one ClickHouse user per team (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phase 11a is merged (PR #15).
+Branch: `phase-11b-metabase` (off `main` at `d09f23b`; its first commit is the README rewrite for 2.0).
 
 Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
+
+- Phase 11b implemented (branch `phase-11b-metabase`, uncommitted):
+  - **Users** (`simulation/access.py`): one ClickHouse user per team plus `metabase`, `dbt` and `loader`, namespaced, created again (`CREATE USER OR REPLACE`) at the start of `seed`, `build` and `company run`. `reader` profile (`readonly = 2`) for teams and Metabase, `writer` for the pipelines, both with the dbt profile's session settings. Business teams and Metabase read marts and reference; platform reads every layer; dbt reads raw and owns its databases plus `system.parts`; loader inserts into raw with `READ ON POSTGRES` and `CREATE TEMPORARY TABLE`; Metabase also reads `system.processes` behind a row policy limiting it to its own queries.
+  - dbt runs as `dbt` (`common/dbt_invoke.py`) and the ingestion as `loader` (`simulation/ingest.py`). Passwords come from `CLICKHOUSE_PASSWORD_<USER>`, with no default; a missing one exits 2 naming every missing variable (`common/servers.py`).
+  - **Dashboards** (`simulation/bi.py`): one per exposure in its owning team's collection, one native SQL card per model. Rules: a generated rollup is a line per period and dimension value, a daily one over its last 91 days; anything else a table sorted by its key; a `dashboard` entry in the model's `config.meta` overrides (daily sales, monthly revenue, acquisition funnel carry one).
+  - **Metabase** (`simulation/metabase.py`, Compose profile `metabase`, `metabase/metabase:v0.63.19.6`, its state in a `metabase` database on Postgres, 1 GB heap): `platform-ops metabase prepare | provision | check`; provision is idempotent, updates by name and archives what no exposure asks for. `make metabase` natively; `make docker-metabase-check` adds `scripts/screenshot_metabase.py` in the Playwright image. The release workflow runs a demo and the Metabase check before publishing.
+  - ADR 0015 (ClickHouse modelling and watermark ingestion, the 11a record) and ADR 0016 (users and BI); README, simulation README and `.env.example` updated.
+- Phase 11b verification:
+  - `make lint` clean. `make docker-test`: 340 passed, 38 skipped (all paused modules, with their phase), 2 min 48 s. Native full suite 4 min 14 s.
+  - `make docker-clean docker-demo` at scale 1.0: 4 min 41 s and 4 min 32 s. The two runs are identical across 163 entries (the 155 relations of 11a plus every user's grants), and the data is identical to the 11a demo: running dbt and the ingestion as their own users changed nothing in the results.
+  - `make docker-metabase-check` from a fresh Metabase, after the demo: 2 min 39 s. 12 dashboards and 69 cards in four team collections, all 69 cards run through Metabase without an error (23,349 rows), all 12 dashboards rendered in headless Chromium. Natively: Metabase healthy in 68 s, provision 21 s, check 17 s; a second provision changes nothing.
+  - ClickHouse's query log shows every dbt query under `dbt` with its node comment and every load under `loader`; after the row policy, the `metabase` user leaves no errors in the log.
+  - The screenshots found a chart cut off at Metabase's 2,000-row display limit (a year of daily orders by country, about 4,600 rows). Daily charts now cover 91 days (at most 910 rows), and the check fails any chart that reaches the limit.
 
 - Phase 11a implemented (branch `phase-11-replatform`, uncommitted):
   - **Legacy Postgres** (`simulation/legacy_db.py`): the DuckDB generator stays as an in-memory scratch engine and its tables are copied into the `app` schema of the legacy database with `COPY`, one primary key per table and an `updated_at` column. Each simulated day upserts the day's new rows and the in-place changes (`INSERT ... ON CONFLICT DO UPDATE`).
@@ -101,9 +114,25 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 
 ## In progress
 
-Phase 11a, waiting for the owner's review and commits.
+Phase 11b, waiting for the owner's review and commits.
 
 ## Decisions made
+
+### Phase 11b (owner, at planning, 2026-10-13)
+
+1. **The BI replay goes to Phase 13**, with the workload generator: 11b generates the card SQL from the exposures as a shared module, and Phase 13 replays exactly those queries under the `metabase` user.
+2. **A separate `loader` user** for the ingestion, so its load is not counted as dbt's.
+3. **One password variable per user**, no shared password.
+4. **The Metabase check runs on demand and before each release**, not in pull requests.
+
+### Phase 11b, made during implementation
+
+- **Metabase `v0.63.19.6`**: the latest patch of a minor version out for weeks (the 0.64 line was days old). Its ClickHouse driver is bundled; the separate driver repository is archived.
+- **No default passwords**: a missing variable stops the run before anything is written. `dbt parse` still works without them, because the dbt invocation falls back to the admin connection only when the dbt password is unset, and parsing never connects.
+- **Grants found by running**: `system.parts` for dbt (dbt-clickhouse's `insert_overwrite`), `READ ON POSTGRES` and `CREATE TEMPORARY TABLE` for the loader, `system.processes` for Metabase's driver with a row policy (without it, Metabase could read every user's running query text).
+- **Chart hints live in the model's `config.meta`**, next to the SQL its owner reviews; the rules cover everything else.
+- **Card names are unique per team collection** ("Dashboard: Model"); on the dashboard each card shows its short title.
+- **Metabase's own "Examples" collection and sample database are left alone**; the screenshots skip them.
 
 ### Phase 11 (owner, at planning, 2026-10-13)
 
@@ -352,6 +381,12 @@ Found by the Phase 7 browser check, stated as known limits in `dashboards/README
 - Incidents page, "Timeline": every x-axis tick reads "12 PM"; the dates are only in the tooltips.
 - Overview "Ownership" and Incidents "Nights dbt ran": narrow columns cut off the last table column (coverage, failing checks); it is reachable by scrolling the table.
 
+From Phase 11b (presentation only):
+
+- Every Metabase line ends with a partial period, because the window ends at 02:00 on its last day; the same limit the 1.x cost page had.
+- Daily rollups chart only their last 91 days, to stay under Metabase's 2,000-row display limit; the full history is in the weekly and monthly charts.
+- Users have no resource limits or quotas yet; Phase 13 suggests them from measured load.
+
 Kept on purpose since Phases 8 and 9:
 
 - `make docker-browser-check` and `readme-check` stay out of CI (the docs check in CI was dropped from Phase 9).
@@ -362,6 +397,6 @@ None open.
 
 ## Next step
 
-1. The owner reviews Phase 11a, commits it in the proposed sequence, and merges.
-2. Plan Phase 11b: Metabase (pinned version, ClickHouse driver checked) behind a Compose profile, dashboards created from the exposures by a script, one ClickHouse user per team plus `metabase` and `dbt`, and a deterministic replay of dashboard queries in `make demo`.
+1. The owner reviews Phase 11b, commits it in the proposed sequence, and merges. Existing `.env` files need the new variables from `.env.example` (the eight `CLICKHOUSE_PASSWORD_*`, `METABASE_PORT`, `MB_ADMIN_EMAIL`, `MB_ADMIN_PASSWORD`).
+2. Plan Phase 12: reconciliation from Postgres to ClickHouse, with the parallel run before cutover.
 3. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).

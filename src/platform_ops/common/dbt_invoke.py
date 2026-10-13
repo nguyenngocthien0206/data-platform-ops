@@ -6,6 +6,12 @@ connection and the vars always come from the toolkit's settings: the dbt
 profile reads the ClickHouse connection from ``CLICKHOUSE_*`` variables, which
 this module sets from ``common.servers`` for the length of the invocation, so
 dbt and the toolkit can never point at different servers.
+
+dbt connects as the company's ``dbt`` user (``simulation.access``), so its
+queries are logged under it. When that user's password is not set, the
+invocation keeps the admin connection: enough for ``dbt parse``, which never
+connects, as the ownership check in CI does. Anything that builds creates the
+users first, and fails there with the missing variable named.
 """
 
 from __future__ import annotations
@@ -67,7 +73,7 @@ def invocation_from_settings(
     a simulation can reuse dbt's saved parse. ``namespace`` prefixes every
     database dbt reads and writes, so a test never touches the demo's data.
     """
-    from platform_ops.common.servers import clickhouse_params
+    from platform_ops.common.servers import clickhouse_params, user_password
 
     target = settings.resolve(settings.paths.dbt_target)
     variables: dict[str, Any] = {
@@ -77,6 +83,10 @@ def invocation_from_settings(
     if simulated_now is not None:
         variables["simulated_now"] = simulated_now.isoformat(sep=" ")
     params = clickhouse_params(settings)
+    user, password = params.user, params.password
+    dbt_password = user_password(settings, "dbt")
+    if dbt_password:
+        user, password = settings.company.name("dbt"), dbt_password
     return DbtInvocation(
         project_dir=settings.resolve(settings.paths.dbt_project),
         target_path=target,
@@ -84,8 +94,8 @@ def invocation_from_settings(
         environment={
             "CLICKHOUSE_HOST": params.host,
             "CLICKHOUSE_PORT": str(params.port),
-            "CLICKHOUSE_USER": params.user,
-            "CLICKHOUSE_PASSWORD": params.password,
+            "CLICKHOUSE_USER": user,
+            "CLICKHOUSE_PASSWORD": password,
         },
         vars=variables,
     )

@@ -1,5 +1,7 @@
 # cost
 
+> **Paused in version 2.0 until Phase 13.** The company now runs on Postgres and ClickHouse, and this module still reads the 1.x DuckDB warehouse, so `make cost` exits with code 2 and says so. Phase 13 moves it onto ClickHouse's own query log: compute and storage per team, each team's ClickHouse user, and BigQuery and Snowflake priced on the same workload. Everything below describes 1.x, at tag `v1.2.0`.
+
 Who spends what on the warehouse, and which of it nobody needed to spend. `make simulate` collects 13 weeks of query history from the simulated company; `make cost` prices it under two vendor pricing styles, charges every query to exactly one team, finds waste, and writes `reports/cost.md`.
 
 ## How it fits together

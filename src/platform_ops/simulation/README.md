@@ -1,20 +1,29 @@
 # simulation
 
-Everything that makes the simulated company behave like a real one: the raw data generator and mart rollup codegen (Phase 1), and the workload generator (Phase 2). Fault injectors (Phases 3 and 4) will live here too.
+Everything that makes the simulated company behave like a real one. In version 2.0 that company runs its reporting on a legacy Postgres and is migrating to self-managed ClickHouse: the data generator feeds Postgres, hand-written reports read it, an ingestion job pulls it into ClickHouse, dbt builds the analytics there, and Metabase shows them, each under its own ClickHouse user. The workload generator and the fault injectors of 1.x live here too and come back with the modules that use them (Phases 12 to 14).
 
-## Raw data (`raw_data.py`)
+## The company's days (`company.py`)
 
-`platform-ops seed` writes nine tables into the `raw` schema of the DuckDB warehouse: customers, products, orders, order items, payments, web sessions, marketing campaigns, marketing spend and support tickets. Every value comes from a hash of the seed, table, row id and column, generated with SQL inside DuckDB and inserted in primary-key order. That combination makes the content of two runs identical, row for row. The on-disk compression is a different matter: DuckDB can pick a different codec for the same column on two runs, so compressed table sizes are not stable and should not be priced directly. The reasoning is in [ADR 0004](../../../docs/adr/0004-deterministic-data-generation.md).
+`platform-ops company run` (and `make demo`) replays the company from scratch, always the same way:
 
-The data is deliberately messy, because the metadata, cost and incident tooling is only worth building if it has real problems to find. Some customers register twice with the same email in a different case or with stray whitespace, so staging has to fold them before any per-customer number is right. About 5% of payments reach the warehouse one to five days after they happened, which is why finance reconciliation distinguishes a missing payment from a late one. Phones, referral sources and most session user ids are nullable, and every table carries a `_loaded_at` column so freshness can be measured.
+1. **History.** The company's ClickHouse users are created (a missing password stops the run here, before anything is written), the legacy Postgres is seeded with a year of data up to the window start (5 January 2026), every company database in ClickHouse is dropped, and the raw layer is backfilled from Postgres. Dropping everything matters: a dbt snapshot survives `--full-refresh`, so nothing less would start clean.
+2. **Every simulated day** for 13 weeks: the day's orders, payments, sessions and tickets reach Postgres, and at 01:00 a few products and customers change in place; at 02:00 the ingestion pulls everything newer than its watermark into ClickHouse; every 28 days and on the last day, dbt builds the project (the first build in full, later ones incrementally where a model is).
 
-Each table is defined over a fixed id space that spans the history and the whole simulated window, and a load inserts the rows whose `_loaded_at` falls in `(after, until]`. `HISTORY_COUNTS` sets how big the company is by the window start, so a longer simulated window adds rows after the start rather than shrinking the history. The seed is one load up to the window start; the workload appends one simulated day at a time with the same function, generating only the ids that can land in that day. A payment is never loaded before its order, so no load boundary can lose one. Tests check that invariant, and that many unevenly spaced appends produce exactly the same tables as a single load.
+The build cadence is a setting (`company.build_every_days`) because a build per day costs minutes and changes nothing the later phases measure. It is the kind of trade-off a platform team makes with the business: how fresh the dashboards need to be against how much compute that freshness burns.
 
-During the simulated window, `apply_daily_changes` also changes some existing rows in place: a few product prices and customer profiles each day, stamped with a new `_loaded_at` the way change data capture would. Every other source only ever gains rows. That difference is what lets the cost module tell which models could safely be built incrementally.
+## Raw data and the legacy Postgres (`raw_data.py`, `legacy_db.py`)
+
+The generator writes nine operational tables: customers, products, orders, order items, payments, web sessions, marketing campaigns, marketing spend and support tickets. Every value comes from a hash of the seed, table, row id and column, generated with SQL inside a scratch DuckDB and inserted in primary-key order, so two runs produce the same rows ([ADR 0004](../../../docs/adr/0004-deterministic-data-generation.md)). DuckDB is only the generator's engine; `legacy_db.py` copies each table into the `app` schema of the legacy Postgres with `COPY`, with a primary key per table and an `updated_at` column that the ingestion reads.
+
+The data is deliberately messy, because the metadata, cost and incident tooling is only worth building if it has real problems to find. Some customers register twice with the same email in a different case or with stray whitespace, so staging has to fold them before any per-customer number is right. About 5% of payments are written one to five days after they happened, which is why finance reconciliation distinguishes a missing payment from a late one. Phones, referral sources and most session user ids are nullable.
+
+Each table is defined over a fixed id space that spans the history and the whole simulated window, and a load writes the rows that land in `(after, until]`. `HISTORY_COUNTS` sets how big the company is by the window start, so a longer window adds rows after the start rather than shrinking the history. The seed is one load up to the window start; each simulated day is another load with the same function, upserted into Postgres. A payment is never written before its order, so no load boundary can lose one. Tests check that invariant, and that many unevenly spaced loads produce exactly the same tables as a single one.
+
+During the window, `apply_daily_changes` also updates existing rows in place: a few product prices and customer profiles each day, with a new `updated_at`. Every other table only ever gains rows. That difference is why customers and products need deduplication in ClickHouse while the event tables can be built incrementally, and it is what the customer snapshot records.
 
 ### Seed results at scale 1.0
 
-From an actual `make seed` run with the committed `config/settings.yaml`:
+From an actual `make seed` with the committed `config/settings.yaml`:
 
 | Table | Rows |
 |---|---:|
@@ -29,24 +38,64 @@ From an actual `make seed` run with the committed `config/settings.yaml`:
 | support_tickets | 27,355 |
 | **total** | **3,507,865** |
 
-Generation took 5.2 seconds in-process, and `make seed` 8 seconds including startup. Of the 371,450 payments, 18,472 arrived more than a day late, and deduplication folded 806 duplicate customer accounts. Two clean runs of `make seed && make build` gave identical content in all 127 tables (9 raw, 118 models), compared by row count and a hash over every row.
+`make seed` took 44.8 seconds, including the copy into Postgres and the backfill of the same 3,507,865 rows into ClickHouse. Of the 371,450 payments, 18,472 were written more than a day after they happened, and 806 customer accounts duplicate another one's email once case and whitespace are folded. These are the same rows 1.x generated, because the generator did not change, only where its output goes.
 
 Row counts scale linearly with `scale_factor`, with small floors so tests at scale 0.01 still have enough rows to be meaningful.
 
+## Legacy reports (`legacy_reports.py`, `legacy_reporting/`)
+
+Before it had a warehouse, the company built its reports as Postgres views on the operational tables, one per dashboard: 12 reports, one for each dbt exposure, plus two helper views they share (the customer id map and an enriched order). They are plain SQL with no dbt involved, written the way an analyst would have written them years ago, and they are the numbers the business trusts today.
+
+That makes them the reference for the migration. Each report is tested against the dbt mart that replaces it, row count and every numeric total. The first run of that test found averages a few cents off, because ClickHouse rounds a float half to even and Postgres rounds an exact value half away from zero; the marts now average the legacy way (the `avg_half_up` macro). Phase 12 turns the comparison into a nightly sign-off over a parallel run.
+
+## Ingestion (`ingest.py`)
+
+The company has no change data capture, so the ingestion does what many teams do at the start of a migration: every run reads the rows whose `updated_at` falls in `(watermark - overlap, now]` through ClickHouse's `postgresql()` table function, which runs on the ClickHouse server and reads Postgres directly. The overlap (60 minutes, `company.ingest_overlap_minutes`) re-reads a margin before the watermark, so a row that committed late with an older `updated_at` is not lost. A row older than the overlap is lost, and a test says so: that is the limit of a watermark, and why the overlap is a setting a team tunes against how long its longest transaction runs.
+
+Reading a row twice is harmless. Every raw table is a `ReplacingMergeTree` versioned by `updated_at` and ordered by the primary key, so the latest version wins whether a row changed in place or was simply read again, and staging reads raw with `FINAL`. Raw tables are not partitioned, because `ReplacingMergeTree` only deduplicates within a partition and a changed row moves in `updated_at`. Every load is recorded in `ops.ingestion_loads` in the Postgres ops store, with its range and the rows it moved; the latest `loaded_until` per table is the watermark.
+
+In the demo at scale 1.0, the ingestion moved 5,511,656 rows into ClickHouse for 5,431,300 rows written or changed in Postgres: the overlap re-read about 80,000 on purpose.
+
+## Users (`access.py`)
+
+Nobody queries ClickHouse as an admin. There is one user per team in `config/teams.yaml`, plus `metabase`, `dbt` and `loader`, all created again at the start of every run with their grants ([ADR 0016](../../../docs/adr/0016-users-per-team-and-bi-from-exposures.md)):
+
+| User | May | Profile |
+|---|---|---|
+| `sales`, `marketing`, `finance`, `product` | read the marts and the reference data | reader |
+| `platform` | read every layer, raw included | reader |
+| `metabase` | read the marts and the reference data, and its own entries in `system.processes` | reader |
+| `dbt` | read raw, own the databases it builds, read `system.parts` | writer |
+| `loader` | insert into raw, read Postgres through `postgresql()` | writer |
+
+The `reader` profile is `readonly = 2`: no writes, though a session may still change settings. Both profiles carry the session settings the dbt profile uses, so a query means the same whoever runs it. The extra grants were found by running each user with nothing more and reading ClickHouse's refusal: dbt-clickhouse's `insert_overwrite` reads `system.parts`, and Metabase's driver looks its own queries up in `system.processes`, which a row policy keeps from showing anyone else's.
+
+Each password comes from `CLICKHOUSE_PASSWORD_<USER>` in `.env`, with no default. That is deliberate: a shared fallback password is how test accounts end up in production, and an error that names the missing variable costs one line in `.env`.
+
+## Dashboards (`bi.py`, `metabase.py`)
+
+`bi.py` turns each dbt exposure into a dashboard definition: one dashboard per exposure in its owning team's collection (from the ownership registry), one native SQL card per model it reads. A card's SQL follows a rule from the model's columns: a generated rollup is a line per period and dimension value (a daily one over its last 91 days), anything else is a table sorted by its key, and a `dashboard` entry in the model's `config.meta` overrides both. Three marts carry one: daily sales, monthly revenue and the acquisition funnel.
+
+`metabase.py` makes a running Metabase match those definitions (`make metabase`): it creates the admin account on first start, connects ClickHouse as the `metabase` user, creates a collection per team, and creates or updates every card and dashboard by name, archiving anything no exposure asks for any more. `platform-ops metabase check` runs every card through Metabase's API, and `make docker-metabase-check` adds a headless browser that opens every dashboard and saves screenshots to `reports/screenshots/metabase/`.
+
+From an actual run on the demo at scale 1.0: 12 dashboards and 69 cards in four team collections (the platform team owns no exposure). Metabase took 68 seconds to become healthy, provisioning took 21 seconds, and the check ran all 69 cards without an error. The browser check is what found that a year of daily orders by country, about 4,600 rows, was cut off at Metabase's 2,000-row chart limit; daily charts now cover their last 91 days, and the check fails any chart that reaches the limit.
+
 ## Mart rollups (`codegen.py`)
 
-Each business team has a handful of hand-written core facts. Dashboards want the same numbers cut by day, week and month and by one dimension or another, which is mechanical work, so `codegen.py` generates those cuts from a short declarative spec: 12 families producing 57 models. The output is committed because dbt reads models from disk. Regenerate after changing the spec:
+Each business team has a handful of hand-written core facts. Dashboards want the same numbers cut by day, week and month and by one dimension or another, which is mechanical work, so `codegen.py` generates those cuts from a short declarative spec: 12 families producing 57 models, each sorted in ClickHouse by its period and dimension. The output is committed because dbt reads models from disk. Regenerate after changing the spec:
 
-```
+```bash
 uv run python -m platform_ops.simulation.codegen
 ```
 
 A test compares the committed files with a fresh render, so a hand edit to a generated model fails CI instead of drifting from the spec.
 
-## Workload (`workload.py`)
+## Workload (`workload.py`), paused until Phase 13
 
-`platform-ops simulation run` simulates 13 weeks of the platform in a few minutes, always from a fresh seed. Every simulated day, new raw data arrives and some products and customers change; the raw sources are measured and checked for append-only growth; dbt runs at 02:00, for real every 28 days and replayed from the latest real build on the other days; the 12 dashboards refresh every 12 or 24 hours, reading every table they depend on; and five people run ad hoc SQL during office hours, from careful queries to `SELECT *` on large tables. Nobody's queries touch the abandoned models, which is exactly what makes them waste. The design and its trade-offs are in [ADR 0007](../../../docs/adr/0007-simulated-workload-real-builds-daily-replay.md).
+In 1.x, `platform-ops simulation run` simulated 13 weeks of the platform on DuckDB: dbt at 02:00, the 12 dashboards refreshing every 12 or 24 hours, and five people running ad hoc SQL during office hours, from careful queries to `SELECT *` on large tables ([ADR 0007](../../../docs/adr/0007-simulated-workload-real-builds-daily-replay.md)). It is paused while the company runs on ClickHouse; Phase 13 brings it back to replay the Metabase dashboards' cards (the same SQL `bi.py` generates) and the teams' ad hoc SQL under their own ClickHouse users, so the cost module can read who ran what from ClickHouse's query log.
 
-### Workload results at scale 1.0
+From two runs of `make simulate` in 1.x, at `v1.2.0`: 91 days, 4 real dbt builds and 87 replayed, 24,934 dbt queries, 10,192 dashboard queries and 687 ad hoc queries, 5,427,803 raw rows loaded and 3,497 changed in place, in 280 and 290 seconds.
 
-From two actual runs of `make simulate`: 91 days, 4 real dbt builds and 87 replayed, 24,934 dbt queries, 10,192 dashboard queries and 687 ad hoc queries, 5,427,803 raw rows loaded and 3,497 changed in place. The runs took 280 and 290 seconds, and collected the same workload both times.
+## Fault injectors (`faults.py`, `migration_faults.py`)
+
+`faults.py` breaks the raw data on purpose for the incident scenario, and `migration_faults.py` plants labelled discrepancies in a migration for the reconciliation to find. Both still target 1.x and return with their modules: the migration faults move into the Postgres to ClickHouse load in Phase 12, and the incident faults onto real dbt runs on ClickHouse in Phase 14.

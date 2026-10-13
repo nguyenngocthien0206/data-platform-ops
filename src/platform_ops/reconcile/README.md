@@ -1,5 +1,7 @@
 # reconcile
 
+> **Paused in version 2.0 until Phase 12.** Phase 12 reconciles the company's legacy Postgres, its tables and its 12 hand-written reports, against ClickHouse and the marts that replace them, over a parallel run before cutover. Until then `make reconcile` exits with code 2 and says so. Everything below describes 1.x, at tag `v1.2.0`.
+
 Before a legacy system is switched off, someone who owns the data has to sign that the new copy holds what the old one held. `make reconcile` produces the evidence for that signature: it loads a year of legacy orders, customers and payments into Postgres, migrates them into Iceberg with a job that has realistic bugs, plants a few more discrepancies in the target, then finds and explains every difference with a segmented checksum diff. The result is `reports/reconciliation.md`, a sign-off document that states its acceptance thresholds before it states any numbers.
 
 ## How it fits together
@@ -64,11 +66,6 @@ What the numbers say:
 - **The float cast is the quiet one.** Ordinary amounts survive a trip through DOUBLE; only the largest orders, above ten billion, lose their sixth decimal. That still adds up to 1,434 rounding differences, over the threshold of 100, so orders fails on them as well as on the rows dropped at batch boundaries. Whether a sixth-decimal difference on an enterprise invoice is acceptable is a call for finance, and the threshold is where they make it.
 
 ## Running it
-
-Paused in version 2.0 until Phase 12, which reconciles the company's legacy
-Postgres reports against the marts that replace them on ClickHouse.
-`platform-ops reconcile run` says so and exits 2; the 1.x version below is at
-tag `v1.2.0`.
 
 ```bash
 make up                             # Postgres, the default legacy engine
