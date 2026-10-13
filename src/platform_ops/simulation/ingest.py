@@ -20,6 +20,13 @@ it would keep both versions forever.
 Each load is recorded in the ops store (``ingestion_loads``), with its range
 and the rows it moved; the latest ``loaded_until`` per table is the watermark.
 
+Until the migration team ships its fix (Phase 12), the job runs as it was
+first delivered (``delivered = True``), with four defects a real copy job
+ships with: a UTC timestamp read as New York time, a decimal passed through a
+float and truncated on the way back, trailing spaces trimmed, and the last key
+of every page of a paged table lost (``company.delivered_job``). Each is a
+change to one column's expression or the load's filter, nothing else.
+
 The loads run as the company's ``loader`` user (``simulation.access``), which
 may only insert into raw and read Postgres, so ClickHouse logs the ingestion
 under its own name. Creating the raw tables is the platform's setup, done by
@@ -95,6 +102,8 @@ class Ingestion:
     """Recreates the raw layer and pulls from Postgres into it."""
 
     settings: Settings
+    # The job as the migration team first delivered it, defects included.
+    delivered: bool = False
 
     def __post_init__(self) -> None:
         self.client: Any = clickhouse_client(self.settings)
@@ -106,6 +115,21 @@ class Ingestion:
 
     def recreate(self) -> None:
         """Drop and recreate every raw table, empty, and forget every watermark."""
+        self._empty_raw()
+        with open_store(self.settings) as store:
+            store.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(self._loads()))
+            store.execute(sql.SQL("CREATE TABLE {} ({})").format(self._loads(), sql.SQL(LOADS_DDL)))
+
+    def backfill(self, until: datetime) -> dict[str, int]:
+        """Empty raw and reload every table in full, keeping the record of earlier loads.
+
+        What a migration team does when it ships a fixed job: the old copy is
+        not patched, it is replaced.
+        """
+        self._empty_raw()
+        return self.load(until, full=True)
+
+    def _empty_raw(self) -> None:
         self.client.command(f"CREATE DATABASE IF NOT EXISTS `{self.database}`")
         for table in raw_data.TABLES:
             columns = ", ".join(f"`{name}` {data_type}" for name, data_type in raw_columns(table))
@@ -114,9 +138,6 @@ class Ingestion:
                 f"CREATE OR REPLACE TABLE `{self.database}`.`{table}` ({columns}) "
                 f"ENGINE = ReplacingMergeTree({UPDATED_AT}) ORDER BY {key}"
             )
-        with open_store(self.settings) as store:
-            store.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(self._loads()))
-            store.execute(sql.SQL("CREATE TABLE {} ({})").format(self._loads(), sql.SQL(LOADS_DDL)))
 
     def _loads(self) -> sql.Composed:
         return ops_table(self.settings, "ingestion_loads")
@@ -130,9 +151,12 @@ class Ingestion:
             ).fetchall()
         return {str(name): until for name, until in rows}
 
-    def load(self, until: datetime) -> dict[str, int]:
-        """Pull every table up to ``until`` from its watermark, minus the overlap, as ``loader``."""
-        marks = self.watermarks()
+    def load(self, until: datetime, *, full: bool = False) -> dict[str, int]:
+        """Pull every table up to ``until`` from its watermark, minus the overlap, as ``loader``.
+
+        ``full`` ignores the watermarks and reads everything up to ``until``.
+        """
+        marks = {} if full else self.watermarks()
         loader = clickhouse_client(self.settings, "loader")
         try:
             moved, records = self._pull(loader, marks, until)
@@ -154,12 +178,14 @@ class Ingestion:
             since = None if mark is None else mark - self.overlap
             names = [name for name, _ in raw_columns(table) if name != LOADED_AT]
             selected = ", ".join(f"`{n}`" for n in names)
+            read = ", ".join(self._expression(table, n) for n in names)
             where = f"{UPDATED_AT} <= {_ts(until)}"
             if since is not None:
                 where = f"{UPDATED_AT} > {_ts(since)} AND {where}"
+            where += self._dropped(table)
             summary = loader.command(
                 f"INSERT INTO `{self.database}`.`{table}` ({selected}, {LOADED_AT}) "
-                f"SELECT {selected}, {_ts(until)} "
+                f"SELECT {read}, {_ts(until)} "
                 f"FROM postgresql('{source_host}', '{pg.dbname}', '{table}', "
                 f"'{pg.user}', '{pg.password}', '{schema}') "
                 f"WHERE {where} ORDER BY {raw_data.PRIMARY_KEYS[table]}"
@@ -168,6 +194,29 @@ class Ingestion:
             moved[table] = rows
             records.append((table, since, until, rows, until))
         return moved, records
+
+    def _expression(self, table: str, column: str) -> str:
+        """How the job reads one column: as it is, or with a delivered defect."""
+        plain = f"`{column}`"
+        if not self.delivered:
+            return plain
+        job = self.settings.company.delivered_job
+        if (table, column) == (job.timezone_table, job.timezone_column):
+            # The wall-clock text of a UTC instant, parsed as local time.
+            return f"toDateTime64(toString({plain}), 6, '{job.timezone}')"
+        if (table, column) == (job.float_table, job.float_column):
+            return f"toDecimal64(toFloat64({plain}), 2)"
+        if (table, column) == (job.trim_table, job.trim_column):
+            return f"trimRight({plain})"
+        return plain
+
+    def _dropped(self, table: str) -> str:
+        """The delivered job's paging bug: the last key of every page is never loaded."""
+        job = self.settings.company.delivered_job
+        if not self.delivered or table != job.batch_table:
+            return ""
+        key = raw_data.PRIMARY_KEYS[table]
+        return f" AND {key} % {job.batch_rows} != 0"
 
     def _record(self, records: list[tuple[Any, ...]]) -> None:
         with (

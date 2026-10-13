@@ -17,6 +17,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DEFAULT_CONFIG_PATH = Path("config/settings.yaml")
 CONFIG_PATH_ENV_VAR = "PLATFORM_OPS_CONFIG"
+# Overrides scale_factor for one run, for a check that needs the behaviour and
+# not the numbers (the release workflow's demo). Results are always quoted at
+# the scale in config/settings.yaml.
+SCALE_ENV_VAR = "PLATFORM_OPS_SCALE_FACTOR"
 
 
 class _Strict(BaseModel):
@@ -31,7 +35,6 @@ class Paths(_Strict):
     # generated in DuckDB, then copied into the company's legacy Postgres.
     generator: Path = Path("data/generator.duckdb")
     reports: Path
-    iceberg_warehouse: Path
     dbt_project: Path
     dbt_target: Path
 
@@ -164,7 +167,8 @@ class IncidentSettings(_Strict):
     lifecycle: LifecycleSettings
 
 
-Engine = Literal["postgres", "duckdb"]
+# The legacy engine whose policy decides what counts as equal (ADR 0009).
+Engine = Literal["postgres"]
 DiscrepancyClass = Literal[
     "missing_in_target",
     "extra_in_target",
@@ -219,22 +223,45 @@ class Thresholds(_Strict):
 
 
 class ReconcileSettings(_Strict):
-    engines: Annotated[list[Engine], Field(min_length=1)]
-    rows: dict[Literal["customers", "orders", "payments"], Annotated[int, Field(gt=0)]]
-    legacy_year: Annotated[int, Field(ge=2000, le=2100)]
-    legacy_timezone: str
-    fanout: Annotated[int, Field(ge=2, le=256)]
+    """How the parallel run is reconciled and judged (version 2.0, Phase 12)."""
+
+    # Pairs reconciled at the same time; each holds a Postgres and a ClickHouse
+    # connection, and Postgres renders the legacy side.
+    workers: Annotated[int, Field(ge=1, le=32)] = 6
     leaf_width: Annotated[int, Field(ge=1)]
     rounding_tolerance: Annotated[float, Field(ge=0)]
+    # Consecutive nights with every table and report within the thresholds
+    # before the cutover is recommended.
+    clean_nights_for_cutover: Annotated[int, Field(ge=1)]
+    # Differences kept per night, pair and class as examples; the counts are
+    # always complete.
+    examples_per_class: Annotated[int, Field(ge=0)] = 20
     canonical: CanonicalSettings
     thresholds: Thresholds
 
-    @model_validator(mode="after")
-    def _every_table_sized(self) -> ReconcileSettings:
-        missing = {"customers", "orders", "payments"} - set(self.rows)
-        if missing:
-            raise ValueError(f"reconcile.rows is missing {sorted(missing)}")
-        return self
+
+class DeliveredJob(_Strict):
+    """The ingestion job as the migration team first delivered it, with four defects.
+
+    Each is the kind a real copy job ships with, and each is reconciled away by
+    the fix (``company.fix_after_nights``).
+    """
+
+    # Reads a UTC timestamp's wall-clock text as local time in this zone.
+    timezone_table: str = "payments"
+    timezone_column: str = "created_at"
+    timezone: str = "America/New_York"
+    # Passes a decimal through a float, and the decimal cast back truncates.
+    float_table: str = "payments"
+    float_column: str = "amount"
+    # Trims trailing spaces off a text column.
+    trim_table: str = "customers"
+    trim_column: str = "email"
+    # Pages a table by key and loses the last key of every page. On web sessions
+    # no dbt test notices (nothing references a session), which is why only the
+    # reconciliation finds it. The key must be dense for pages to have a last key.
+    batch_table: str = "web_sessions"
+    batch_rows: Annotated[int, Field(ge=2)] = 25000
 
 
 class CompanySettings(_Strict):
@@ -270,6 +297,14 @@ class CompanySettings(_Strict):
     # come from the environment (METABASE_URL, MB_ADMIN_EMAIL, MB_ADMIN_PASSWORD).
     metabase_database: str = "metabase"
     clickhouse_from_metabase: str = "clickhouse:8123"
+    # The parallel run (Phase 12): the last weeks of the window, when legacy and
+    # ClickHouse both run, dbt builds every night and the migration is
+    # reconciled every night. Zero means no parallel run.
+    parallel_run_weeks: Annotated[int, Field(ge=0)] = 0
+    # Nights into the parallel run when the migration team ships the fixed job
+    # and backfills. Until then the job runs as delivered.
+    fix_after_nights: Annotated[int, Field(ge=1)] = 7
+    delivered_job: DeliveredJob = Field(default_factory=lambda: DeliveredJob())
 
     def name(self, base: str) -> str:
         """A schema or database name with the namespace applied."""
@@ -310,6 +345,7 @@ def load_settings(path: Path | str | None = None) -> Settings:
 
     Resolution order: explicit argument, then ``PLATFORM_OPS_CONFIG``, then
     ``config/settings.yaml`` relative to the working directory.
+    ``PLATFORM_OPS_SCALE_FACTOR``, when set, replaces the file's scale factor.
     """
     config_file = _config_path(path)
     if not config_file.is_file():
@@ -322,4 +358,7 @@ def load_settings(path: Path | str | None = None) -> Settings:
         raise ValueError(f"{config_file} must contain a YAML mapping at the top level")
     # The repo root is the parent of config/, which is where relative paths hang off.
     raw["root"] = config_file.resolve().parent.parent
+    scale = os.environ.get(SCALE_ENV_VAR, "").strip()
+    if scale:
+        raw["scale_factor"] = float(scale)
     return Settings.model_validate(raw)

@@ -26,15 +26,25 @@ scenario (Phase 14) runs its own builds on the nights it needs them.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from platform_ops.common.config import Settings
 from platform_ops.common.dbt_invoke import invocation_from_settings, run_dbt
-from platform_ops.common.servers import clickhouse_client
+from platform_ops.common.servers import clickhouse_client, connect_postgres
 from platform_ops.simulation.access import DBT_LAYERS, drop_users, ensure_users
 from platform_ops.simulation.ingest import Ingestion
 from platform_ops.simulation.legacy_db import LegacyCompany
+from platform_ops.simulation.migration import (
+    OneOffFault,
+    Planted,
+    TruthCell,
+    delivered_truth,
+    fault_nights,
+    plant,
+    repair,
+)
 
 
 @dataclass
@@ -110,17 +120,69 @@ def build(settings: Settings, *, full_refresh: bool = False) -> None:
     run_dbt(invocation_from_settings(settings), command)
 
 
-def run_company(settings: Settings, days: int | None = None) -> CompanySummary:
-    """Seed the history, then replay ``days`` simulated days (the whole window by default)."""
+@dataclass(frozen=True)
+class Night:
+    """One night of the parallel run, after its build: what the reconciliation is told.
+
+    ``truth`` is every discrepancy planted and not yet repaired, which only the
+    grading reads; the reconciliation itself compares the two sides blind.
+    """
+
+    index: int
+    run_at: datetime
+    delivered: bool  # the ingestion still runs as first delivered
+    backfilled: bool  # the fixed job shipped tonight and reloaded raw
+    planted: str  # the fault planted tonight, if any
+    repaired: str  # the fault repaired tonight, if any
+    truth: tuple[TruthCell, ...]
+
+
+@dataclass(frozen=True)
+class Timeline:
+    """When the parallel run starts, when the fix ships, and which fault falls on which night."""
+
+    parallel_start: int
+    fix_night: int
+    faults: dict[int, OneOffFault]
+
+    @classmethod
+    def of(cls, settings: Settings, total_days: int) -> Timeline:
+        company = settings.company
+        nights = min(total_days, company.parallel_run_weeks * 7)
+        start = total_days - nights if nights else total_days
+        fix = min(start + company.fix_after_nights, total_days) if nights else total_days
+        return cls(start, fix, fault_nights(fix + 2, total_days - 1) if nights else {})
+
+    def parallel(self, night: int) -> bool:
+        return night >= self.parallel_start
+
+    def delivered(self, night: int) -> bool:
+        """The job runs as delivered until the fix ships (only when there is a parallel run)."""
+        return self.parallel_start < self.fix_night and night < self.fix_night
+
+
+def run_company(
+    settings: Settings,
+    days: int | None = None,
+    nightly: Callable[[Night], None] | None = None,
+) -> CompanySummary:
+    """Seed the history, then replay ``days`` simulated days (the whole window by default).
+
+    During the parallel run, dbt builds every night and ``nightly`` (the
+    reconciliation) is called after each build.
+    """
     window = settings.simulation
     total_days = window.weeks * 7 if days is None else days
     every = settings.company.build_every_days
     workload = settings.workload
     scale = settings.scale_factor
+    timeline = Timeline.of(settings, total_days)
     summary = CompanySummary()
 
     legacy = LegacyCompany(settings)
-    ingestion = Ingestion(settings)
+    ingestion = Ingestion(settings, delivered=timeline.delivered(0))
+    admin = clickhouse_client(settings)
+    planted: Planted | None = None
     try:
         summary.rows_seeded, summary.rows_ingested = start_over(settings, legacy, ingestion)
         loaded_until = window.start
@@ -138,14 +200,47 @@ def run_company(settings: Settings, days: int | None = None) -> CompanySummary:
             loaded_until = run_at
             summary.rows_loaded += sum(loaded.values())
             summary.rows_changed += sum(changed.values())
-            summary.rows_ingested += sum(ingestion.load(run_at).values())
-            if day_index % every == 0 or day_index == total_days - 1:
-                build(settings, full_refresh=not summary.builds)
+            backfill = ingestion.delivered and not timeline.delivered(day_index)
+            repaired = ""
+            if planted is not None:
+                repair(settings, admin, planted, run_at)
+                repaired, planted = planted.fault.fault_id, None
+            if backfill:
+                # The fixed job ships: raw is reloaded in full, then rebuilt.
+                ingestion.delivered = False
+                summary.rows_ingested += sum(ingestion.backfill(run_at).values())
+            else:
+                summary.rows_ingested += sum(ingestion.load(run_at).values())
+            fault = timeline.faults.get(day_index)
+            if fault is not None:
+                planted = plant(settings, admin, fault)
+            parallel = timeline.parallel(day_index)
+            if parallel or day_index % every == 0 or day_index == total_days - 1:
+                build(settings, full_refresh=not summary.builds or backfill)
                 summary.builds.append(run_at)
+            if parallel and nightly is not None:
+                truth: list[TruthCell] = []
+                if ingestion.delivered:
+                    with connect_postgres(settings) as connection:
+                        truth += delivered_truth(settings, connection)
+                if planted is not None:
+                    truth += planted.truth()
+                nightly(
+                    Night(
+                        index=day_index,
+                        run_at=run_at,
+                        delivered=ingestion.delivered,
+                        backfilled=backfill,
+                        planted=fault.fault_id if fault is not None else "",
+                        repaired=repaired,
+                        truth=tuple(truth),
+                    )
+                )
             summary.days += 1
     finally:
         legacy.close()
         ingestion.close()
+        admin.close()
     return summary
 
 

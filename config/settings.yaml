@@ -13,7 +13,6 @@ scale_factor: 1.0
 paths:
   duckdb: data/warehouse.duckdb
   reports: reports
-  iceberg_warehouse: warehouse
   dbt_project: dbt
   # Where dbt writes manifest.json and run results. Logs go next to it.
   dbt_target: dbt/target
@@ -121,28 +120,27 @@ incidents:
     load_factor: 0.5
 
 reconcile:
-  # Legacy engines to reconcile, each against its own Iceberg copy;
-  # `platform-ops reconcile run --engine ...` picks engines for one run. Paused
-  # in version 2.0 until Phase 12 reconciles Postgres against ClickHouse.
-  engines: [postgres]
-  # Legacy rows at scale_factor 1.0. The legacy system holds calendar year
-  # legacy_year, so its local timestamps cross both DST changes.
-  rows: {customers: 50000, orders: 300000, payments: 300000}
-  legacy_year: 2025
-  # The legacy system stores local wall-clock time in this zone.
-  legacy_timezone: America/New_York
-  # Segmented diff: each differing segment splits into `fanout` children until
-  # a segment spans at most `leaf_width` keys; only then are rows fetched.
-  fanout: 16
+  # The parallel run's nightly reconciliation (Phase 12, ADR 0017): the
+  # company's operational tables in Postgres against ClickHouse's raw layer,
+  # and its legacy reports against the dbt marts. What is compared is declared
+  # in config/reconcile.yaml; the timeline is under `company`.
+  # Pairs reconciled at once. One night at scale 1.0 took 102 s one at a time
+  # and 23 s with six, on the development laptop.
+  workers: 6
+  # The diff opens a segment of the key's MD5 until it holds about this many rows.
   leaf_width: 256
   # A decimal difference up to this size is classified as rounding.
   rounding_tolerance: 0.01
-  # How values are rendered before hashing (ADR 0009). Engine defaults first,
-  # then per-column overrides as "table.column": {rtrim, casefold, scale}.
+  # The cutover is recommended after this many consecutive nights with every
+  # table and every report within the thresholds below.
+  clean_nights_for_cutover: 14
+  # Differences kept per night, pair and class as examples in the ops store.
+  examples_per_class: 20
+  # How values are rendered before hashing (ADR 0009): the legacy engine's
+  # policy, then per-column overrides as "name.column": {rtrim, casefold, scale}.
   canonical:
     engines:
       postgres: {rtrim: false, casefold: false}
-      duckdb: {rtrim: false, casefold: false}
     columns: {}
   # Sign-off criteria, fixed before the run and stated first in the report.
   thresholds:
@@ -183,6 +181,24 @@ company:
   # Each load re-reads this much before its watermark (late commits), and
   # ReplacingMergeTree keeps the latest version of anything read twice.
   ingest_overlap_minutes: 60
-  # dbt builds every N simulated days and on the last day. Measured, not
-  # assumed: see docs/PROGRESS.md for what a build costs at scale 1.0.
+  # dbt builds every N simulated days and on the last day, and every night
+  # of the parallel run. Measured, not assumed: see docs/PROGRESS.md.
   build_every_days: 28
+  # The migration's parallel run (Phase 12): the last 6 weeks of the window.
+  # Legacy and ClickHouse both run, dbt builds and the migration is reconciled
+  # every night. The ingestion runs as the migration team delivered it, with
+  # the defects below, until fix_after_nights into the parallel run, when the
+  # fixed job ships and backfills raw. One-off faults follow, each repaired the
+  # next day, the way a team works through its morning reconciliation report.
+  parallel_run_weeks: 6
+  fix_after_nights: 7
+  delivered_job:
+    timezone_table: payments
+    timezone_column: created_at
+    timezone: America/New_York
+    float_table: payments
+    float_column: amount
+    trim_table: customers
+    trim_column: email
+    batch_table: web_sessions
+    batch_rows: 25000
