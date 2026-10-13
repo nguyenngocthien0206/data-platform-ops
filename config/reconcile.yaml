@@ -1,0 +1,38 @@
+# What the migration's reconciliation compares, night after night (version 2.0).
+#
+# `tables`: the legacy operational tables in Postgres (schema `app`) against
+# their copies in ClickHouse's raw layer, read with FINAL. `reports`: the
+# legacy reports in Postgres (schema `reporting`) against the dbt marts that
+# replace them. Schemas and databases are namespaced by the toolkit; columns
+# and their types are read from both catalogues, so only what a catalogue
+# cannot say is written here: the key, a renamed column, a scale to compare
+# decimals at, or a column left out (with the reason next to it).
+#
+# Validated by platform_ops.reconcile.schema.ReconcileConfig.
+
+tables:
+  - {name: customers, source: customers, target: customers, key: [customer_id]}
+  - {name: products, source: products, target: products, key: [product_id]}
+  - {name: orders, source: orders, target: orders, key: [order_id]}
+  - {name: order_items, source: order_items, target: order_items, key: [order_item_id]}
+  - {name: payments, source: payments, target: payments, key: [payment_id]}
+  - {name: web_sessions, source: web_sessions, target: web_sessions, key: [session_id]}
+  - {name: marketing_campaigns, source: marketing_campaigns, target: marketing_campaigns, key: [campaign_id]}
+  - {name: marketing_spend, source: marketing_spend, target: marketing_spend, key: [spend_id]}
+  - {name: support_tickets, source: support_tickets, target: support_tickets, key: [ticket_id]}
+
+# One report per dashboard. A report and its mart have the same columns; the
+# key is what makes a row of the dashboard unique.
+reports:
+  - {name: sales_daily, source: sales_daily, target: sales_fct_daily_sales, key: [order_date]}
+  - {name: customer_cohorts, source: customer_cohorts, target: sales_customer_cohorts, key: [cohort_month, months_since_signup]}
+  - {name: orders_daily_by_channel, source: orders_daily_by_channel, target: sales_rpt_orders_daily_by_channel, key: [period_start, channel]}
+  - {name: campaign_performance, source: campaign_performance, target: marketing_fct_campaign_performance, key: [campaign_id]}
+  - {name: sessions_daily_by_traffic_source, source: sessions_daily_by_traffic_source, target: marketing_rpt_sessions_daily_by_traffic_source, key: [period_start, traffic_source]}
+  - {name: acquisition_funnel, source: acquisition_funnel, target: marketing_acquisition_funnel, key: [month, referral_source]}
+  - {name: revenue_monthly, source: revenue_monthly, target: finance_fct_revenue_monthly, key: [revenue_month]}
+  - {name: margin_monthly_by_channel, source: margin_monthly_by_channel, target: finance_rpt_margin_monthly_by_channel, key: [period_start, channel]}
+  - {name: payments_reconciliation, source: payments_reconciliation, target: finance_fct_payments_reconciliation, key: [order_id]}
+  - {name: product_sales_monthly_by_category, source: product_sales_monthly_by_category, target: product_rpt_product_sales_monthly_by_category, key: [period_start, category]}
+  - {name: engagement_monthly_by_device, source: engagement_monthly_by_device, target: product_rpt_engagement_monthly_by_device, key: [period_start, device]}
+  - {name: ticket_sla, source: ticket_sla, target: product_fct_ticket_sla, key: [ticket_month, category, priority]}

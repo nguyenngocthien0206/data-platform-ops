@@ -4,8 +4,8 @@ The verdict uses only what the diff found, judged against thresholds set in
 ``settings.yaml`` before the run. Ground truth is used only to grade the diff
 itself: did it find every planted discrepancy, and did it name the right class?
 
-A planted difference that the source's own canonical policy calls equal (a case
-change, when the legacy system is case-insensitive) is not a miss. It is
+A planted difference that the legacy system's own canonical policy calls equal
+(a case change, when the owner signed case-insensitive equality) is not a miss. It is
 counted separately as equivalent under policy, so the recall figure measures
 the diff and not the policy.
 """
@@ -20,20 +20,20 @@ from platform_ops.common.config import DISCREPANCY_CLASSES, DiscrepancyClass, Th
 from platform_ops.reconcile.canonical import Rule
 from platform_ops.reconcile.diff import TableDiff
 from platform_ops.reconcile.schema import TableSpec
-from platform_ops.simulation.migration_faults import TruthCell
+from platform_ops.simulation.migration import TruthCell
 
 
 @dataclass(frozen=True)
 class Discrepancy:
     table: str
-    key: int
+    key: str  # the canonical key
     column: str  # empty for a whole missing or extra row
     klass: DiscrepancyClass
     source_value: str
     target_value: str
 
     @property
-    def cell(self) -> tuple[str, int, str]:
+    def cell(self) -> tuple[str, str, str]:
         return (self.table, self.key, self.column)
 
 
@@ -130,7 +130,7 @@ def grade(
     specs: dict[str, TableSpec],
     rules: dict[str, dict[str, Rule]],
 ) -> Grade:
-    expected: dict[tuple[str, int, str], TruthCell] = {}
+    expected: dict[tuple[str, str, str], TruthCell] = {}
     equivalent = 0
     for cell in truth:
         if neutralized_by_policy(cell, specs[cell.table], rules[cell.table]):

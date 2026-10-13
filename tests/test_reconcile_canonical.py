@@ -1,237 +1,278 @@
-"""Canonical rendering and the row hash, byte-identical across engines (SPEC Phase 4).
+"""Canonical rendering and the row hash, byte-identical across engines (ADR 0009).
 
 The golden rows hold every value that has bitten a migration somewhere: NULL
 next to an empty string, trailing spaces, mixed case, non-ASCII names, the
 separator and escape characters inside text, a literal ``\\N``, negative
-half-way decimals, a value that rounds to zero from below, and local times on
-both sides of daylight saving. Python, DuckDB and Postgres must render each
-value to the same string and sum the same hashes. Postgres runs when it is
-reachable (``make up``); otherwise its cases are skipped with the reason.
+half-way decimals, a value that rounds to zero from below, microseconds,
+dates, and a ClickHouse ``FixedString`` padded with zero bytes. Python,
+Postgres and ClickHouse must render each value to the same string, hash each
+row the same way, and put each key in the same segment. The engine cases need
+``make up`` and skip with the reason otherwise.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from datetime import UTC, datetime
+from collections.abc import Callable, Iterator
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-import duckdb
-import pyarrow as pa
 import pytest
 
+from platform_ops.common.config import Settings, load_settings
 from platform_ops.reconcile.canonical import (
     NULL,
     Rule,
     canonical_value,
+    key_bucket,
     render,
     row_hash,
     row_string,
 )
-from platform_ops.reconcile.connectors import (
-    DuckDBConnector,
-    PostgresConnector,
-    postgres_params,
-)
 from platform_ops.reconcile.schema import Column, TableSpec
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-ZONE = "America/New_York"
-
-GOLDEN = TableSpec(
-    "golden",
-    "id",
-    (
-        Column("id", "int"),
-        Column("t", "text", length=60),
-        Column("d2", "decimal", precision=12, scale=2),
-        Column("d6", "decimal", precision=20, scale=6),
-        Column("b", "bool"),
-        Column("lt", "local_ts"),
-        Column("ut", "utc_ts"),
-    ),
+COLUMNS = (
+    Column("id", "int"),
+    Column("t", "text"),
+    Column("code", "text", target_type="Nullable(FixedString(8))"),
+    Column("d2", "decimal", scale=2),
+    Column("d6", "decimal", scale=6),
+    Column("b", "bool"),
+    Column("ts", "ts"),
+    Column("day", "date"),
 )
 
 ROWS: list[dict[str, Any]] = [
     {
         "id": 1,
         "t": "plain",
+        "code": "AB",
         "d2": Decimal("1.00"),
         "d6": Decimal("0.000001"),
         "b": True,
-        "lt": datetime(2025, 1, 15, 10, 0, 0, 500000),
-        "ut": datetime(2025, 1, 15, 15, tzinfo=UTC),
+        "ts": datetime(2025, 1, 15, 10, 0, 0, 500000),
+        "day": date(2025, 1, 15),
     },
     {
         "id": 2,
         "t": "",
+        "code": "",
         "d2": Decimal("-2.35"),
         "d6": Decimal("-123456789012.345678"),
         "b": False,
-        "lt": datetime(2025, 7, 1, 10, 0),
-        "ut": datetime(2025, 7, 1, 14, 0, 0, 123456, tzinfo=UTC),
+        "ts": datetime(2025, 7, 1, 14, 0, 0, 123456),
+        "day": date(1999, 12, 31),
     },
-    {"id": 3, "t": None, "d2": None, "d6": None, "b": None, "lt": None, "ut": None},
+    {"id": 3, "t": None, "code": None, "d2": None, "d6": None, "b": None, "ts": None, "day": None},
     {
         "id": 4,
         "t": "trailing   ",
+        "code": "X  ",
         "d2": Decimal("2.35"),
         "d6": Decimal("12345678901.234567"),
         "b": True,
-        "lt": datetime(2025, 3, 9, 6, 0),
-        "ut": datetime(2025, 11, 2, 6, tzinfo=UTC),
+        "ts": datetime(2025, 11, 2, 6),
+        "day": date(2024, 2, 29),
     },
     {
         "id": 5,
         "t": "MiXeD Case",
+        "code": "Zz",
         "d2": Decimal("-0.04"),
         "d6": Decimal("0"),
         "b": False,
-        "lt": datetime(2025, 11, 2, 6, 0),
-        "ut": datetime(2024, 2, 29, 23, 59, 59, 999999, tzinfo=UTC),
+        "ts": datetime(2024, 2, 29, 23, 59, 59, 999999),
+        "day": date(2026, 4, 5),
     },
     {
         "id": 6,
         "t": "pipe|and\\backslash",
+        "code": "a|b",
         "d2": Decimal("0.05"),
         "d6": Decimal("-0.000999"),
         "b": True,
-        "lt": datetime(2025, 12, 31, 23, 59, 59, 999999),
-        "ut": None,
+        "ts": None,
+        "day": date(2025, 6, 30),
     },
     {
         "id": 7,
         "t": "Nguyễn Zoë José Łukasz",
+        "code": "ok",
         "d2": Decimal("999.99"),
         "d6": Decimal("1.5"),
         "b": None,
-        "lt": datetime(2025, 6, 15, 12, 30),
-        "ut": datetime(2025, 6, 15, 16, 30, tzinfo=UTC),
+        "ts": datetime(2025, 6, 15, 16, 30),
+        "day": None,
     },
     {
         "id": 8,
         "t": "\\N",
+        "code": "N",
         "d2": Decimal("0.00"),
         "d6": Decimal("0.000000"),
         "b": False,
-        "lt": datetime(2025, 1, 1, 0, 0),
-        "ut": datetime(2025, 1, 1, 5, tzinfo=UTC),
+        "ts": datetime(2025, 1, 1, 5),
+        "day": date(2025, 1, 1),
     },
     {
         "id": 9,
         "t": "it's",
+        "code": "q'",
         "d2": Decimal("-999.95"),
         "d6": Decimal("-1"),
         "b": True,
-        "lt": datetime(2025, 4, 1, 9, 15, 0, 1),
-        "ut": datetime(2025, 4, 1, 13, 15, 0, 1, tzinfo=UTC),
+        "ts": datetime(2025, 4, 1, 13, 15, 0, 1),
+        "day": date(2025, 4, 1),
     },
 ]
 
-# Two policies: as stored, and the lenient one a case-insensitive legacy system
-# implies. d2 is re-rendered at scale 1 to exercise rounding half away from
+# Two policies: as stored, and a lenient one (trailing spaces and case do not
+# count). d2 is re-rendered at scale 1 to exercise rounding half away from
 # zero and the no-negative-zero rule.
 POLICIES = {
-    "strict": {c.name: Rule(scale=c.scale) for c in GOLDEN.columns},
+    "strict": {c.name: Rule(scale=c.scale) for c in COLUMNS},
     "lenient": {
         c.name: Rule(rtrim=True, casefold=True, scale=1 if c.name == "d2" else c.scale)
-        for c in GOLDEN.columns
+        for c in COLUMNS
     },
 }
 
+PG_TYPES = {
+    "id": "bigint PRIMARY KEY",
+    "t": "varchar",
+    "code": "varchar",
+    "d2": "numeric(12, 2)",
+    "d6": "numeric(20, 6)",
+    "b": "boolean",
+    "ts": "timestamp",
+    "day": "date",
+}
+CH_TYPES = {
+    "id": "Int64",
+    "t": "Nullable(String)",
+    "code": "Nullable(FixedString(8))",
+    "d2": "Nullable(Decimal(12, 2))",
+    "d6": "Nullable(Decimal(20, 6))",
+    "b": "Nullable(Bool)",
+    "ts": "Nullable(DateTime64(6, 'UTC'))",
+    "day": "Nullable(Date32)",
+}
+SCHEMA = "t_golden"
 
-def _arrow() -> pa.Table:
-    schema = pa.schema(
-        [
-            ("id", pa.int64()),
-            ("t", pa.string()),
-            ("d2", pa.decimal128(12, 2)),
-            ("d6", pa.decimal128(20, 6)),
-            ("b", pa.bool_()),
-            ("lt", pa.timestamp("us")),
-            ("ut", pa.timestamp("us", tz="UTC")),
-        ]
+
+def _spec() -> TableSpec:
+    return TableSpec(
+        "golden",
+        "table",
+        ("id",),
+        COLUMNS,
+        source=f'"{SCHEMA}"."golden"',
+        target=f"`{SCHEMA}`.`golden`",
     )
-    return pa.Table.from_pylist(ROWS, schema=schema)
 
 
-def _expected(policy: str) -> dict[int, tuple[str, ...]]:
+def _expected(policy: str) -> dict[str, tuple[str, ...]]:
     rules = POLICIES[policy]
     return {
-        row["id"]: tuple(
-            canonical_value(c, row[c.name], rules[c.name], ZONE) for c in GOLDEN.columns
-        )
+        str(row["id"]): tuple(canonical_value(c, row[c.name], rules[c.name]) for c in COLUMNS)
         for row in ROWS
     }
 
 
-def _hash_sums(values: dict[int, tuple[str, ...]]) -> tuple[int, int]:
-    hashes = [row_hash(row_string(list(v))) for v in values.values()]
-    return sum(h[0] for h in hashes), sum(h[1] for h in hashes)
-
-
-# -- the reference itself ------------------------------------------------------------
+# -- the reference itself ------------------------------------------------------------------
 
 
 def test_reference_renders_the_agreed_strings() -> None:
-    strict = _expected("strict")
-    lenient = _expected("lenient")
-    assert strict[3] == ("3",) + (NULL,) * 6
-    assert strict[2][1] == "" and strict[3][1] == NULL
-    assert strict[8][1] == "\\\\N", "a literal \\N is escaped, so it never equals NULL"
-    assert strict[6][1] == "pipe\\|and\\\\backslash"
-    assert strict[1][5] == "2025-01-15T15:00:00.500000Z"
-    assert strict[2][5] == "2025-07-01T14:00:00.000000Z", "summer is UTC-4"
-    assert strict[2][3] == "-123456789012.345678"
-    assert strict[5][2] == "-0.04"
-    assert lenient[5][2] == "0.0", "rounds to zero from below: no negative zero"
-    assert lenient[2][2] == "-2.4" and lenient[4][2] == "2.4", "half away from zero"
-    assert lenient[4][1] == "trailing" and lenient[5][1] == "mixed case"
-    assert strict[1][4] == "true" and strict[7][4] == NULL
+    strict, lenient = _expected("strict"), _expected("lenient")
+    assert strict["3"] == ("3",) + (NULL,) * 7
+    assert strict["2"][1] == "" and strict["3"][1] == NULL
+    assert strict["8"][1] == "\\\\N", "a literal \\N is escaped, so it never equals NULL"
+    assert strict["6"][1] == "pipe\\|and\\\\backslash"
+    assert strict["1"][6] == "2025-01-15T10:00:00.500000Z"
+    assert strict["2"][4] == "-123456789012.345678"
+    assert strict["5"][3] == "-0.04"
+    assert lenient["5"][3] == "0.0", "rounds to zero from below: no negative zero"
+    assert lenient["2"][3] == "-2.4" and lenient["4"][3] == "2.4", "half away from zero"
+    assert lenient["4"][1] == "trailing" and lenient["5"][1] == "mixed case"
+    assert strict["1"][5] == "true" and strict["7"][5] == NULL
+    assert strict["5"][7] == "2026-04-05"
 
 
 def test_row_hash_is_md5_split_into_two_unsigned_32_bit_halves() -> None:
     assert row_hash("abc") == (0x90015098, 0x3CD24FB0)
+    assert key_bucket("abc", 1) == 0x9 and key_bucket("abc", 3) == 0x900
 
 
-# -- engines ---------------------------------------------------------------------------
-
-
-def _check(connector: Any, policy: str) -> None:
-    rules = POLICIES[policy]
-    rendered = render(connector.dialect, GOLDEN, rules, ZONE)
-    expected = _expected(policy)
-    got = connector.fetch(GOLDEN, rendered, 0, 1_000_000, [0])
-    for key in sorted(expected):
-        assert got[key] == expected[key], f"{connector.engine} {policy} row {key}"
-    summaries = connector.summarize(GOLDEN, rendered, 0, 1_000_000, None, [])
-    (summary,) = summaries.values()
-    assert summary.rows == len(ROWS)
-    assert (summary.h1, summary.h2) == _hash_sums(expected), f"{connector.engine} {policy} sums"
-
-
-@pytest.mark.parametrize("policy", sorted(POLICIES))
-def test_duckdb_matches_the_reference(policy: str) -> None:
-    connector = DuckDBConnector(duckdb.connect(), local_zone=ZONE, schema="golden_check")
-    connector.recreate({"golden": _arrow()}, [GOLDEN])
-    _check(connector, policy)
+# -- the engines -----------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
-def postgres() -> Iterator[PostgresConnector]:
-    try:
-        connector = PostgresConnector(
-            postgres_params(REPO_ROOT / ".env"), local_zone=ZONE, schema="golden_check"
+def engines(
+    tmp_path_factory: pytest.TempPathFactory,
+    isolated_config: Callable[..., Path],
+    servers_or_skip: Callable[[Settings], None],
+) -> Iterator[tuple[Any, Any]]:
+    from platform_ops.common.servers import clickhouse_client, connect_postgres
+
+    settings = load_settings(isolated_config(tmp_path_factory.mktemp("golden"), 0.01))
+    servers_or_skip(settings)
+    pg = connect_postgres(settings)
+    pg.autocommit = True
+    ch = clickhouse_client(settings)
+    pg.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
+    pg.execute(f"CREATE SCHEMA {SCHEMA}")
+    columns = ", ".join(f"{name} {t}" for name, t in PG_TYPES.items())
+    pg.execute(f"CREATE TABLE {SCHEMA}.golden ({columns})")
+    with pg.cursor() as cursor:
+        cursor.executemany(
+            f"INSERT INTO {SCHEMA}.golden VALUES ({', '.join(['%s'] * len(COLUMNS))})",
+            [[row[c.name] for c in COLUMNS] for row in ROWS],
         )
-    except Exception as error:
-        pytest.skip(f"Postgres not reachable ({type(error).__name__}); run `make up`")
-    connector.recreate({"golden": _arrow()}, [GOLDEN])
-    yield connector
-    connector.connection.execute("DROP SCHEMA golden_check CASCADE")
-    connector.close()
+    ch.command(f"DROP DATABASE IF EXISTS {SCHEMA}")
+    ch.command(f"CREATE DATABASE {SCHEMA}")
+    ch_columns = ", ".join(f"`{name}` {t}" for name, t in CH_TYPES.items())
+    ch.command(f"CREATE TABLE {SCHEMA}.golden ({ch_columns}) ENGINE = MergeTree ORDER BY id")
+    ch_rows = [
+        [
+            row[c.name].replace(tzinfo=UTC) if c.name == "ts" and row[c.name] else row[c.name]
+            for c in COLUMNS
+        ]
+        for row in ROWS
+    ]
+    ch.insert(f"{SCHEMA}.golden", ch_rows, column_names=[c.name for c in COLUMNS])
+    yield pg, ch
+    pg.execute(f"DROP SCHEMA {SCHEMA} CASCADE")
+    ch.command(f"DROP DATABASE {SCHEMA}")
+    pg.close()
+    ch.close()
 
 
+def _query(dialect: str, engine: Any, sql_text: str) -> list[tuple[Any, ...]]:
+    if dialect == "postgres":
+        return list(engine.execute(sql_text).fetchall())
+    return list(engine.query(sql_text).result_rows)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("dialect", ["postgres", "clickhouse"])
 @pytest.mark.parametrize("policy", sorted(POLICIES))
-def test_postgres_matches_the_reference(postgres: PostgresConnector, policy: str) -> None:
-    _check(postgres, policy)
+def test_each_engine_matches_the_reference(
+    engines: tuple[Any, Any], dialect: str, policy: str
+) -> None:
+    engine = engines[0] if dialect == "postgres" else engines[1]
+    spec = _spec()
+    rendered = render(dialect, spec, POLICIES[policy])  # type: ignore[arg-type]
+    relation = spec.source if dialect == "postgres" else spec.target
+    rows = _query(
+        dialect,
+        engine,
+        f"SELECT {rendered.key}, {', '.join(rendered.values)}, {rendered.h1}, {rendered.h2}, "
+        f"{rendered.bucket} FROM {relation} ORDER BY id",
+    )
+    expected = _expected(policy)
+    for row in rows:
+        key, values, h1, h2, bucket = str(row[0]), tuple(str(v) for v in row[1:-3]), *row[-3:]
+        assert (key, *values) == expected[key], f"{dialect} {policy} row {key}"
+        assert (int(h1), int(h2)) == row_hash(row_string(list(expected[key])))
+        assert int(bucket) == key_bucket(key, 8)

@@ -41,7 +41,7 @@ def classify(column: Column, source: str, target: str, tolerance: Decimal) -> Di
         if a is not None and b is not None and abs(a - b) <= tolerance:
             return "rounding"
         return "value_mismatch"
-    if column.kind in ("local_ts", "utc_ts"):
+    if column.kind == "ts":
         a_time, b_time = _timestamp(source), _timestamp(target)
         if a_time is not None and b_time is not None:
             seconds = (b_time - a_time).total_seconds()
