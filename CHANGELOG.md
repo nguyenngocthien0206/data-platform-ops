@@ -2,6 +2,20 @@
 
 All notable changes to data-platform-ops. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The GitHub Release for each version uses its section below as the notes.
 
+## [1.2.0] - 2026-10-13
+
+A starter registry, so rolling the ownership check out on a large dbt project starts from a short to-do list instead of a blank file.
+
+### Added
+
+- **`platform-ops metadata init-registry`** writes `teams.yaml` and `ownership.yaml` from a manifest, with one `TODO` rule per group of datasets: each source system, each folder of models (split by name prefix where a folder mixes them), each installed package, the seeds, the snapshots, and each exposure with the owner its dbt definition names. Every dataset matches exactly one rule and no two rules tie. On the bundled project, 139 datasets become 63 rules. An existing registry is only overwritten with `--force`.
+- A step-by-step rollout guide in the metadata README, from the starter registry to a required check.
+
+### Changed
+
+- Coverage, and the summary's `owned_share`, count a dataset as owned only when its rule names a real team and one of its members, so a starter registry reads 0% and the number rises as the TODOs close.
+- The GitHub Actions example pulls the 1.2.0 image.
+
 ## [1.1.0] - 2026-10-04
 
 The ownership check leaves the demo: it now guards any company dbt project from that repository's own CI, starting with the data platform team's project on self-managed ClickHouse.
@@ -46,5 +60,6 @@ The first release: a local-first toolkit for operating a multi-team data platfor
 - The 10-minute budget for `make demo` was lifted; measured times are recorded instead.
 - The pandas and pyarrow caps added for Windows Smart App Control were lifted (pandas 3, pyarrow 25), and mypy moved to its compiled 2.x wheels. Reports stayed byte-identical.
 
+[1.2.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v1.2.0
 [1.1.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v1.1.0
 [1.0.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v1.0.0
