@@ -1,10 +1,11 @@
-"""Running dbt in-process.
+"""Running dbt in-process, against the company's ClickHouse (version 2.0).
 
 dbt is invoked through ``dbtRunner`` rather than a subprocess, so the caller
 gets structured results back. Every invocation goes through here so that the
-warehouse path and the vars always come from ``settings.yaml``: the dbt profile
-reads the path from ``PLATFORM_OPS_DUCKDB_PATH`` and has no default of its own,
-which keeps a second source of truth from creeping in.
+connection and the vars always come from the toolkit's settings: the dbt
+profile reads the ClickHouse connection from ``CLICKHOUSE_*`` variables, which
+this module sets from ``common.servers`` for the length of the invocation, so
+dbt and the toolkit can never point at different servers.
 """
 
 from __future__ import annotations
@@ -20,8 +21,6 @@ from typing import Any
 
 from platform_ops.common.config import Settings
 
-DUCKDB_PATH_ENV_VAR = "PLATFORM_OPS_DUCKDB_PATH"
-
 
 class DbtError(RuntimeError):
     """dbt finished unsuccessfully."""
@@ -29,12 +28,12 @@ class DbtError(RuntimeError):
 
 @dataclass(frozen=True)
 class DbtInvocation:
-    """Where dbt runs, where it writes, and what it is told."""
+    """Where dbt runs, where it writes, what it connects to, and what it is told."""
 
     project_dir: Path
     target_path: Path
     log_path: Path
-    duckdb_path: Path
+    environment: dict[str, str] = field(default_factory=dict)
     vars: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -64,54 +63,46 @@ def invocation_from_settings(
 
     ``simulated_now`` is passed to dbt only when given, because only source
     freshness uses it, and dbt re-parses the whole project whenever its vars
-    change. Leaving it out of builds keeps their vars constant, so the weekly
-    builds of a simulation can reuse dbt's saved parse.
+    change. Leaving it out of builds keeps their vars constant, so the builds of
+    a simulation can reuse dbt's saved parse. ``namespace`` prefixes every
+    database dbt reads and writes, so a test never touches the demo's data.
     """
+    from platform_ops.common.servers import clickhouse_params
+
     target = settings.resolve(settings.paths.dbt_target)
-    variables: dict[str, Any] = {"scale_factor": settings.scale_factor}
+    variables: dict[str, Any] = {
+        "scale_factor": settings.scale_factor,
+        "namespace": settings.company.namespace,
+    }
     if simulated_now is not None:
         variables["simulated_now"] = simulated_now.isoformat(sep=" ")
+    params = clickhouse_params(settings)
     return DbtInvocation(
         project_dir=settings.resolve(settings.paths.dbt_project),
         target_path=target,
         log_path=target.parent / "logs",
-        duckdb_path=settings.resolve(settings.paths.duckdb),
+        environment={
+            "CLICKHOUSE_HOST": params.host,
+            "CLICKHOUSE_PORT": str(params.port),
+            "CLICKHOUSE_USER": params.user,
+            "CLICKHOUSE_PASSWORD": params.password,
+        },
         vars=variables,
     )
 
 
 @contextmanager
-def _warehouse_env(path: Path) -> Iterator[None]:
-    previous = os.environ.get(DUCKDB_PATH_ENV_VAR)
-    os.environ[DUCKDB_PATH_ENV_VAR] = str(path)
+def _environment(values: dict[str, str]) -> Iterator[None]:
+    previous = {name: os.environ.get(name) for name in values}
+    os.environ.update(values)
     try:
         yield
     finally:
-        if previous is None:
-            os.environ.pop(DUCKDB_PATH_ENV_VAR, None)
-        else:
-            os.environ[DUCKDB_PATH_ENV_VAR] = previous
-
-
-def _release_duckdb() -> None:
-    """Close the DuckDB database dbt-duckdb keeps open after an invocation.
-
-    dbt-duckdb caches one database handle per process in a class attribute
-    (``DuckDBConnectionManager._ENV``, checked against dbt-duckdb 1.11.0) and
-    keeps it open after ``dbtRunner.invoke`` returns. While it is open, a
-    read-only connection to the same file is refused and no other process can
-    open the file. Phases 2 and 3 run dbt and query the warehouse many times in
-    one process, so every invocation releases the handle when it finishes. The
-    next invocation simply opens a fresh one.
-    """
-    try:
-        from dbt.adapters.duckdb.connections import DuckDBConnectionManager
-    except ImportError:  # pragma: no cover - dbt-duckdb is a hard dependency
-        return
-    environment = getattr(DuckDBConnectionManager, "_ENV", None)
-    if environment is not None:
-        environment.close()
-    DuckDBConnectionManager.close_all_connections()  # type: ignore[no-untyped-call]
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def run_dbt(
@@ -120,17 +111,13 @@ def run_dbt(
     """Run one dbt command. Returns the dbt result object; raises on failure if ``check``.
 
     ``manifest`` is a parsed manifest (``run_dbt(..., ["parse"]).result``) to reuse
-    instead of parsing again. It saved about 0.8 s of 1.9 s per targeted run on
-    the development laptop. Only pass one parsed with the same vars.
+    instead of parsing again. Only pass one parsed with the same vars.
     """
     from dbt.cli.main import dbtRunner
 
-    invocation.duckdb_path.parent.mkdir(parents=True, exist_ok=True)
-    with _warehouse_env(invocation.duckdb_path):
-        try:
-            outcome = dbtRunner(manifest=manifest).invoke(invocation.args(command))
-        finally:
-            _release_duckdb()
+    invocation.target_path.mkdir(parents=True, exist_ok=True)
+    with _environment(invocation.environment):
+        outcome = dbtRunner(manifest=manifest).invoke(invocation.args(command))
     if check and not outcome.success:
         detail = f": {outcome.exception}" if outcome.exception else ""
         raise DbtError(f"dbt {' '.join(command)} failed{detail}")

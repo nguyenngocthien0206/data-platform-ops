@@ -10,7 +10,7 @@
   There is no fallback to the wall clock on purpose. A missing var fails loudly
   rather than producing alerts nobody should trust. See ADR 0003.
 #}
-{% macro duckdb__collect_freshness(source, loaded_at_field, filter) %}
+{% macro clickhouse__collect_freshness(source, loaded_at_field, filter) %}
   {%- set simulated_now = var('simulated_now', none) -%}
   {%- if simulated_now is none -%}
     {{ exceptions.raise_compiler_error(
@@ -21,7 +21,7 @@
   {% call statement('collect_freshness', fetch_result=True, auto_begin=False) -%}
     select
       max({{ loaded_at_field }}) as max_loaded_at,
-      cast('{{ simulated_now }}' as timestamp) as snapshotted_at
+      toDateTime64('{{ simulated_now }}', 6, 'UTC') as snapshotted_at
     from {{ source }}
     {% if filter %}
     where {{ filter }}

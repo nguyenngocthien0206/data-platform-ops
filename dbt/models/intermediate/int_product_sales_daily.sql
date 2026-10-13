@@ -1,3 +1,4 @@
+{{ config(order_by='(product_id, sale_date)') }}
 select
     product_id,
     category,

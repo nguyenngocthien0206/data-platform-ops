@@ -1,5 +1,6 @@
 -- Recognized revenue per order: the number the business reports externally.
 -- A returned order recognizes nothing and its value moves to returned_revenue.
+{{ config(order_by='order_id') }}
 select
     order_id,
     ordered_at as recognized_at,

@@ -9,4 +9,4 @@ select
     resolved_at,
     satisfaction_score,
     _loaded_at
-from {{ source('raw', 'support_tickets') }}
+from {{ source('raw', 'support_tickets') }} final

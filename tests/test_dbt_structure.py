@@ -1,8 +1,9 @@
 """Structural invariants of the dbt project, checked on a `dbt parse` manifest.
 
 Parsing needs no data and no warehouse, so these run fast and in CI. They pin
-the properties Phases 2 and 3 rely on: abandoned models really are dead ends,
-every live model reaches a dashboard, and every dataset has exactly one owner.
+the properties Phases 2 and 3 rely on, on the ClickHouse adapter: abandoned
+models really are dead ends, every live model reaches a dashboard, and every
+dataset has exactly one owner.
 """
 
 from __future__ import annotations
@@ -149,10 +150,10 @@ def test_a_starter_registry_covers_the_project_once_with_far_fewer_rules(
     assert len(rules) < len(owned) / 2
 
 
-def test_query_comment_is_appended_json_with_the_unique_id() -> None:
+def test_query_comment_leads_with_json_carrying_the_unique_id() -> None:
     project = yaml.safe_load((REPO_ROOT / "dbt" / "dbt_project.yml").read_text(encoding="utf-8"))
     comment = project["query-comment"]
-    assert comment["append"] is True
+    assert comment["append"] is False, "first, so a seed's inline CSV rows stay clean"
     assert "unique_id" in comment["comment"] and "tojson" in comment["comment"]
 
 

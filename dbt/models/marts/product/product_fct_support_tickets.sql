@@ -1,3 +1,4 @@
+{{ config(order_by='ticket_id') }}
 select
     ticket_id,
     created_at,

@@ -1,5 +1,6 @@
 -- Signups and first orders per month and referral source: how many people each
 -- source brings in, and how many of them go on to buy.
+{{ config(order_by='(month, referral_source)') }}
 with signups as (
     select
         cast(date_trunc('month', signed_up_at) as date) as month,
@@ -12,7 +13,7 @@ with signups as (
 first_orders as (
     select
         cast(date_trunc('month', o.first_order_at) as date) as month,
-        c.referral_source,
+        c.referral_source as referral_source,
         count(*) as first_orders
     from {{ ref('int_customer_orders') }} o
     join {{ ref('int_customers_deduplicated') }} c on c.customer_id = o.canonical_customer_id

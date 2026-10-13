@@ -52,7 +52,7 @@ ROLLUPS: tuple[RollupFamily, ...] = (
             ("orders", "count(*)"),
             ("customers", "count(distinct customer_id)"),
             ("net_revenue", "sum(net_amount)"),
-            ("avg_order_value", "round(avg(net_amount), 2)"),
+            ("avg_order_value", "{{ avg_half_up('net_amount') }}"),
         ),
         dimensions=("channel", "country", "status", "discount_code"),
     ),
@@ -150,7 +150,7 @@ ROLLUPS: tuple[RollupFamily, ...] = (
         measures=(
             ("tickets", "count(*)"),
             ("breached_tickets", "count(*) filter (where breached_sla)"),
-            ("avg_resolution_hours", "round(avg(resolution_hours), 2)"),
+            ("avg_resolution_hours", "{{ avg_half_up('resolution_hours') }}"),
         ),
         dimensions=("category", "priority", "ticket_status"),
     ),
@@ -193,8 +193,11 @@ ROLLUPS: tuple[RollupFamily, ...] = (
 
 def _render_model(family: RollupFamily, grain: str, dimension: str) -> str:
     measures = ",\n".join(f"    {expr} as {alias}" for alias, expr in family.measures)
+    # A rollup's key is its period and dimension, the pair its
+    # unique_combination_of_columns test checks: the MergeTree sort key.
     return (
         f"{HEADER}"
+        f"{{{{ config(order_by='(period_start, {dimension})') }}}}\n"
         f"select\n"
         f"    cast(date_trunc('{GRAIN_TRUNC[grain]}', {family.time_column}) as date)"
         f" as period_start,\n"

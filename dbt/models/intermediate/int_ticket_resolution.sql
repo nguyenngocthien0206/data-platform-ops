@@ -1,5 +1,6 @@
 -- Service level targets by priority. An open ticket has no verdict yet rather
 -- than counting as a breach, so the numbers do not shift with the clock.
+{{ config(order_by='ticket_id') }}
 with targets as (
     select
         *,

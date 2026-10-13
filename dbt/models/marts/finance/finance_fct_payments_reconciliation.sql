@@ -1,6 +1,7 @@
 -- Order-to-cash reconciliation. "missing" means an order that should have been
 -- paid has no payment record yet: sometimes a late-arriving payment, sometimes
 -- a real gap that someone in finance has to chase.
+{{ config(order_by='order_id') }}
 select
     order_id,
     ordered_at,

@@ -11,4 +11,4 @@ select
     duration_seconds,
     converted,
     _loaded_at
-from {{ source('raw', 'web_sessions') }}
+from {{ source('raw', 'web_sessions') }} final

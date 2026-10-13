@@ -7,4 +7,4 @@ select
     unit_price,
     quantity * unit_price as line_amount,
     _loaded_at
-from {{ source('raw', 'order_items') }}
+from {{ source('raw', 'order_items') }} final

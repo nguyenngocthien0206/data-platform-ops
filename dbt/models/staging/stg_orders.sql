@@ -9,4 +9,4 @@ select
     discount_code is not null as has_discount,
     currency,
     _loaded_at
-from {{ source('raw', 'orders') }}
+from {{ source('raw', 'orders') }} final
