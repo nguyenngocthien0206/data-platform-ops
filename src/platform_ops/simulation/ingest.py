@@ -19,6 +19,11 @@ it would keep both versions forever.
 
 Each load is recorded in the ops store (``ingestion_loads``), with its range
 and the rows it moved; the latest ``loaded_until`` per table is the watermark.
+
+The loads run as the company's ``loader`` user (``simulation.access``), which
+may only insert into raw and read Postgres, so ClickHouse logs the ingestion
+under its own name. Creating the raw tables is the platform's setup, done by
+the admin.
 """
 
 from __future__ import annotations
@@ -126,13 +131,24 @@ class Ingestion:
         return {str(name): until for name, until in rows}
 
     def load(self, until: datetime) -> dict[str, int]:
-        """Pull every table up to ``until`` from its watermark, minus the overlap."""
+        """Pull every table up to ``until`` from its watermark, minus the overlap, as ``loader``."""
         marks = self.watermarks()
+        loader = clickhouse_client(self.settings, "loader")
+        try:
+            moved, records = self._pull(loader, marks, until)
+        finally:
+            loader.close()
+        self._record(records)
+        return moved
+
+    def _pull(
+        self, loader: Any, marks: dict[str, datetime], until: datetime
+    ) -> tuple[dict[str, int], list[tuple[Any, ...]]]:
         pg = postgres_params(self.settings)
         schema = self.settings.company.name(self.settings.company.legacy_schema)
         source_host = self.settings.company.postgres_from_clickhouse
         moved: dict[str, int] = {}
-        records = []
+        records: list[tuple[Any, ...]] = []
         for table in raw_data.TABLES:
             mark = marks.get(table)
             since = None if mark is None else mark - self.overlap
@@ -141,7 +157,7 @@ class Ingestion:
             where = f"{UPDATED_AT} <= {_ts(until)}"
             if since is not None:
                 where = f"{UPDATED_AT} > {_ts(since)} AND {where}"
-            summary = self.client.command(
+            summary = loader.command(
                 f"INSERT INTO `{self.database}`.`{table}` ({selected}, {LOADED_AT}) "
                 f"SELECT {selected}, {_ts(until)} "
                 f"FROM postgresql('{source_host}', '{pg.dbname}', '{table}', "
@@ -151,6 +167,9 @@ class Ingestion:
             rows = int(getattr(summary, "written_rows", 0) or 0)
             moved[table] = rows
             records.append((table, since, until, rows, until))
+        return moved, records
+
+    def _record(self, records: list[tuple[Any, ...]]) -> None:
         with (
             open_store(self.settings) as store,
             store.cursor().copy(
@@ -162,4 +181,3 @@ class Ingestion:
         ):
             for record in records:
                 copy.write_row(record)
-        return moved
