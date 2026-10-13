@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings, load_settings
+from platform_ops.common.config import CONFIG_PATH_ENV_VAR, SCALE_ENV_VAR, Settings, load_settings
 
 WriteSettings = Callable[[dict[str, object]], Path]
 
@@ -83,3 +83,12 @@ def test_out_of_range_run_hour_is_rejected(
     simulation["daily_run_hour"] = 25
     with pytest.raises(ValidationError):
         load_settings(write_settings(settings_dict))
+
+
+def test_the_scale_can_be_overridden_for_one_run(
+    settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The release workflow runs the demo smaller; the file stays the reference."""
+    assert load_settings(settings_file).scale_factor == 0.1
+    monkeypatch.setenv(SCALE_ENV_VAR, "0.05")
+    assert load_settings(settings_file).scale_factor == 0.05

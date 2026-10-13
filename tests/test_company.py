@@ -27,6 +27,8 @@ from platform_ops.common.servers import clickhouse_client, connect_postgres
 from platform_ops.common.store import open_store, ops_table
 from platform_ops.metadata.lineage import build_graph
 from platform_ops.metadata.manifest import Node, load_manifest
+from platform_ops.reconcile.parallel import ParallelRun
+from platform_ops.reconcile.report import write_report
 from platform_ops.simulation import raw_data
 from platform_ops.simulation.company import fingerprints, remove_company, run_company
 from platform_ops.simulation.legacy_reports import report_names
@@ -179,8 +181,9 @@ def test_every_load_is_recorded_with_its_range(company_warehouse: Settings) -> N
     )
     assert {name for name, *_ in rows} == set(raw_data.TABLES)
     for _, loads, with_range, until in rows:
-        # The backfill has no lower bound; every daily load starts at a watermark.
-        assert (loads, with_range, until) == (days + 1, days, _last_run(company_warehouse))
+        # The first load and the fixed job's backfill read everything; every
+        # other daily load starts at a watermark.
+        assert (loads, with_range, until) == (days + 1, days - 1, _last_run(company_warehouse))
 
 
 # -- freshness on simulated time --------------------------------------------------------------
@@ -296,14 +299,22 @@ def test_two_runs_leave_identical_data(
     company_warehouse: Settings,
     tmp_path: Path,
     isolated_config: Callable[..., Path],
+    short_parallel_run: dict[str, dict[str, Any]],
 ) -> None:
-    """Every table and view in ClickHouse, by row count and content hash, and every
-    legacy table in Postgres, after a second run in its own namespace."""
-    second = load_settings(isolated_config(tmp_path, 0.01, weeks=2, namespace="t_twice_"))
+    """Every table and view in ClickHouse, by row count and content hash, every
+    legacy table in Postgres, and the sign-off report, after a second run in its
+    own namespace, parallel run and all."""
+    second = load_settings(
+        isolated_config(tmp_path, 0.01, weeks=2, namespace="t_twice_", overrides=short_parallel_run)
+    )
     try:
-        run_company(second)
+        reconciliation = ParallelRun(second)
+        run_company(second, nightly=reconciliation)
+        reconciliation.finish()
         assert fingerprints(second) == fingerprints(company_warehouse)
         assert _legacy_fingerprints(second) == _legacy_fingerprints(company_warehouse)
+        mine = company_warehouse.resolve(company_warehouse.paths.reports) / "reconciliation.md"
+        assert write_report(second).read_bytes() == mine.read_bytes()
     finally:
         remove_company(second)
 

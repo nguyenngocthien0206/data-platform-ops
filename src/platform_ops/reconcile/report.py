@@ -1,44 +1,40 @@
-"""``reports/reconciliation.md``: the migration sign-off.
+"""``reports/reconciliation.md``: the cutover sign-off of the parallel run.
 
-The thresholds come first, as they were fixed before the run, so the document
-can be signed as it stands. Every number comes from the run: nothing here is
-timed or random, so two runs write byte-identical files.
+Read back from the ops store, so ``make reconcile`` can write it again at any
+time without replaying the company. The thresholds come first, as they were
+fixed before the run, so the document can be signed as it stands. Nothing in
+it is timed or random: two runs write byte-identical files.
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
+from typing import Any
+
+from psycopg import sql
 
 from platform_ops.common.config import DISCREPANCY_CLASSES, Settings
 from platform_ops.common.markdown import table
+from platform_ops.common.store import open_store, ops_table
 from platform_ops.reconcile.canonical import NULL
-from platform_ops.reconcile.run import PassResult, ReconcileResult
-from platform_ops.reconcile.schema import TABLES
-from platform_ops.simulation.migration_faults import CATALOGUE
+from platform_ops.simulation.migration import CATALOGUE
 
-ENGINE_LABEL = {"postgres": "Postgres", "duckdb": "DuckDB"}
-PASS_LABEL = {
-    "as_delivered": "the job as delivered",
-    "fixed": "the job after fixing D1 to D4",
+DEFECTS = {
+    "D1 local time read as UTC": "D1",
+    "D2 decimal through a float": "D2",
+    "D3 trailing spaces trimmed": "D3",
+    "D4 last key of every page lost": "D4",
 }
-LABELS = {
-    "D1": "payments.paid_local converted with a fixed UTC-5 offset (daylight saving ignored)",
-    "D2": "orders.amount passed through DOUBLE",
-    "D3": "customers.company_name right-trimmed",
-    "D4": "first order of every 25,000-key batch dropped (`>` instead of `>=`)",
-}
-for _fault in CATALOGUE:
-    _what = f"{_fault.table}.{_fault.column}" if _fault.column else _fault.table
-    LABELS[_fault.fault_id] = f"planted: {_fault.rows} {_fault.klass} in {_what}"
 SAMPLES_PER_CLASS = 3
 
 
-def pct(value: float) -> str:
-    """Three decimals, and never 100% unless it is exactly 100%.
+class NoParallelRun(RuntimeError):
+    """The ops store holds no parallel run; ``make demo`` writes one."""
 
-    Six differing rows out of 300,000 is 99.998%; two decimals would print
-    100.00% next to a table that fails sign-off.
-    """
+
+def pct(value: float) -> str:
+    """Three decimals, and never 100% unless it is exactly 100%."""
     text = f"{value:.3%}"
     return "99.999%" if value < 1 and text == "100.000%" else text
 
@@ -50,270 +46,362 @@ def shown(value: str) -> str:
     return '"' + value.replace("\\|", "|").replace("|", "\\|") + '"'
 
 
-def _verdict_rows(result: ReconcileResult) -> list[tuple[str, ...]]:
-    rows = []
-    for p in result.passes:
-        cells = ["PASS" if p.verdicts[t.name].passed else "FAIL" for t in TABLES]
-        rows.append(
-            (
-                ENGINE_LABEL.get(p.engine, p.engine),
-                PASS_LABEL[p.name],
-                *cells,
-                "**PASS**" if p.passed else "**FAIL**",
-            )
+def _rows(settings: Settings, name: str, order: str) -> list[dict[str, Any]]:
+    with open_store(settings) as store:
+        exists = store.execute(
+            "SELECT to_regclass(%s) IS NOT NULL",
+            [f'"{settings.company.name(settings.company.ops_schema)}".{name}'],
+        ).fetchone()
+        if not exists or not exists[0]:
+            raise NoParallelRun(f"ops.{name} does not exist; run `make demo` first")
+        cursor = store.execute(
+            sql.SQL("SELECT * FROM {} ORDER BY " + order).format(ops_table(settings, name))
         )
-    return rows
+        columns = [c.name for c in cursor.description or []]
+        return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
-def _match_section(p: PassResult) -> list[str]:
-    rows = []
-    for spec in TABLES:
-        d, v = p.diffs[spec.name], p.verdicts[spec.name]
-        rows.append(
-            (
-                spec.name,
-                f"{d.source_rows:,}",
-                f"{d.target_rows:,}",
-                f"{len(d.missing):,}",
-                f"{len(d.extra):,}",
-                f"{d.rows_with_cell_diffs:,}",
-                pct(v.row_match_rate),
-            )
-        )
-    columns = [
-        (f"{spec.name}.{name}", pct(rate))
-        for spec in TABLES
-        for name, rate in p.verdicts[spec.name].column_match_rates.items()
-        if rate < 1
-    ]
-    lines = [
-        table(
-            [
-                "Table",
-                "Legacy rows",
-                "Target rows",
-                "Missing",
-                "Extra",
-                "Rows with differences",
-                "Row match",
-            ],
-            rows,
-            right=[1, 2, 3, 4, 5, 6],
-        ),
-        "",
-    ]
-    if columns:
-        lines += ["Columns below 100%:", "", table(["Column", "Match"], columns, right=[1]), ""]
-    else:
-        lines += ["Every column matches 100%.", ""]
-    return lines
+def _day(value: Any) -> str:
+    return f"{value:%Y-%m-%d}"
 
 
-def _class_section(p: PassResult) -> list[str]:
-    rows = []
-    for klass in DISCREPANCY_CLASSES:
-        counts = [p.verdicts[t.name].by_class[klass] for t in TABLES]
-        if any(counts):
-            rows.append((klass, *[f"{n:,}" for n in counts], f"{sum(counts):,}"))
-    if not rows:
-        return ["No discrepancies.", ""]
-    headers = ["Class", *[t.name for t in TABLES], "Total"]
-    return [table(headers, rows, right=list(range(1, len(headers)))), ""]
+def _policy(settings: Settings) -> str:
+    """The equality policy as the data owner set it, in words, from the settings."""
+    base = settings.reconcile.canonical.engines.get("postgres")
+    spaces = "ignored" if base and base.rtrim else "count as differences"
+    case = "ignored" if base and base.casefold else "counts as a difference"
+    text = (
+        "Equality policy (the data owner's, applied to both sides): trailing spaces "
+        f"{spaces}; letter case {case}; decimals are compared at their own scale"
+    )
+    overrides = sorted(settings.reconcile.canonical.columns)
+    if overrides:
+        text += "; overridden for " + ", ".join(f"`{name}`" for name in overrides)
+    return text + "."
 
 
-def _sample_section(p: PassResult) -> list[str]:
-    rows = []
-    for klass in DISCREPANCY_CLASSES:
-        picked = [d for d in p.discrepancies if d.klass == klass][:SAMPLES_PER_CLASS]
-        for d in picked:
-            if d.column:
-                rows.append(
-                    (
-                        klass,
-                        d.table,
-                        str(d.key),
-                        d.column,
-                        shown(d.source_value),
-                        shown(d.target_value),
-                    )
-                )
-            else:
-                where = "legacy only" if klass == "missing_in_target" else "target only"
-                rows.append((klass, d.table, str(d.key), "(whole row)", where, ""))
-    if not rows:
-        return []
-    return [
-        f"Up to {SAMPLES_PER_CLASS} per class, lowest keys first, as canonical values.",
-        "",
-        table(["Class", "Table", "Key", "Column", "Legacy", "Target"], rows),
-        "",
-    ]
-
-
-def _grade_section(p: PassResult) -> list[str]:
-    g = p.grade
-    return [
-        table(
-            ["Measure", "Value"],
-            [
-                ("Planted discrepancies (cells or rows)", f"{g.expected:,}"),
-                ("Reported by the diff", f"{g.detected:,}"),
-                ("Detection recall", pct(g.recall)),
-                ("Precision", pct(g.precision)),
-                ("Classification accuracy", pct(g.classification_accuracy)),
-                ("Planted, but equal under the source's policy", f"{g.equivalent_under_policy:,}"),
-            ],
-            right=[1],
-        ),
-        "",
-        table(
-            ["Cause", "What", "Planted", "Found"],
-            [
-                (label, LABELS.get(label, label), f"{planted:,}", f"{found:,}")
-                for label, (planted, found) in g.by_label.items()
-            ],
-            right=[2, 3],
-        ),
-        "",
-    ]
-
-
-def _benchmark_section(p: PassResult) -> list[str]:
-    rows = []
-    for spec in TABLES:
-        d = p.diffs[spec.name]
-        levels = ", ".join(f"{w:,}: {diff}/{compared}" for w, compared, diff in d.levels)
-        saving = 1 - d.transferred / d.naive_transferred if d.naive_transferred else 0.0
-        rows.append(
-            (
-                spec.name,
-                levels,
-                f"{d.summary_rows:,}",
-                f"{d.fetched_rows:,}",
-                f"{d.transferred:,}",
-                f"{d.naive_transferred:,}",
-                pct(saving),
-            )
-        )
-    return [
-        "Rows moved from the engines to the comparer, both sides together. Levels read "
-        "`segment width: differing/compared`.",
-        "",
-        table(
-            [
-                "Table",
-                "Levels",
-                "Summary rows",
-                "Fetched rows",
-                "Segmented total",
-                "Naive",
-                "Saving",
-            ],
-            rows,
-            right=[2, 3, 4, 5, 6],
-        ),
-        "",
-    ]
-
-
-def _policy_section(settings: Settings, result: ReconcileResult) -> list[str]:
+def render(settings: Settings) -> str:
+    nights = _rows(settings, "reconcile_nights", "night, level DESC, name")
+    if not nights:
+        raise NoParallelRun("the parallel run recorded no night; run `make demo` first")
+    grades = {g["night"]: g for g in _rows(settings, "reconcile_grades", "night")}
+    labels = _rows(settings, "reconcile_labels", "night, label")
+    examples = _rows(
+        settings, "reconcile_examples", "night, level DESC, name, class, key, column_name"
+    )
+    (cutover,) = _rows(settings, "reconcile_cutover", "recommended")
     r = settings.reconcile
-    rows = []
-    for engine in result.engines:
-        rules = result.rules[engine]
-        for spec in TABLES:
-            for column in spec.columns:
-                rule = rules[spec.name][column.name]
-                if column.kind == "text":
-                    detail = f"rtrim {'on' if rule.rtrim else 'off'}, case folding " + (
-                        "on" if rule.casefold else "off"
-                    )
-                elif column.kind == "decimal":
-                    detail = f"scale {rule.scale}"
-                elif column.kind == "local_ts":
-                    detail = f"local time in {r.legacy_timezone}, rendered as UTC"
-                elif column.kind == "utc_ts":
-                    detail = "rendered as UTC"
-                else:
-                    continue
-                rows.append(
-                    (ENGINE_LABEL.get(engine, engine), f"{spec.name}.{column.name}", detail)
-                )
-    return [
-        "Both sides of a comparison are rendered with the legacy engine's rules before hashing "
-        "(ADR 0009). Decimals round half away from zero; timestamps are UTC with microseconds; "
-        "NULL is a sentinel distinct from an empty string.",
-        "",
-        table(["Engine", "Column", "Rule"], rows),
-        "",
-        f"Segments split {r.fanout} ways down to {r.leaf_width} keys. A decimal difference of up "
-        f"to {r.rounding_tolerance} is classed as rounding.",
-        "",
-    ]
+    by_night: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in nights:
+        by_night[row["night"]].append(row)
+    order = sorted(by_night)
+    first, last = by_night[order[0]][0], by_night[order[-1]][0]
+    tables = sorted({row["name"] for row in nights if row["level"] == "table"})
+    reports = sorted({row["name"] for row in nights if row["level"] == "report"})
 
-
-def render(settings: Settings, result: ReconcileResult) -> str:
-    t = settings.reconcile.thresholds
-    engines = ", ".join(ENGINE_LABEL.get(e, e) for e in result.engines)
-    sizes = ", ".join(f"{n:,} {name}" for name, n in result.rows.items())
-    signed = result.signed_off()
-    lines = [
-        "# Migration reconciliation sign-off",
+    out = ["# Migration sign-off: legacy Postgres to ClickHouse", ""]
+    out += [
+        f"Parallel run of {len(order)} nights, {_day(first['run_at'])} to {_day(last['run_at'])}: "
+        f"every night, after the ingestion and the dbt build, the {len(tables)} operational "
+        f"tables in Postgres were compared with ClickHouse's raw layer, and the "
+        f"{len(reports)} legacy reports with the dbt marts that replace them.",
         "",
-        f"Legacy {engines} ({sizes}) migrated into Iceberg (PyIceberg, SQLite catalog, local "
-        "warehouse) and compared with a segmented checksum diff. Generated by `make reconcile`; "
-        "every number below comes from that run.",
+        "## Acceptance criteria",
         "",
-        "## Acceptance thresholds",
-        "",
-        "Fixed in `config/settings.yaml` before the run. A table passes only if it meets all of "
-        "them.",
+        "Fixed before the run. A night is clean when every table and every report meets "
+        "all of them, and no report differs for a reason its upstream tables do not show. "
+        f"The cutover is recommended after {r.clean_nights_for_cutover} consecutive clean nights.",
         "",
         table(
             ["Criterion", "Threshold"],
             [
-                ("Row match rate", f"at least {pct(t.min_row_match_rate)}"),
-                ("Match rate of every column", f"at least {pct(t.min_column_match_rate)}"),
-            ]
-            + [
-                (f"`{klass}` discrepancies", f"at most {limit:,}")
-                for klass, limit in t.max_discrepancies.items()
+                ("Row match rate", f">= {r.thresholds.min_row_match_rate:.1%}"),
+                ("Column match rate", f">= {r.thresholds.min_column_match_rate:.1%}"),
+                *(
+                    (f"{k} differences", f"<= {r.thresholds.max_discrepancies[k]:,}")
+                    for k in DISCREPANCY_CLASSES
+                ),
+                ("Rounding tolerance", f"{r.rounding_tolerance}"),
             ],
         ),
         "",
-        "## Verdict",
-        "",
-        (
-            "**Signed off.** The migration as delivered meets every threshold."
-            if signed
-            else "**Not signed off.** The migration as delivered fails the thresholds below."
-        ),
-        "",
-        table(["Engine", "Run", *[s.name for s in TABLES], "Overall"], _verdict_rows(result)),
+        _policy(settings),
         "",
     ]
-    for p in result.passes:
-        heading = f"{ENGINE_LABEL.get(p.engine, p.engine)}: {PASS_LABEL[p.name]}"
-        failures = [
-            f"- {name}: {reason}" for name, v in p.verdicts.items() for reason in v.failures
+
+    out += ["## Verdict", ""]
+    if cutover["recommended"]:
+        out += [
+            f"**Cutover recommended on {_day(cutover['run_at'])}** (night {cutover['night']}), "
+            f"the night that completed {cutover['required']} consecutive clean nights.",
         ]
-        lines += [f"## {heading}", ""]
-        if failures:
-            lines += ["Why it fails:", "", *failures, ""]
-        lines += ["### Match rates", "", *_match_section(p)]
-        lines += ["### Discrepancies by class", "", *_class_section(p)]
-        samples = _sample_section(p)
-        if samples:
-            lines += ["### Sample rows", "", *samples]
-        lines += ["### Detection against ground truth", "", *_grade_section(p)]
-        lines += ["### Segmented diff against a naive comparison", "", *_benchmark_section(p)]
-    lines += ["## Canonical policy", "", *_policy_section(settings, result)]
-    return "\n".join(lines)
+    else:
+        out += [
+            f"**Cutover not recommended.** The run ended {cutover['clean_nights']} clean nights "
+            f"into a required streak of {cutover['required']}.",
+        ]
+    out += [""]
+
+    out += ["## Night by night", ""]
+    timeline = []
+    for night in order:
+        rows = by_night[night]
+        head = rows[0]
+        t_pass = sum(1 for x in rows if x["level"] == "table" and x["passed"])
+        r_pass = sum(1 for x in rows if x["level"] == "report" and x["passed"])
+        unexplained = sum(1 for x in rows if x["explained"] is False)
+        events = []
+        if head["backfilled"]:
+            events.append("fixed job, backfill")
+        if head["planted"]:
+            events.append(f"{head['planted']} planted")
+        if head["repaired"]:
+            events.append(f"{head['repaired']} repaired")
+        g = grades.get(night)
+        night_recall = (
+            "" if not g or not g["expected"] else pct(g["true_positives"] / g["expected"])
+        )
+        clean = t_pass == len(tables) and r_pass == len(reports) and not unexplained
+        timeline.append(
+            (
+                _day(head["run_at"]),
+                head["job"],
+                ", ".join(events),
+                f"{t_pass}/{len(tables)}",
+                f"{r_pass}/{len(reports)}",
+                f"{unexplained}",
+                night_recall,
+                "clean" if clean else "**not clean**",
+            )
+        )
+    out += [
+        table(
+            [
+                "Night",
+                "Job",
+                "Events",
+                "Tables passing",
+                "Reports passing",
+                "Unexplained reports",
+                "Recall",
+                "Night",
+            ],
+            timeline,
+            right=(3, 4, 5, 6),
+        ),
+        "",
+    ]
+
+    out += ["## What the parallel run found", ""]
+    first_found: dict[str, int] = {}
+    planted_found: dict[str, tuple[int, int]] = {}
+    for row in labels:
+        label = row["label"]
+        if label not in planted_found:
+            planted_found[label] = (row["planted"], row["found"])
+        if row["found"] and label not in first_found:
+            first_found[label] = row["night"]
+    found_rows = []
+    for label, (planted, found) in sorted(planted_found.items(), key=lambda kv: kv[0]):
+        cause = "job defect" if label.startswith("D") else "one-off fault"
+        found_night = first_found.get(label)
+        found_rows.append(
+            (
+                label,
+                cause,
+                f"{planted:,}",
+                f"{found:,}",
+                "" if found_night is None else _day(by_night[found_night][0]["run_at"]),
+            )
+        )
+    out += [
+        "The first night each one appeared. A job defect stays until the fixed job ships; a "
+        "one-off fault is repaired the day after it is planted.",
+        "",
+        table(
+            ["Planted", "Cause", "Discrepancies", "Found", "First found"], found_rows, right=(2, 3)
+        ),
+        "",
+    ]
+    tolerated = []
+    for night in order:
+        rows = by_night[night]
+        head = rows[0]
+        if head["planted"] and all(x["passed"] for x in rows):
+            tolerated.append(f"{head['planted']} ({_day(head['run_at'])})")
+    if tolerated:
+        out += [
+            "Found but within the thresholds, so its night counted as clean: "
+            + ", ".join(tolerated)
+            + ". The criteria are the data owner's statement of what is acceptable, and a "
+            "few cents of rounding is within them.",
+            "",
+        ]
+    totals: dict[str, int] = defaultdict(int)
+    for g in grades.values():
+        for k in (
+            "expected",
+            "detected",
+            "true_positives",
+            "correctly_classified",
+            "equivalent_under_policy",
+        ):
+            totals[k] += g[k]
+    recall = totals["true_positives"] / totals["expected"] if totals["expected"] else 1.0
+    precision = totals["true_positives"] / totals["detected"] if totals["detected"] else 1.0
+    accuracy = (
+        totals["correctly_classified"] / totals["true_positives"]
+        if totals["true_positives"]
+        else 1.0
+    )
+    out += [
+        "Detection over the whole run, operational tables, graded against what was planted:",
+        "",
+        table(
+            ["Planted", "Detected", "Recall", "Precision", "Classification accuracy"],
+            [
+                (
+                    f"{totals['expected']:,}",
+                    f"{totals['detected']:,}",
+                    pct(recall),
+                    pct(precision),
+                    pct(accuracy),
+                )
+            ],
+            right=(0, 1, 2, 3, 4),
+        ),
+        "",
+    ]
+
+    unexplained_rows = [x for x in nights if x["explained"] is False]
+    out += ["## Reports the tables do not explain", ""]
+    if unexplained_rows:
+        out += [
+            "A report that differs while every table its mart reads matches is a difference "
+            "between the legacy SQL and the dbt model. Each needs a decision before cutover.",
+            "",
+            table(
+                ["Night", "Report", "Rows with differences"],
+                [
+                    (
+                        _day(x["run_at"]),
+                        x["name"],
+                        f"{x['rows_with_diffs'] + x['missing'] + x['extra']:,}",
+                    )
+                    for x in unexplained_rows
+                ],
+                right=(2,),
+            ),
+            "",
+        ]
+    else:
+        out += [
+            "None. On every night, every report that differed had an upstream table that "
+            "differed too: the new marts reproduce the legacy reports' logic.",
+            "",
+        ]
+
+    out += ["## Segmented diff against a naive comparison", ""]
+    moved: dict[tuple[str, bool], list[int]] = defaultdict(lambda: [0, 0])
+    for x in nights:
+        clean_pair = not (x["missing"] or x["extra"] or x["rows_with_diffs"])
+        tally = moved[(x["level"], clean_pair)]
+        tally[0] += x["rows_moved"]
+        tally[1] += x["rows_moved_naive"]
+    saving_rows = []
+    for (level, clean_pair), (segmented, naive) in sorted(moved.items()):
+        saving = 1 - segmented / naive if naive else 0.0
+        saving_rows.append(
+            (
+                level,
+                "matching" if clean_pair else "differing",
+                f"{segmented:,}",
+                f"{naive:,}",
+                pct(saving),
+            )
+        )
+    out += [
+        "Rows moved from the engines to the comparison over the whole run, for pairs that "
+        "matched and pairs that differed that night.",
+        "",
+        table(
+            ["Level", "Pairs", "Rows moved, segmented", "Rows moved, naive", "Saving"],
+            saving_rows,
+            right=(2, 3, 4),
+        ),
+        "",
+    ]
+
+    out += ["## The first night in detail", ""]
+    head_rows = [
+        (
+            x["level"],
+            x["name"],
+            f"{x['source_rows']:,}",
+            f"{x['target_rows']:,}",
+            f"{x['missing']:,}",
+            f"{x['extra']:,}",
+            f"{x['rows_with_diffs']:,}",
+            pct(x["row_match_rate"]),
+            "PASS" if x["passed"] else "FAIL",
+        )
+        for x in by_night[order[0]]
+    ]
+    out += [
+        table(
+            [
+                "Level",
+                "Name",
+                "Legacy rows",
+                "ClickHouse rows",
+                "Missing",
+                "Extra",
+                "Rows with differences",
+                "Row match",
+                "Verdict",
+            ],
+            head_rows,
+            right=(2, 3, 4, 5, 6, 7),
+        ),
+        "",
+        "Examples, at most three per class:",
+        "",
+    ]
+    shown_examples = []
+    seen: dict[tuple[str, str], int] = defaultdict(int)
+    for x in examples:
+        if x["night"] != order[0]:
+            continue
+        slot = (x["name"], x["class"])
+        if seen[slot] >= SAMPLES_PER_CLASS:
+            continue
+        seen[slot] += 1
+        shown_examples.append(
+            (
+                x["name"],
+                x["key"],
+                x["column_name"] or "(row)",
+                x["class"],
+                shown(x["source_value"]) if x["column_name"] else "",
+                shown(x["target_value"]) if x["column_name"] else "",
+            )
+        )
+    out += [
+        table(["Name", "Key", "Column", "Class", "Legacy", "ClickHouse"], shown_examples),
+        "",
+        "One-off faults planted in the run: "
+        + "; ".join(f"{f.label} ({f.rows} rows)" for f in CATALOGUE)
+        + ".",
+        "",
+    ]
+    return "\n".join(out)
 
 
-def write_report(settings: Settings, result: ReconcileResult) -> Path:
-    reports = settings.resolve(settings.paths.reports)
-    reports.mkdir(parents=True, exist_ok=True)
-    path = reports / "reconciliation.md"
-    path.write_text(render(settings, result), encoding="utf-8", newline="\n")
+def write_report(settings: Settings) -> Path:
+    path = settings.resolve(settings.paths.reports) / "reconciliation.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render(settings), encoding="utf-8", newline="\n")
     return path
+
+
+__all__ = ["DEFECTS", "NoParallelRun", "render", "write_report"]

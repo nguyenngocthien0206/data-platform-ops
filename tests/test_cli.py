@@ -68,7 +68,6 @@ PAUSED_COMMANDS = {
     "simulation": ["simulation", "run"],
     "cost": ["cost", "report"],
     "incidents": ["incidents", "run"],
-    "reconcile": ["reconcile", "run"],
     "dashboard": ["dashboard"],
 }
 

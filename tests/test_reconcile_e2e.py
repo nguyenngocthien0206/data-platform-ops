@@ -1,133 +1,129 @@
-"""End to end: the migration scenario and its sign-off (SPEC Phase 4 acceptance).
+"""End to end: the migration's parallel run, as ``make demo`` replays it (Phase 12).
 
-Two runs at scale 0.01:
-
-- DuckDB as the legacy engine, so the whole scenario is exercised without
-  Docker (and in CI): every planted discrepancy is found and correctly
-  classified, results land in ``ops``, and two runs write the same report;
-- Postgres through the real CLI, as ``make reconcile`` runs it. The command is
-  paused in version 2.0 until Phase 12 moves the scenario to ClickHouse, so
-  this one skips with that reason.
+Read from the shared ``company_warehouse``, whose second week is a short
+parallel run: two nights of the job as delivered, the fixed job and its
+backfill, one one-off fault and its repair the next day, and a cutover rule of
+two clean nights. Every night was reconciled through the real CLI, at both
+levels, and recorded in the ops store.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import pytest
+from psycopg import sql
 from typer.testing import CliRunner
 
-from platform_ops.cli import app, paused_reason
+from platform_ops.cli import app
 from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings, load_settings
-from platform_ops.reconcile.run import ReconcileResult, run_and_report
+from platform_ops.common.store import open_store, ops_table
+from platform_ops.simulation.company import remove_company
 
 pytestmark = pytest.mark.integration
 
-runner = CliRunner()
+
+def _rows(settings: Settings, table: str, query: str) -> list[tuple[Any, ...]]:
+    with open_store(settings) as store:
+        return list(store.execute(sql.SQL(query).format(ops_table(settings, table))).fetchall())
 
 
-def _settings(root: Path, isolated_config: Callable[..., Path]) -> Settings:
-    return load_settings(isolated_config(root, 0.01))
+def _report(settings: Settings) -> Path:
+    return settings.resolve(settings.paths.reports) / "reconciliation.md"
 
 
-def _query(settings: Settings, sql: str) -> list[tuple[Any, ...]]:
-    connection = duckdb.connect(str(settings.resolve(settings.paths.duckdb)), read_only=True)
-    try:
-        return connection.execute(sql).fetchall()
-    finally:
-        connection.close()
-
-
-def _report(settings: Settings) -> bytes:
-    return (settings.resolve(settings.paths.reports) / "reconciliation.md").read_bytes()
-
-
-@pytest.fixture(scope="module")
-def duckdb_runs(
-    tmp_path_factory: pytest.TempPathFactory, isolated_config: Callable[..., Path]
-) -> tuple[Settings, Settings, ReconcileResult]:
-    first = _settings(tmp_path_factory.mktemp("rec_a"), isolated_config)
-    _, result = run_and_report(first, ["duckdb"])
-    second = _settings(tmp_path_factory.mktemp("rec_b"), isolated_config)
-    run_and_report(second, ["duckdb"])
-    return first, second, result
-
-
-def test_every_planted_discrepancy_is_found_and_classified(
-    duckdb_runs: tuple[Settings, Settings, ReconcileResult],
+def test_every_night_of_the_parallel_run_was_reconciled_at_both_levels(
+    company_warehouse: Settings,
 ) -> None:
-    result = duckdb_runs[2]
-    assert [p.name for p in result.passes] == ["as_delivered", "fixed"]
-    for p in result.passes:
-        assert p.grade.expected > 0
-        assert p.grade.recall == 1.0, f"{p.name}: missed {p.grade.by_label}"
-        assert p.grade.precision == 1.0
-        assert p.grade.classification_accuracy == 1.0
-    delivered = result.passes[0].grade.by_label
-    assert {"D1", "D2", "D3", "D4"} <= set(delivered), "every job defect leaves a trace"
-    assert all(found == planted for planted, found in delivered.values())
-
-
-def test_the_delivered_migration_is_not_signed_off(
-    duckdb_runs: tuple[Settings, Settings, ReconcileResult],
-) -> None:
-    result = duckdb_runs[2]
-    assert not result.signed_off()
-    assert b"**Not signed off.**" in _report(duckdb_runs[0])
-
-
-def test_fixing_the_job_leaves_only_the_planted_faults(
-    duckdb_runs: tuple[Settings, Settings, ReconcileResult],
-) -> None:
-    fixed = duckdb_runs[2].passes[1]
-    assert all(label.startswith("M") for label in fixed.grade.by_label)
-    delivered = duckdb_runs[2].passes[0]
-    for table in ("orders", "payments"):
-        assert fixed.diffs[table].transferred < delivered.diffs[table].transferred
-        assert fixed.diffs[table].transferred < fixed.diffs[table].naive_transferred
-
-
-def test_results_are_stored_in_ops(duckdb_runs: tuple[Settings, Settings, ReconcileResult]) -> None:
-    settings, _, result = duckdb_runs
-    stored = _query(
-        settings, "SELECT pass, count(*) FROM ops.reconcile_discrepancies GROUP BY 1 ORDER BY 1"
+    rows = _rows(
+        company_warehouse,
+        "reconcile_nights",
+        "SELECT night, job, backfilled, planted, repaired, level, count(*) FROM {} "
+        "GROUP BY 1, 2, 3, 4, 5, 6 ORDER BY 1, 6",
     )
-    expected = sorted((p.name, len(p.discrepancies)) for p in result.passes)
-    assert stored == expected
-    recall = _query(
-        settings, "SELECT pass, value FROM ops.reconcile_metrics WHERE metric = 'recall' ORDER BY 1"
+    nights = sorted({r[0] for r in rows})
+    assert nights == list(range(7, 14))
+    per_night = {(r[0], r[5]): r[6] for r in rows}
+    assert all(per_night[(n, "table")] == 9 and per_night[(n, "report")] == 12 for n in nights)
+    events = {r[0]: (r[1], r[2], r[3], r[4]) for r in rows if r[5] == "table"}
+    assert events[7] == events[8] == ("delivered", False, "", "")
+    assert events[9] == ("fixed", True, "", "")
+    assert events[11] == ("fixed", False, "M1", "")
+    assert events[12] == ("fixed", False, "", "M1")
+
+
+def test_the_delivered_job_fails_and_every_planted_discrepancy_is_found(
+    company_warehouse: Settings,
+) -> None:
+    failing = _rows(
+        company_warehouse,
+        "reconcile_nights",
+        "SELECT night, name FROM {} WHERE level = 'table' AND NOT passed ORDER BY 1, 2",
     )
-    assert recall == [("as_delivered", 1.0), ("fixed", 1.0)]
-    tables = _query(settings, "SELECT count(*) FROM ops.reconcile_tables")
-    assert tables == [(6,)]
+    assert {name for night, name in failing if night in (7, 8)} >= {"customers", "payments"}
+    assert {night for night, _ in failing} == {7, 8, 11}
+    grades = _rows(
+        company_warehouse,
+        "reconcile_grades",
+        "SELECT night, expected, detected, true_positives, correctly_classified FROM {} "
+        "ORDER BY night",
+    )
+    for night, expected, detected, hits, correct in grades:
+        assert hits == expected == detected, f"night {night}: recall and precision"
+        assert correct == hits, f"night {night}: classification"
+    by_night = {g[0]: g[1] for g in grades}
+    assert by_night[7] > 0 and by_night[11] == 5 and by_night[10] == by_night[12] == 0
 
 
-def test_two_runs_write_the_same_report(
-    duckdb_runs: tuple[Settings, Settings, ReconcileResult],
+def test_every_report_difference_is_explained_by_an_upstream_table(
+    company_warehouse: Settings,
 ) -> None:
-    assert _report(duckdb_runs[0]) == _report(duckdb_runs[1])
+    rows = _rows(
+        company_warehouse,
+        "reconcile_nights",
+        "SELECT night, name, explained, differing_upstream FROM {} WHERE level = 'report' "
+        "AND (missing + extra + rows_with_diffs) > 0 ORDER BY 1, 2",
+    )
+    assert rows, "the delivered job reaches at least one report"
+    assert all(explained for _, _, explained, _ in rows)
+    assert {night for night, *_ in rows} <= {7, 8}
+    assert any("payments" in upstream for *_, upstream in rows)
 
 
-# -- real legacy engines ---------------------------------------------------------------
+def test_the_cutover_is_recommended_after_the_clean_streak(company_warehouse: Settings) -> None:
+    ((recommended, night, clean, required),) = _rows(
+        company_warehouse,
+        "reconcile_cutover",
+        "SELECT recommended, night, clean_nights, required FROM {}",
+    )
+    assert (recommended, night, clean, required) == (True, 10, 2, 2)
+    text = _report(company_warehouse).read_text(encoding="utf-8")
+    assert "**Cutover recommended on 2026-01-15** (night 10)" in text
+    assert text.index("## Acceptance criteria") < text.index("## Verdict")
 
 
-@pytest.mark.skip(reason=paused_reason("reconcile"))
-def test_postgres_through_the_cli(
-    tmp_path: Path, isolated_config: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+def test_make_reconcile_rewrites_the_same_report_from_the_store(
+    company_warehouse: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings_path = isolated_config(tmp_path, 0.01)
-    monkeypatch.setenv(CONFIG_PATH_ENV_VAR, str(settings_path))
-    result = runner.invoke(app, ["reconcile", "run"])
-    if result.exit_code != 0 and "not reachable" in result.output:
-        pytest.skip("Postgres not reachable; run `make up`")
+    before = _report(company_warehouse).read_bytes()
+    monkeypatch.setenv(
+        CONFIG_PATH_ENV_VAR, str(company_warehouse.root / "config" / "settings.yaml")
+    )
+    result = CliRunner().invoke(app, ["reconcile", "run", "--strict"])
     assert result.exit_code == 0, result.output
-    assert "NOT signed off" in result.output
-    assert "detection recall 100.00%" in result.output
-    strict = runner.invoke(app, ["reconcile", "run", "--strict"])
-    assert strict.exit_code != 0, "--strict fails when the migration is not signed off"
-    settings = load_settings(settings_path)
-    engines = _query(settings, "SELECT DISTINCT engine FROM ops.reconcile_tables")
-    assert engines == [("postgres",)]
+    assert "cutover recommended" in result.output
+    assert _report(company_warehouse).read_bytes() == before
+
+
+def test_reconcile_without_a_parallel_run_says_what_to_run(
+    tmp_path: Path, isolated_config: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings_path = isolated_config(tmp_path, 0.01, namespace="t_norun_")
+    monkeypatch.setenv(CONFIG_PATH_ENV_VAR, str(settings_path))
+    try:
+        result = CliRunner().invoke(app, ["reconcile", "run"])
+        assert result.exit_code == 2
+        assert "make demo" in result.output
+    finally:
+        remove_company(load_settings(settings_path))
