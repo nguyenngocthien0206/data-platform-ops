@@ -404,7 +404,7 @@ Decisions:
 - **A parallel run before cutover:** for a stated number of simulated weeks, legacy and ClickHouse both run, and the reconciliation runs every night. The report shows the match rate per table over the window, and the cutover is recommended only once every table has met its thresholds for N consecutive nights, the way a migration is actually signed off.
 - The planted defects move into the Postgres to ClickHouse load (a time zone mishandled, a decimal cast to float, trailing spaces trimmed, rows dropped at batch boundaries), plus the labelled discrepancy injector.
 
-**Acceptance:** `make reconcile` runs the parallel window and signs off (or not) the cutover against thresholds fixed before the run, with recall and classification accuracy against ground truth, and the segmented diff against a naive comparison, all computed from the actual run. Reports byte-identical across two runs.
+**Acceptance:** `make demo` runs the parallel window as part of the company's history (decided with the owner at planning: the parallel run is the last weeks of the company's own window, not a separate scenario), and `make reconcile` writes the sign-off from its nights: the cutover recommended (or not) against thresholds fixed before the run, with recall and classification accuracy against ground truth, and the segmented diff against a naive comparison, all computed from the actual run. Reports byte-identical across two runs.
 
 ---
 
