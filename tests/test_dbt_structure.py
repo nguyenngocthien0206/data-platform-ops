@@ -16,10 +16,11 @@ import yaml
 
 from platform_ops.common.config import load_settings
 from platform_ops.common.dbt_invoke import invocation_from_settings, run_dbt
+from platform_ops.metadata.bootstrap import starter_rules
 from platform_ops.metadata.check import run_check
 from platform_ops.metadata.lineage import build_graph, downstream
-from platform_ops.metadata.manifest import Node, load_manifest
-from platform_ops.metadata.registry import Registry
+from platform_ops.metadata.manifest import OWNED_TYPES, Node, load_manifest
+from platform_ops.metadata.registry import DatasetRule, Registry
 
 pytestmark = pytest.mark.integration
 
@@ -126,6 +127,26 @@ def test_real_registry_owns_everything_with_no_warnings(
     report = run_check(Registry.from_config_dir(config_dir), nodes)
     assert report.errors == []
     assert report.warnings == []
+
+
+def test_a_starter_registry_covers_the_project_once_with_far_fewer_rules(
+    parsed: tuple[dict[str, Node], nx.DiGraph, Path],
+) -> None:
+    nodes, _, config_dir = parsed
+    rules = starter_rules(nodes, "company")
+    real = Registry.from_config_dir(config_dir)
+    starter = Registry(
+        teams=real.teams,
+        rules=tuple(
+            DatasetRule(match=r.match, owner="priya", team="platform", tier="important")
+            for r in rules
+        ),
+    )
+    owned = [n for n in nodes.values() if n.resource_type in OWNED_TYPES]
+    for node in owned:
+        resolution = starter.resolve(node.unique_id)
+        assert resolution.owned and len(resolution.candidates) == 1, node.unique_id
+    assert len(rules) < len(owned) / 2
 
 
 def test_query_comment_is_appended_json_with_the_unique_id() -> None:
