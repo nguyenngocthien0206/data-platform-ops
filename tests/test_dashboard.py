@@ -45,6 +45,8 @@ def test_every_table_names_the_command_that_produces_it() -> None:
     commands = {table: producer(table) for q in QUERIES.values() for table in q.tables}
     assert commands["cost_months"] == commands["query_log"] == "make cost"
     assert commands["reconcile_nights"] == commands["node_ownership"] == "make demo"
+    assert commands["incident_metrics"] == commands["fault_incidents"] == "make incidents"
+    assert commands["incidents"] == commands["incident_invocations"] == "make demo"
 
 
 def test_no_password_says_what_to_set(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,6 +133,7 @@ def _elements(node: Any, found: Counter[str]) -> Counter[str]:
 EXPECTED = {
     "overview": ("Data platform operations", 1),
     "cost": ("Cost and FinOps", 4),
+    "incidents": ("Incident management", 4),
     "reconciliation": ("Migration reconciliation", 2),
 }
 

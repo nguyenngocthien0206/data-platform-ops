@@ -22,5 +22,6 @@ Each choice that shapes a number, a boundary or how the toolkit is run is record
 | [0016](0016-users-per-team-and-bi-from-exposures.md) | One ClickHouse user per team, and the BI built from the dbt exposures | 11b |
 | [0017](0017-the-parallel-run-and-the-cutover-rule.md) | The migration is signed off by a parallel run, inside the company's own history | 12 |
 | [0018](0018-finops-on-a-self-managed-clickhouse.md) | FinOps on a self-managed ClickHouse: the stated bill shared out by measured reads | 13 |
+| [0019](0019-incidents-on-the-companys-production-runs.md) | Incidents on the company's own production runs, from a store any run can feed | 14a |
 
 To add one, take the next number, name the file `NNNN-short-title.md`, start with `Status` and `Date`, and add a row here.

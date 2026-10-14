@@ -52,8 +52,9 @@ def write_isolated_config(
         raw.setdefault(section, {}).update(values)
     settings_path = config_dir / "settings.yaml"
     settings_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-    for name in ("teams.yaml", "ownership.yaml", "reconcile.yaml"):
-        shutil.copyfile(repo / "config" / name, config_dir / name)
+    for name in ("teams.yaml", "ownership.yaml", "reconcile.yaml", "incidents.yaml"):
+        if (repo / "config" / name).is_file():
+            shutil.copyfile(repo / "config" / name, config_dir / name)
     # Local service credentials (Postgres, ClickHouse) live in .env at the root.
     if (repo / ".env").is_file():
         shutil.copyfile(repo / ".env", root / ".env")

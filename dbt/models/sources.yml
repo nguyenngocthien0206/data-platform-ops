@@ -40,4 +40,11 @@ sources:
       - name: marketing_spend
         description: Daily ad spend per campaign, delivered in a morning batch.
       - name: support_tickets
-        description: Support tickets, exported when opened or when closed.
+        description: >
+          Support tickets, exported when opened or when closed. They come in
+          bursts: in a small company whole days pass without one (a quarter of
+          the days at scale 0.01), so the newest row says nothing about whether
+          the export is running, and a daily freshness rule would page someone
+          for a quiet day.
+        config:
+          freshness: null

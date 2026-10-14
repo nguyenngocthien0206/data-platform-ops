@@ -1,0 +1,24 @@
+{
+ "elapsed_time": 1.5,
+ "metadata": {
+  "adapter_type": "bigquery",
+  "dbt_schema_version": "https://schemas.getdbt.com/dbt/sources/v3.json",
+  "dbt_version": "1.9.4",
+  "generated_at": "2026-03-03T02:01:40.553112Z",
+  "invocation_id": "4c7d2e90-1b3a-4f6e-8d2c-7e6f5a4b3c02"
+ },
+ "results": [
+  {
+   "age": 3700.0,
+   "max_loaded_at": "2026-03-03T01:00:00Z",
+   "status": "pass",
+   "unique_id": "source.shop.raw.orders"
+  },
+  {
+   "age": 263000.0,
+   "max_loaded_at": "2026-02-28T01:00:00Z",
+   "status": "error",
+   "unique_id": "source.shop.raw.payments"
+  }
+ ]
+}

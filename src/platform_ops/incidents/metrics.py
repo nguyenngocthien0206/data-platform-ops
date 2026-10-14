@@ -1,8 +1,9 @@
-"""Grading the scenario against ground truth.
+"""Grading the production weeks' incidents against ground truth.
 
-This is the only incident code that reads ``ops.fault_ground_truth``. A fault
-maps to an incident when the faulted source is the incident's root or one of
-its ancestors, and the incident opened while the fault was active. Each fault
+This is the only incident code that reads ``ops.incident_faults``, the ground
+truth the company records as it plants faults in production. A fault maps to an
+incident when the faulted source is the incident's root or one of its
+ancestors, and the incident opened while the fault was active. Each fault
 should map to exactly one incident, and each incident to exactly one fault;
 anything else is reported, not hidden.
 
@@ -18,13 +19,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-import duckdb
 import networkx as nx
+from psycopg import sql
 
-from platform_ops.common.config import SEVERITIES
-from platform_ops.common.db import OPS_SCHEMA, replace_table
+from platform_ops.common.config import SEVERITIES, Settings
+from platform_ops.common.store import open_store, ops_table, replace_ops_table
+from platform_ops.incidents.history import History, Incident
 from platform_ops.incidents.routing import UNOWNED
-from platform_ops.incidents.scenario import Incident, ScenarioResult
 from platform_ops.incidents.severity import dataset_of
 from platform_ops.metadata.lineage import upstream
 from platform_ops.metadata.manifest import Node
@@ -73,6 +74,7 @@ class IncidentMetrics:
     naive_team: Accuracy
     mttd_hours: dict[str, float]
     mttr_hours: dict[str, float]
+    unresolved: tuple[str, ...]
     weeks: float
     alerts_before: dict[str, int]
     alerts_after: dict[str, int]
@@ -89,26 +91,25 @@ class IncidentMetrics:
 
 
 def read_ground_truth(
-    connection: duckdb.DuckDBPyConnection, nodes: Mapping[str, Node], registry: Registry
+    settings: Settings, nodes: Mapping[str, Node], registry: Registry
 ) -> list[FaultTruth]:
-    source_of = {
-        f"{n.schema}.{n.alias or n.name}": uid
-        for uid, n in nodes.items()
-        if n.resource_type == "source"
-    }
-    rows = connection.execute(
-        f"""SELECT fault_id, fault_type, target, expected_check, injected_at, repaired_at
-            FROM {OPS_SCHEMA}.fault_ground_truth ORDER BY injected_at, fault_id"""
-    ).fetchall()
+    source_of = {n.name: uid for uid, n in nodes.items() if n.resource_type == "source"}
+    with open_store(settings) as connection:
+        rows = connection.execute(
+            sql.SQL(
+                "SELECT fault_id, fault_type, table_name, expected_check, injected_at, "
+                "repaired_at FROM {} ORDER BY injected_at, fault_id"
+            ).format(ops_table(settings, "incident_faults"))
+        ).fetchall()
     truths = []
-    for fault_id, fault_type, target, expected, injected_at, repaired_at in rows:
-        source_id = source_of[target]
+    for fault_id, fault_type, table_name, expected, injected_at, repaired_at in rows:
+        source_id = source_of[table_name]
         rule = registry.resolve(source_id).rule
         truths.append(
             FaultTruth(
                 fault_id,
                 fault_type,
-                target,
+                f"raw.{table_name}",
                 source_id,
                 expected,
                 injected_at,
@@ -142,14 +143,14 @@ def _mean_by_severity(values: Sequence[tuple[str, float]]) -> dict[str, float]:
 
 
 def compute(
-    result: ScenarioResult,
+    result: History,
     truths: Sequence[FaultTruth],
     graph: nx.DiGraph[str],
     nodes: Mapping[str, Node],
     registry: Registry,
-    scenario_days: int,
+    days: int,
+    end: datetime,
 ) -> IncidentMetrics:
-    end = result.end or max(i.resolved_at for i in result.incidents)
     faults = tuple(
         FaultOutcome(
             t, tuple(i.incident_id for i in result.incidents if _caused_by(i, t, graph, end))
@@ -167,7 +168,11 @@ def compute(
         return Accuracy(sum(1 for got, want in pairs if got == want), len(pairs))
 
     mttd = [(i.severity, _hours(i.opened_at - t.injected_at)) for t, i in graded]
-    mttr = [(i.severity, _hours(i.resolved_at - i.opened_at)) for i in result.incidents]
+    mttr = [
+        (i.severity, _hours(i.resolved_at - i.opened_at))
+        for i in result.incidents
+        if i.resolved_at is not None
+    ]
 
     before: Counter[str] = Counter()
     for event, _ in result.events:
@@ -187,7 +192,8 @@ def compute(
         naive_team=accuracy([(i.naive_team, t.team) for t, i in graded]),
         mttd_hours=_mean_by_severity(mttd),
         mttr_hours=_mean_by_severity(mttr),
-        weeks=scenario_days / 7,
+        unresolved=tuple(i.incident_id for i in result.incidents if i.resolved_at is None),
+        weeks=days / 7,
         alerts_before=dict(sorted(before.items())),
         alerts_after=dict(sorted(after.items())),
     )
@@ -229,19 +235,22 @@ def metric_rows(metrics: IncidentMetrics) -> list[tuple[str, str, float]]:
     return rows
 
 
-def persist(connection: duckdb.DuckDBPyConnection, metrics: IncidentMetrics) -> None:
-    replace_table(
-        connection,
-        "incident_metrics",
-        "metric VARCHAR NOT NULL, dimension VARCHAR NOT NULL, value DOUBLE NOT NULL",
-        ("metric", "dimension", "value"),
-        metric_rows(metrics),
-    )
+def persist(settings: Settings, metrics: IncidentMetrics) -> None:
     pairs = [(f.truth.fault_id, i) for f in metrics.faults for i in f.incident_ids]
-    replace_table(
-        connection,
-        "fault_incidents",
-        "fault_id VARCHAR NOT NULL, incident_id VARCHAR NOT NULL",
-        ("fault_id", "incident_id"),
-        pairs,
-    )
+    with open_store(settings) as connection:
+        replace_ops_table(
+            connection,
+            settings,
+            "incident_metrics",
+            "metric text NOT NULL, dimension text NOT NULL, value double precision NOT NULL",
+            ["metric", "dimension", "value"],
+            metric_rows(metrics),
+        )
+        replace_ops_table(
+            connection,
+            settings,
+            "fault_incidents",
+            "fault_id text NOT NULL, incident_id text NOT NULL",
+            ["fault_id", "incident_id"],
+            pairs,
+        )

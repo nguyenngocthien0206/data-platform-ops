@@ -1,8 +1,8 @@
-"""The two outward-facing edges: posting to Slack, and launching Streamlit.
+"""The outward-facing edges: posting to Slack and Telegram, and launching Streamlit.
 
-Neither touches the outside world here. Slack posts go to a throwaway HTTP
-server on 127.0.0.1, and the Streamlit process is replaced by a stub, so the
-tests pin what is sent without sending it anywhere.
+None touches the outside world here. Posts go to a throwaway HTTP server on
+127.0.0.1 standing in for both APIs, and the Streamlit process is replaced by a
+stub, so the tests pin what is sent without sending it anywhere.
 """
 
 from __future__ import annotations
@@ -20,23 +20,44 @@ from typer.testing import CliRunner
 
 from platform_ops import cli
 from platform_ops.common.config import CONFIG_PATH_ENV_VAR
-from platform_ops.incidents.notify import CompositeNotifier, Notification, SlackNotifier
+from platform_ops.incidents.notify import Notification, SlackChannel, TelegramChannel, deliver
+from platform_ops.metadata.registry import Team
 
 NOTE = Notification(
-    "INC-001", "page", "priya", "platform", "SEV1", "2 checks failing", datetime(2026, 1, 8, 2)
+    "INC-001",
+    "page",
+    "night-2026-04-07",
+    "priya",
+    "platform",
+    "SEV1",
+    "2 checks failing",
+    datetime(2026, 4, 7, 2),
+)
+TEAM = Team(
+    id="platform", name="P", channel="#data-platform", members=["priya"], telegram_chat="-100"
 )
 
 
 @pytest.fixture
-def webhook() -> Iterator[tuple[str, list[dict[str, Any]]]]:
+def api() -> Iterator[tuple[str, list[dict[str, Any]]]]:
+    """One local server answering like both chat APIs, recording every post."""
     received: list[dict[str, Any]] = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
             length = int(self.headers["Content-Length"])
-            received.append(json.loads(self.rfile.read(length)))
+            received.append(
+                {
+                    "path": self.path,
+                    "auth": self.headers.get("Authorization"),
+                    "body": json.loads(self.rfile.read(length)),
+                }
+            )
+            reply = b'{"ok": true}'
             self.send_response(200)
+            self.send_header("Content-Length", str(len(reply)))
             self.end_headers()
+            self.wfile.write(reply)
 
         def log_message(self, *args: object) -> None:
             pass
@@ -45,35 +66,44 @@ def webhook() -> Iterator[tuple[str, list[dict[str, Any]]]]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}/hook", received
+        yield f"http://127.0.0.1:{server.server_port}", received
     finally:
         server.shutdown()
 
 
-def test_slack_posts_the_page_as_json(webhook: tuple[str, list[dict[str, Any]]]) -> None:
-    url, received = webhook
-    SlackNotifier(url).send(NOTE)
-    assert received == [{"text": "[SEV1] INC-001 (page) @priya: 2 checks failing"}]
+def test_slack_posts_to_the_teams_channel_with_the_bot_token(
+    api: tuple[str, list[dict[str, Any]]],
+) -> None:
+    url, received = api
+    assert deliver(NOTE, TEAM, [SlackChannel("xoxb-1", url)]) == "slack"
+    assert received == [
+        {
+            "path": "/chat.postMessage",
+            "auth": "Bearer xoxb-1",
+            "body": {
+                "channel": "#data-platform",
+                "text": "[SEV1] INC-001 (page) for priya: 2 checks failing",
+            },
+        }
+    ]
+
+
+def test_telegram_posts_to_the_teams_chat(api: tuple[str, list[dict[str, Any]]]) -> None:
+    url, received = api
+    channels = [SlackChannel("xoxb-1", url), TelegramChannel("123:abc", url)]
+    assert deliver(NOTE, TEAM, channels) == "slack, telegram"
+    telegram = received[1]
+    assert telegram["path"] == "/bot123:abc/sendMessage" and telegram["auth"] is None
+    assert telegram["body"] == {
+        "chat_id": "-100",
+        "text": "[SEV1] INC-001 (page) for priya: 2 checks failing",
+    }
 
 
 def test_a_failed_post_is_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
     # Nothing listens on port 9 (discard) of 127.0.0.1 here.
-    SlackNotifier("http://127.0.0.1:9/hook").send(NOTE)
-    assert "Slack post for INC-001 failed" in caplog.text
-
-
-def test_composite_sends_to_every_notifier() -> None:
-    seen: list[str] = []
-
-    class Recorder:
-        def __init__(self, name: str) -> None:
-            self.name = name
-
-        def send(self, notification: Notification) -> None:
-            seen.append(f"{self.name}:{notification.incident_id}")
-
-    CompositeNotifier([Recorder("a"), Recorder("b")]).send(NOTE)
-    assert seen == ["a:INC-001", "b:INC-001"]
+    assert deliver(NOTE, TEAM, [SlackChannel("xoxb-1", "http://127.0.0.1:9")]) == "slack failed"
+    assert "slack for INC-001 failed" in caplog.text
 
 
 def test_dashboard_runs_streamlit_headless_without_telemetry(

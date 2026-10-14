@@ -67,7 +67,7 @@ SETTINGS_YAML = textwrap.dedent(
       product_price_changes_per_day: 6
       customer_profile_changes_per_day: 40
     incidents:
-      scenario_days: 21
+      fault_days: [2, 5, 9, 14]
       fault_hour: 10
       severity: {root_tier_multiplier: 10, sev1_min_score: 150, sev2_min_score: 45}
       lifecycle:
@@ -180,12 +180,15 @@ def servers_or_skip() -> Callable[[Settings], None]:
     return require_servers
 
 
-# The demo's parallel run is six weeks; the suite's is one, so its company
-# still goes through every stage: the delivered job, the fix and backfill, a
-# one-off fault and its repair, and a cutover decision.
+# The demo's parallel run is six weeks and its production three; the suite's
+# are one week each, so its company still goes through every stage: the
+# delivered job, the fix and backfill, a one-off fault and its repair, a
+# cutover decision, then two nights of faults in production, their incidents
+# and their resolution.
 SHORT_PARALLEL_RUN: dict[str, dict[str, Any]] = {
-    "company": {"parallel_run_weeks": 1, "fix_after_nights": 2},
+    "company": {"parallel_run_weeks": 1, "fix_after_nights": 2, "production_weeks": 1},
     "reconcile": {"clean_nights_for_cutover": 2, "workers": 4},
+    "incidents": {"fault_days": [0, 1]},
 }
 
 
@@ -197,13 +200,15 @@ def short_parallel_run() -> dict[str, dict[str, Any]]:
 
 @pytest.fixture(scope="session")
 def company_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Settings]:
-    """The company run the way ``make demo`` runs it, at scale 0.01 over two weeks, shared.
+    """The company run the way ``make demo`` runs it, at scale 0.01 over three weeks, shared.
 
     Through the real CLI: ``company run`` (seed Postgres, backfill ClickHouse,
     then each day's data, ingestion and a dbt build on the first day; the
-    second week is the parallel run, built and reconciled every night), then
-    ``metadata check`` and ``cost report``. Every test that only reads a built company uses this
-    one, because it is the most expensive thing the suite builds.
+    second week is the parallel run, built and reconciled every night; the third
+    is production, with four faults in operation and the incident desk ingesting
+    every night), then ``metadata check``, ``incidents run`` and ``cost report``.
+    Every test that only reads a built company uses this one, because it is the
+    most expensive thing the suite builds.
     """
     from typer.testing import CliRunner
 
@@ -213,7 +218,7 @@ def company_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Sett
 
     root = tmp_path_factory.mktemp("company")
     settings_path = make_isolated_config(
-        root, 0.01, weeks=2, namespace="t_suite_", overrides=SHORT_PARALLEL_RUN
+        root, 0.01, weeks=3, namespace="t_suite_", overrides=SHORT_PARALLEL_RUN
     )
     settings = load_settings(settings_path)
     require_servers(settings)
@@ -221,7 +226,12 @@ def company_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Sett
     patch.setenv(CONFIG_PATH_ENV_VAR, str(settings_path))
     runner = CliRunner()
     try:
-        for command in (["company", "run"], ["metadata", "check"], ["cost", "report"]):
+        for command in (
+            ["company", "run"],
+            ["metadata", "check"],
+            ["incidents", "run"],
+            ["cost", "report"],
+        ):
             result = runner.invoke(app, command)
             assert result.exit_code == 0, f"{' '.join(command)} failed:\n{result.output}"
     finally:

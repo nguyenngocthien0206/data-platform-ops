@@ -1,19 +1,31 @@
-"""``platform-ops incidents run``: the scenario, its tables, metrics and reports."""
+"""``platform-ops incidents run``: the incident report, from the store, graded.
+
+The incidents themselves happen during ``make demo``, in the company's
+production weeks (``incidents.production``). This command reads the store
+back, grades it against the faults the company planted (``ops.incident_faults``),
+stores the metrics, and writes ``reports/incidents.md`` and a postmortem draft
+for every SEV1. It can be rerun at any time and writes the same files.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
-import duckdb
+from psycopg import sql
 
 from platform_ops.common.config import Settings
-from platform_ops.common.db import open_connection, replace_table, transaction
-from platform_ops.incidents import ingest, metrics, notify
-from platform_ops.incidents.metrics import IncidentMetrics
+from platform_ops.common.dbt_invoke import invocation_from_settings
+from platform_ops.common.store import open_store, ops_table
+from platform_ops.incidents import metrics
+from platform_ops.incidents.desk import Context
+from platform_ops.incidents.history import load_history
 from platform_ops.incidents.report import write_reports
-from platform_ops.incidents.scenario import Scenario, ScenarioResult
+
+
+class IncidentError(RuntimeError):
+    """The incident report cannot be produced from the current state."""
 
 
 @dataclass(frozen=True)
@@ -23,174 +35,61 @@ class IncidentSummary:
     raw_alerts: int
     pages: int
     runs: int
-    dbt_invocations: int
     one_incident_per_fault: bool
     report_path: Path
     postmortems: tuple[Path, ...]
 
 
-INCIDENTS_DDL = """
-    incident_id VARCHAR PRIMARY KEY,
-    root_node VARCHAR NOT NULL,
-    dataset VARCHAR NOT NULL,
-    severity VARCHAR NOT NULL,
-    score INTEGER NOT NULL,
-    root_tier VARCHAR NOT NULL,
-    owner VARCHAR NOT NULL,
-    team VARCHAR NOT NULL,
-    naive_owner VARCHAR NOT NULL,
-    naive_team VARCHAR NOT NULL,
-    routed_via VARCHAR NOT NULL,
-    opened_at TIMESTAMP NOT NULL,
-    acknowledged_at TIMESTAMP NOT NULL,
-    resolved_at TIMESTAMP NOT NULL,
-    last_seen_at TIMESTAMP,
-    runs INTEGER NOT NULL,
-    failing_checks INTEGER NOT NULL,
-    previous_incident_id VARCHAR"""
-
-INCIDENT_COLUMNS = (
-    "incident_id",
-    "root_node",
-    "dataset",
-    "severity",
-    "score",
-    "root_tier",
-    "owner",
-    "team",
-    "naive_owner",
-    "naive_team",
-    "routed_via",
-    "opened_at",
-    "acknowledged_at",
-    "resolved_at",
-    "last_seen_at",
-    "runs",
-    "failing_checks",
-    "previous_incident_id",
-)
-
-IMPACT_DDL = """
-    incident_id VARCHAR NOT NULL,
-    node_id VARCHAR NOT NULL,
-    role VARCHAR NOT NULL,
-    tier VARCHAR,
-    weight INTEGER"""
-
-RUNS_DDL = """
-    run_id VARCHAR PRIMARY KEY,
-    run_at TIMESTAMP NOT NULL,
-    selected_sources VARCHAR NOT NULL,
-    checks_run INTEGER NOT NULL,
-    failing_checks INTEGER NOT NULL,
-    opened INTEGER NOT NULL,
-    appended INTEGER NOT NULL"""
-
-
-def persist(
-    connection: duckdb.DuckDBPyConnection, result: ScenarioResult, local: notify.LocalNotifier
-) -> None:
-    """Replace every scenario table with this run's contents."""
-    ingest.reset_check_events(connection)
-    notify.reset_notifications(connection)
-
-    incident_rows = [
-        (
-            i.incident_id,
-            i.root,
-            i.dataset,
-            i.severity,
-            i.score,
-            i.root_tier,
-            i.owner,
-            i.team,
-            i.naive_owner,
-            i.naive_team,
-            i.routed_via,
-            i.opened_at,
-            i.acknowledged_at,
-            i.resolved_at,
-            i.last_seen_at,
-            len(i.run_ids),
-            i.checks,
-            i.previous_incident_id,
+def run_incidents(settings: Settings) -> IncidentSummary:
+    manifest = invocation_from_settings(settings).manifest_path
+    if not manifest.is_file():
+        raise IncidentError(f"no dbt manifest at {manifest}; run `make demo` first")
+    with open_store(settings) as connection:
+        found = connection.execute(
+            "SELECT to_regclass(%s) IS NOT NULL",
+            [f'"{settings.company.name(settings.company.ops_schema)}".company_run'],
+        ).fetchone()
+        row = (
+            connection.execute(
+                sql.SQL("SELECT window_start, days FROM {}").format(
+                    ops_table(settings, "company_run")
+                )
+            ).fetchone()
+            if found and found[0]
+            else None
         )
-        for i in result.incidents
-    ]
-    replace_table(connection, "incidents", INCIDENTS_DDL, INCIDENT_COLUMNS, incident_rows)
-
-    impact: list[tuple[str, str, str, str | None, int | None]] = []
-    for i in result.incidents:
-        impact += [(i.incident_id, node, "failed", None, None) for node in sorted(i.failed_nodes)]
-        impact += [(i.incident_id, node, "skipped", None, None) for node in sorted(i.skipped)]
-        impact += [
-            (i.incident_id, c.unique_id, "downstream", c.tier, c.weight) for c in i.consumers
-        ]
-    replace_table(
-        connection,
-        "incident_impact",
-        IMPACT_DDL,
-        ("incident_id", "node_id", "role", "tier", "weight"),
-        impact,
+    if row is None:
+        raise IncidentError("no company run is recorded; run `make demo` first")
+    start, window_days = row
+    days = min(int(window_days), settings.company.production_weeks * 7)
+    context = Context.load(settings, manifest)
+    history = load_history(settings, context)
+    if not history.runs:
+        raise IncidentError(
+            "the incident store holds no production run; `make demo` runs the production "
+            "weeks (company.production_weeks)"
+        )
+    truths = metrics.read_ground_truth(settings, context.nodes, context.registry)
+    computed = metrics.compute(
+        history,
+        truths,
+        context.graph,
+        context.nodes,
+        context.registry,
+        days,
+        start + timedelta(days=int(window_days)),
     )
-
-    runs = [
-        (
-            r.run_id,
-            r.run_at,
-            ",".join(r.selected_sources),
-            r.checks_run,
-            r.failures,
-            r.opened,
-            r.appended,
-        )
-        for r in result.runs
-    ]
-    replace_table(
-        connection,
-        "incident_runs",
-        RUNS_DDL,
-        (
-            "run_id",
-            "run_at",
-            "selected_sources",
-            "checks_run",
-            "failing_checks",
-            "opened",
-            "appended",
-        ),
-        runs,
-    )
-
-    ingest.persist_events(connection, result.events)
-    local.flush(connection)
-
-
-def run_incidents(
-    settings: Settings, *, allow_slack: bool = True, full_run_on_days: Sequence[int] = ()
-) -> tuple[IncidentSummary, ScenarioResult, IncidentMetrics]:
-    scenario = Scenario(settings, allow_slack=allow_slack, full_run_on_days=full_run_on_days)
-    result = scenario.run()
-    days = settings.incidents.scenario_days
-    with open_connection(settings) as connection, transaction(connection):
-        persist(connection, result, scenario.local)
-        truths = metrics.read_ground_truth(connection, scenario.nodes, scenario.registry)
-        graded = metrics.compute(
-            result, truths, scenario.graph, scenario.nodes, scenario.registry, days
-        )
-        metrics.persist(connection, graded)
+    metrics.persist(settings, computed)
     report_path, postmortems = write_reports(
-        settings.resolve(settings.paths.reports), result, graded, days
+        settings.resolve(settings.paths.reports), history, computed, days
     )
-    summary = IncidentSummary(
+    return IncidentSummary(
         faults=len(truths),
-        incidents=graded.incidents,
-        raw_alerts=graded.raw_alerts,
-        pages=graded.pages,
-        runs=len(result.runs),
-        dbt_invocations=result.dbt_invocations,
-        one_incident_per_fault=graded.one_incident_per_fault,
+        incidents=computed.incidents,
+        raw_alerts=computed.raw_alerts,
+        pages=computed.pages,
+        runs=len(history.runs),
+        one_incident_per_fault=computed.one_incident_per_fault,
         report_path=report_path,
         postmortems=tuple(postmortems),
     )
-    return summary, result, graded

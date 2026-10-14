@@ -128,13 +128,16 @@ def single_bars(
     value_format: str,
     colors: Palette,
     value_title: str | None = None,
+    order: Sequence[str] | None = None,
 ) -> alt.Chart:
-    """One measure across categories: one hue, sorted, labelled by the axis."""
+    """One measure across categories: one hue, sorted by value unless ``order`` is
+    given (for an ordered category such as severity), labelled by the axis."""
+    sort: str | list[str] = list(order) if order is not None else "-x"
     chart: alt.Chart = (
         alt.Chart(frame)
         .mark_bar(cornerRadiusEnd=BAR_CORNER, color=colors.accent)
         .encode(
-            y=alt.Y(f"{category}:N", sort="-x", title=None, axis=alt.Axis(labelLimit=260)),
+            y=alt.Y(f"{category}:N", sort=sort, title=None, axis=alt.Axis(labelLimit=260)),
             x=alt.X(f"{value}:Q", title=value_title, axis=alt.Axis(format=value_format)),
             tooltip=[alt.Tooltip(f"{category}:N"), alt.Tooltip(f"{value}:Q", format=value_format)],
         )
@@ -224,7 +227,7 @@ def spans(
         .mark_bar(cornerRadius=BAR_CORNER, height=14)
         .encode(
             y=alt.Y(f"{label}:N", title=None, sort=None),
-            x=alt.X(f"{start}:T", title=None),
+            x=alt.X(f"{start}:T", title=None, axis=alt.Axis(format="%b %d")),
             x2=f"{end}:T",
             color=alt.Color(
                 f"{level}:N",

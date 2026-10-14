@@ -12,9 +12,8 @@ make docker-dashboard     # served from the container on http://localhost:8501
 |---|---|
 | Overview | The company's run (window, rows ingested, lineage), one headline per module (the cluster's cost, the saving and payback, the cutover and what the parallel run found), and who owns which datasets |
 | Cost | The cluster's stated cost shared out by team and by month, or the same workload priced on BigQuery or Snowflake; cost by kind of work; the migration's business case month by month; and what to change: unused tables, full-scan hotspots with a suggested key, incremental candidates, quotas with their SQL |
+| Incidents | How many failing checks became how many incidents in the production weeks, pages per person before and after grouping, time to detect and resolve by severity, every incident from the run that opened it to the run that resolved it, and the nights the desk ingested |
 | Reconciliation | The cutover verdict; a grid of the 42 nights of the parallel run against the 21 compared tables and reports; one night in detail (what was planted and found, what differed and why, examples); and rows moved by the segmented diff against a naive comparison |
-
-The incidents page returns with the incident module in Phase 14.
 
 ## How it is built
 
@@ -27,7 +26,7 @@ The incidents page returns with the incident module in Phase 14.
 
 ## Checks
 
-`tests/test_dashboard.py` renders every page with Streamlit's `AppTest` on the shared test company (two weeks at scale 0.01): titles, charts, no "run this first" notices, the pricing switch and the night picker. It also checks the role: it reads every table, a table recreated after the grant included, and is refused every write.
+`tests/test_dashboard.py` renders every page with Streamlit's `AppTest` on the shared test company (three weeks at scale 0.01): titles, charts, no "run this first" notices, the pricing switch and the night picker. It also checks the role: it reads every table, a table recreated after the grant included, and is refused every write.
 
 `make docker-browser-check` (after `make docker-demo`) loads every page in headless Chromium, in the light and the dark theme, fails on exception boxes, error alerts, failed requests, console errors and pages without a chart or a data table, and saves a screenshot of each to `reports/screenshots/` (`scripts/check_dashboards.py`).
 
@@ -37,4 +36,4 @@ Looking at those screenshots found what no assertion would have:
 - labels cut off on the workload chart and the reconciliation grid, where every other row label was dropped;
 - dark dots where the rounded corners of four grid cells met.
 
-All three are fixed. The check itself found one more thing: Streamlit reports a page as done for a moment between running `app.py` and running the page, which a cold first load could land on, so the check now waits until the page stays done. The 1.x limits it found earlier (repeated month labels and an unexplained drop at the end of the window, a timeline without dates, narrow tables cutting off a column) are gone with the pages that had them: the monthly chart names each month with the days the window covers in it.
+All three are fixed. The check itself found one more thing: Streamlit reports a page as done for a moment between running `app.py` and running the page, which a cold first load could land on, so the check now waits until the page stays done. The 1.x limits it found earlier (repeated month labels and an unexplained drop at the end of the window, a timeline without dates, narrow tables cutting off a column) are gone: the monthly chart names each month with the days the window covers in it, and the incident timeline's axis shows dates.

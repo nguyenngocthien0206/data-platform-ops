@@ -10,7 +10,7 @@ import pytest
 from platform_ops.common.config import SEVERITIES, Settings, Severity, Tier
 from platform_ops.incidents import ingest, lifecycle, notify
 from platform_ops.incidents.routing import naive_route, route
-from platform_ops.incidents.severity import score_incident, severity_for
+from platform_ops.incidents.severity import IncidentPolicy, score_incident, severity_for
 from platform_ops.metadata.lineage import build_graph
 from platform_ops.metadata.manifest import Node
 from platform_ops.metadata.registry import DatasetRule, Registry, Team
@@ -139,7 +139,8 @@ def _tiers(registry: Registry, nodes: dict[str, Node]) -> dict[str, Tier]:
 def test_score_is_root_tier_plus_weighted_consumers(repo_settings: Settings) -> None:
     nodes, registry = _nodes(), _registry()
     graph = build_graph(nodes)
-    scored = score_incident(graph, STG, nodes, _tiers(registry, nodes), repo_settings)
+    policy = IncidentPolicy.load(repo_settings)
+    scored = score_incident(graph, STG, nodes, _tiers(registry, nodes), policy)
     weights = repo_settings.metadata.tier_weights
     multiplier = repo_settings.incidents.severity.root_tier_multiplier
     # stg_orders is important; below it a critical mart and an important dashboard.
@@ -153,17 +154,38 @@ def test_a_cross_model_test_root_is_scored_as_its_attached_model(
 ) -> None:
     nodes, registry = _nodes(), _registry()
     graph = build_graph(nodes)
-    as_test = score_incident(graph, REL, nodes, _tiers(registry, nodes), repo_settings)
-    as_model = score_incident(graph, MART, nodes, _tiers(registry, nodes), repo_settings)
+    policy = IncidentPolicy.load(repo_settings)
+    as_test = score_incident(graph, REL, nodes, _tiers(registry, nodes), policy)
+    as_model = score_incident(graph, MART, nodes, _tiers(registry, nodes), policy)
     assert as_test == as_model
 
 
 def test_severity_thresholds(repo_settings: Settings) -> None:
-    levels = repo_settings.incidents.severity
-    assert severity_for(levels.sev1_min_score, repo_settings) == "SEV1"
-    assert severity_for(levels.sev1_min_score - 1, repo_settings) == "SEV2"
-    assert severity_for(levels.sev2_min_score, repo_settings) == "SEV2"
-    assert severity_for(levels.sev2_min_score - 1, repo_settings) == "SEV3"
+    policy = IncidentPolicy.load(repo_settings)
+    levels = policy.severity
+    assert severity_for(levels.sev1_min_score, policy) == "SEV1"
+    assert severity_for(levels.sev1_min_score - 1, policy) == "SEV2"
+    assert severity_for(levels.sev2_min_score, policy) == "SEV2"
+    assert severity_for(levels.sev2_min_score - 1, policy) == "SEV3"
+
+
+def test_a_team_sets_its_own_thresholds_in_incidents_yaml(
+    repo_settings: Settings, tmp_path: Path
+) -> None:
+    """Next to the registry, overriding the settings' defaults only where it says so."""
+    default = IncidentPolicy.load(repo_settings, tmp_path)
+    assert default.severity == repo_settings.incidents.severity
+    policy_file = tmp_path / "incidents.yaml"
+    policy_file.write_text(
+        "severity: {root_tier_multiplier: 1, sev1_min_score: 9, sev2_min_score: 3}",
+        encoding="utf-8",
+    )
+    policy = IncidentPolicy.load(repo_settings, tmp_path)
+    assert (policy.severity.sev1_min_score, policy.severity.sev2_min_score) == (9, 3)
+    assert policy.tier_weights == repo_settings.metadata.tier_weights
+    policy_file.write_text("pages: always", encoding="utf-8")
+    with pytest.raises(ValueError, match="pages"):
+        IncidentPolicy.load(repo_settings, tmp_path)
 
 
 # -- routing ---------------------------------------------------------------------------
@@ -194,9 +216,9 @@ def test_response_is_deterministic_and_slower_when_busy(repo_settings: Settings)
     again = lifecycle.respond("INC-001", "SEV2", AT, 0, life, seed=42)
     busy = lifecycle.respond("INC-001", "SEV2", AT, 2, life, seed=42)
     assert first == again
-    assert AT < first.acknowledged_at < first.resolved_at
+    assert AT < first.acknowledged_at < first.fixed_at
     assert busy.acknowledged_at - AT > first.acknowledged_at - AT
-    assert busy.resolved_at - AT > first.resolved_at - AT
+    assert busy.fixed_at - AT > first.fixed_at - AT
 
 
 @pytest.mark.parametrize("severity", SEVERITIES)
@@ -212,23 +234,32 @@ def test_response_stays_within_the_spread(repo_settings: Settings, severity: Sev
 # -- notifier --------------------------------------------------------------------------
 
 
-def test_slack_url_comes_from_env_then_dotenv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv(notify.SLACK_ENV_VAR, raising=False)
+NOTE = notify.Notification(
+    "INC-001", "page", "night-1", "priya", "platform", "SEV1", "2 checks failing", AT
+)
+TEAM = Team(id="platform", name="P", channel="#data-platform", members=["priya"])
+
+
+def test_channels_come_from_their_tokens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("SLACK_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "SLACK_API_URL", "TELEGRAM_API_URL"):
+        monkeypatch.delenv(name, raising=False)
     env_file = tmp_path / ".env"
-    assert notify.slack_webhook_url(env_file) is None
-    env_file.write_text("# SLACK_WEBHOOK_URL=https://commented\nOTHER=1\n", encoding="utf-8")
-    assert notify.slack_webhook_url(env_file) is None
-    env_file.write_text("SLACK_WEBHOOK_URL='https://hooks.example/x'\n", encoding="utf-8")
-    assert notify.slack_webhook_url(env_file) == "https://hooks.example/x"
-    monkeypatch.setenv(notify.SLACK_ENV_VAR, "https://hooks.example/env")
-    assert notify.slack_webhook_url(env_file) == "https://hooks.example/env"
+    assert notify.channels_from_env(env_file) == []
+    env_file.write_text("TELEGRAM_BOT_TOKEN=t-1\n# SLACK_BOT_TOKEN=commented\n", encoding="utf-8")
+    assert [c.name for c in notify.channels_from_env(env_file)] == ["telegram"]
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-1")
+    assert [c.name for c in notify.channels_from_env(env_file)] == ["slack", "telegram"]
 
 
-def test_without_a_webhook_only_the_local_notifier_is_used(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv(notify.SLACK_ENV_VAR, raising=False)
-    local = notify.LocalNotifier()
-    assert notify.build_notifier(local, tmp_path / ".env") is local
+def test_without_a_channel_a_notification_stays_local() -> None:
+    assert notify.deliver(NOTE, TEAM, []) == "local"
+
+
+def test_a_team_without_a_telegram_chat_is_skipped_there() -> None:
+    telegram = notify.TelegramChannel("t-1", "http://127.0.0.1:9")
+    assert notify.deliver(NOTE, TEAM, [telegram]) == "telegram: no address"
+
+
+def test_a_failed_send_is_recorded_not_raised() -> None:
+    slack = notify.SlackChannel("xoxb-1", "http://127.0.0.1:9")  # nothing listens there
+    assert notify.deliver(NOTE, TEAM, [slack]) == "slack failed"

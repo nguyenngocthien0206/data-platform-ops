@@ -1,10 +1,22 @@
-"""Sending pages and updates.
+"""Sending pages, updates and resolutions to each team, where it takes them (Phase 14).
 
-The toolkit's default is local: every notification is a row in
-``ops.notifications`` and a line in the log, so a run is fully inspectable with
-no account anywhere. Slack is optional. It is switched on only by setting
-``SLACK_WEBHOOK_URL`` in the environment or in ``.env``, and it uses nothing but
-the standard library. Tests never set it.
+Every notification is a row in ``incident_notifications`` first; the desk sends
+it only after the incident is committed, then records how it went. With no
+token configured that is ``local``: the row and a line in the log, which is
+how the simulated company runs and how the tests run.
+
+Two channels, each switched on by its bot token, each addressed per team from
+``teams.yaml``:
+
+- **Slack**: ``chat.postMessage`` to the team's ``channel``, with
+  ``SLACK_BOT_TOKEN``;
+- **Telegram**: ``sendMessage`` to the team's ``telegram_chat``, with
+  ``TELEGRAM_BOT_TOKEN``.
+
+Their API base URLs can be overridden (``SLACK_API_URL``, ``TELEGRAM_API_URL``),
+which is how the tests point them at a local double. Nothing but the standard
+library is used. A failed send is logged and recorded, never raised: a chat
+outage must not stop incident tracking.
 """
 
 from __future__ import annotations
@@ -18,118 +30,118 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
-import duckdb
-
-from platform_ops.common.clock import SimulatedClock
-from platform_ops.common.db import OPS_SCHEMA, insert_rows
 from platform_ops.common.env import env_value
-from platform_ops.common.logging import get_logger, log_event
+from platform_ops.common.logging import get_logger
+from platform_ops.metadata.registry import Team
 
 NotificationKind = Literal["page", "update", "resolved"]
-SLACK_ENV_VAR = "SLACK_WEBHOOK_URL"
-SLACK_TIMEOUT_SECONDS = 5
+TIMEOUT_SECONDS = 5
+SLACK_API_URL = "https://slack.com/api"
+TELEGRAM_API_URL = "https://api.telegram.org"
 
 
 @dataclass(frozen=True)
 class Notification:
     incident_id: str
-    kind: NotificationKind
+    kind: str
+    run_id: str
     recipient: str
     team: str
     severity: str
     text: str
     sent_at: datetime
 
-
-class Notifier(Protocol):
-    def send(self, notification: Notification) -> None: ...
-
-
-NOTIFICATIONS_DDL = """
-    incident_id VARCHAR NOT NULL,
-    kind VARCHAR NOT NULL,
-    recipient VARCHAR NOT NULL,
-    team VARCHAR NOT NULL,
-    severity VARCHAR NOT NULL,
-    text VARCHAR NOT NULL,
-    sent_at TIMESTAMP NOT NULL"""
-
-NOTIFICATION_COLUMNS = ("incident_id", "kind", "recipient", "team", "severity", "text", "sent_at")
-
-
-def reset_notifications(connection: duckdb.DuckDBPyConnection) -> None:
-    connection.execute(f"CREATE OR REPLACE TABLE {OPS_SCHEMA}.notifications ({NOTIFICATIONS_DDL})")
-
-
-class LocalNotifier:
-    """Logs each notification and buffers it for ``ops.notifications``.
-
-    Rows are written by :meth:`flush`, once per run, so a run's notifications
-    share the transaction the rest of the run's writes use.
-    """
-
-    def __init__(self) -> None:
-        self.logger = get_logger("incidents")
-        self.pending: list[Notification] = []
-
-    def send(self, notification: Notification) -> None:
-        self.pending.append(notification)
-        log_event(
-            self.logger,
-            f"{notification.kind} {notification.incident_id} to {notification.recipient}: "
-            f"{notification.text}",
-            clock=SimulatedClock(notification.sent_at),
+    def message(self) -> str:
+        return (
+            f"[{self.severity}] {self.incident_id} ({self.kind}) for {self.recipient}: {self.text}"
         )
 
-    def flush(self, connection: duckdb.DuckDBPyConnection) -> int:
-        rows = [
-            (n.incident_id, n.kind, n.recipient, n.team, n.severity, n.text, n.sent_at)
-            for n in self.pending
-        ]
-        self.pending.clear()
-        return insert_rows(connection, f"{OPS_SCHEMA}.notifications", NOTIFICATION_COLUMNS, rows)
+
+class Channel(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    def send(self, notification: Notification, team: Team) -> bool:
+        """Send to the team's address here; ``False`` when the team has none."""
+        ...
 
 
-class SlackNotifier:
-    """Posts to a Slack incoming webhook. A failed post is logged, never raised:
-    a chat outage must not stop incident tracking."""
+def _post(url: str, payload: dict[str, object], headers: dict[str, str]) -> dict[str, object]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8", **headers},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        body: dict[str, object] = json.loads(response.read().decode("utf-8") or "{}")
+        return body
 
-    def __init__(self, webhook_url: str) -> None:
-        self.webhook_url = webhook_url
-        self.logger = get_logger("incidents.slack")
 
-    def send(self, notification: Notification) -> None:
-        payload = {
-            "text": f"[{notification.severity}] {notification.incident_id} "
-            f"({notification.kind}) @{notification.recipient}: {notification.text}"
-        }
-        request = urllib.request.Request(
-            self.webhook_url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
+@dataclass(frozen=True)
+class SlackChannel:
+    token: str
+    api_url: str = SLACK_API_URL
+    name: str = "slack"
+
+    def send(self, notification: Notification, team: Team) -> bool:
+        body = _post(
+            f"{self.api_url}/chat.postMessage",
+            {"channel": team.channel, "text": notification.message()},
+            {"Authorization": f"Bearer {self.token}"},
         )
+        if not body.get("ok"):
+            raise RuntimeError(f"Slack said {body.get('error', 'not ok')}")
+        return True
+
+
+@dataclass(frozen=True)
+class TelegramChannel:
+    token: str
+    api_url: str = TELEGRAM_API_URL
+    name: str = "telegram"
+
+    def send(self, notification: Notification, team: Team) -> bool:
+        if not team.telegram_chat:
+            return False
+        body = _post(
+            f"{self.api_url}/bot{self.token}/sendMessage",
+            {"chat_id": team.telegram_chat, "text": notification.message()},
+            {},
+        )
+        if not body.get("ok"):
+            raise RuntimeError(f"Telegram said {body.get('description', 'not ok')}")
+        return True
+
+
+def channels_from_env(env_file: Path) -> list[Channel]:
+    """The channels whose tokens are set, in the environment or ``.env``."""
+    found: list[Channel] = []
+    slack = env_value("SLACK_BOT_TOKEN", env_file)
+    if slack:
+        found.append(SlackChannel(slack, env_value("SLACK_API_URL", env_file) or SLACK_API_URL))
+    telegram = env_value("TELEGRAM_BOT_TOKEN", env_file)
+    if telegram:
+        found.append(
+            TelegramChannel(telegram, env_value("TELEGRAM_API_URL", env_file) or TELEGRAM_API_URL)
+        )
+    return found
+
+
+def deliver(notification: Notification, team: Team | None, channels: Sequence[Channel]) -> str:
+    """Send one notification on every channel; returns how it went, for the store."""
+    logger = get_logger("incidents")
+    logger.info("%s %s", notification.sent_at.isoformat(sep=" "), notification.message())
+    if not channels:
+        return "local"
+    if team is None:
+        return "local: no team " + notification.team
+    outcome = []
+    for channel in channels:
         try:
-            with urllib.request.urlopen(request, timeout=SLACK_TIMEOUT_SECONDS):
-                pass
-        except (urllib.error.URLError, TimeoutError) as error:
-            self.logger.warning("Slack post for %s failed: %s", notification.incident_id, error)
-
-
-class CompositeNotifier:
-    def __init__(self, notifiers: Sequence[Notifier]) -> None:
-        self.notifiers = tuple(notifiers)
-
-    def send(self, notification: Notification) -> None:
-        for notifier in self.notifiers:
-            notifier.send(notification)
-
-
-def slack_webhook_url(env_file: Path) -> str | None:
-    """The webhook from the environment, else from ``.env``, else ``None``."""
-    return env_value(SLACK_ENV_VAR, env_file)
-
-
-def build_notifier(local: LocalNotifier, env_file: Path) -> Notifier:
-    url = slack_webhook_url(env_file)
-    return local if url is None else CompositeNotifier([local, SlackNotifier(url)])
+            sent = channel.send(notification, team)
+            outcome.append(channel.name if sent else f"{channel.name}: no address")
+        except (urllib.error.URLError, TimeoutError, RuntimeError, ValueError) as error:
+            logger.warning("%s for %s failed: %s", channel.name, notification.incident_id, error)
+            outcome.append(f"{channel.name} failed")
+    return ", ".join(outcome)

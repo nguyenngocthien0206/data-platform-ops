@@ -1,0 +1,167 @@
+{
+ "exposures": {
+  "exposure.shop.revenue_board": {
+   "depends_on": {
+    "macros": [],
+    "nodes": [
+     "model.shop.fct_revenue"
+    ]
+   },
+   "maturity": "high",
+   "name": "revenue_board",
+   "original_file_path": "models/exposures.yml",
+   "owner": {
+    "name": "fiona"
+   },
+   "package_name": "shop",
+   "resource_type": "exposure",
+   "unique_id": "exposure.shop.revenue_board"
+  }
+ },
+ "metadata": {
+  "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+  "project_name": "shop"
+ },
+ "nodes": {
+  "model.shop.fct_revenue": {
+   "alias": "fct_revenue",
+   "config": {
+    "enabled": true,
+    "materialized": "table"
+   },
+   "depends_on": {
+    "macros": [],
+    "nodes": [
+     "model.shop.stg_orders",
+     "model.shop.stg_payments"
+    ]
+   },
+   "name": "fct_revenue",
+   "original_file_path": "models/marts/fct_revenue.sql",
+   "package_name": "shop",
+   "resource_type": "model",
+   "schema": "marts",
+   "unique_id": "model.shop.fct_revenue"
+  },
+  "model.shop.stg_orders": {
+   "alias": "stg_orders",
+   "config": {
+    "enabled": true,
+    "materialized": "table"
+   },
+   "depends_on": {
+    "macros": [],
+    "nodes": [
+     "source.shop.raw.orders"
+    ]
+   },
+   "name": "stg_orders",
+   "original_file_path": "models/staging/stg_orders.sql",
+   "package_name": "shop",
+   "resource_type": "model",
+   "schema": "staging",
+   "unique_id": "model.shop.stg_orders"
+  },
+  "model.shop.stg_payments": {
+   "alias": "stg_payments",
+   "config": {
+    "enabled": true,
+    "materialized": "table"
+   },
+   "depends_on": {
+    "macros": [],
+    "nodes": [
+     "source.shop.raw.payments"
+    ]
+   },
+   "name": "stg_payments",
+   "original_file_path": "models/staging/stg_payments.sql",
+   "package_name": "shop",
+   "resource_type": "model",
+   "schema": "staging",
+   "unique_id": "model.shop.stg_payments"
+  },
+  "test.shop.not_null_stg_orders_customer_id.a1": {
+   "attached_node": "model.shop.stg_orders",
+   "config": {
+    "enabled": true
+   },
+   "depends_on": {
+    "macros": [],
+    "nodes": [
+     "model.shop.stg_orders"
+    ]
+   },
+   "name": "not_null_stg_orders_customer_id",
+   "original_file_path": "models/staging/_staging.yml",
+   "package_name": "shop",
+   "path": "not_null_stg_orders_customer_id.sql",
+   "resource_type": "test",
+   "schema": "analytics",
+   "unique_id": "test.shop.not_null_stg_orders_customer_id.a1"
+  },
+  "test.shop.relationships_stg_payments_order_id__order_id__ref_stg_orders_.b2": {
+   "attached_node": "model.shop.stg_payments",
+   "config": {
+    "enabled": true
+   },
+   "depends_on": {
+    "macros": [],
+    "nodes": [
+     "model.shop.stg_orders",
+     "model.shop.stg_payments"
+    ]
+   },
+   "name": "relationships_stg_payments_order_id__order_id__ref_stg_orders_",
+   "original_file_path": "models/staging/_staging.yml",
+   "package_name": "shop",
+   "path": "relationships_stg_payments_order_id__order_id__ref_stg_orders_.sql",
+   "resource_type": "test",
+   "schema": "analytics",
+   "unique_id": "test.shop.relationships_stg_payments_order_id__order_id__ref_stg_orders_.b2"
+  },
+  "test.shop.unique_fct_revenue_order_id.c3": {
+   "attached_node": "model.shop.fct_revenue",
+   "config": {
+    "enabled": true
+   },
+   "depends_on": {
+    "macros": [],
+    "nodes": [
+     "model.shop.fct_revenue"
+    ]
+   },
+   "name": "unique_fct_revenue_order_id",
+   "original_file_path": "models/marts/_marts.yml",
+   "package_name": "shop",
+   "path": "unique_fct_revenue_order_id.sql",
+   "resource_type": "test",
+   "schema": "analytics",
+   "unique_id": "test.shop.unique_fct_revenue_order_id.c3"
+  }
+ },
+ "sources": {
+  "source.shop.raw.orders": {
+   "identifier": "orders",
+   "loaded_at_field": "_loaded_at",
+   "name": "orders",
+   "original_file_path": "models/sources.yml",
+   "package_name": "shop",
+   "resource_type": "source",
+   "schema": "raw",
+   "source_name": "raw",
+   "unique_id": "source.shop.raw.orders"
+  },
+  "source.shop.raw.payments": {
+   "identifier": "payments",
+   "loaded_at_field": "_loaded_at",
+   "name": "payments",
+   "original_file_path": "models/sources.yml",
+   "package_name": "shop",
+   "resource_type": "source",
+   "schema": "raw",
+   "source_name": "raw",
+   "unique_id": "source.shop.raw.payments"
+  }
+ }
+}

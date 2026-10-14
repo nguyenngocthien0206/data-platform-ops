@@ -6,7 +6,7 @@ from datetime import datetime
 
 import networkx as nx
 
-from platform_ops.incidents.grouping import assign, group_failures, roots_by_node
+from platform_ops.incidents.grouping import group_failures, roots_by_node
 from platform_ops.incidents.ingest import CheckEvent
 
 AT = datetime(2026, 1, 6, 2)
@@ -90,25 +90,6 @@ def test_skipped_nodes_are_impact_of_their_root() -> None:
     assert len(groups) == 1
     assert groups[0].skipped == ("int", "mart")
     assert groups[0].failed_nodes == ("stg",)
-
-
-def test_a_failure_in_the_next_run_appends_to_the_open_incident() -> None:
-    graph = _graph(("src", "stg"), ("stg", "mart"))
-    first = group_failures(graph, [_fail("stg", run="r1"), _fail("mart", run="r1")])
-    opened = assign(first, {})
-    assert [g.root for g in opened.new] == ["stg"] and not opened.appended
-
-    second = group_failures(graph, [_fail("stg", run="r2")])
-    again = assign(second, {"stg": "INC-0001"})
-    assert not again.new
-    assert [(incident, g.root) for incident, g in again.appended] == [("INC-0001", "stg")]
-
-
-def test_a_new_root_next_to_an_open_incident_opens_its_own() -> None:
-    graph = _graph(("src", "a"), ("src", "b"))
-    result = assign(group_failures(graph, [_fail("a"), _fail("b")]), {"a": "INC-0001"})
-    assert [g.root for g in result.new] == ["b"]
-    assert [i for i, _ in result.appended] == ["INC-0001"]
 
 
 def test_grouping_ignores_event_order() -> None:

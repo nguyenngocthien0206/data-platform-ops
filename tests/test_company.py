@@ -27,12 +27,15 @@ from platform_ops.common.servers import clickhouse_client, connect_postgres
 from platform_ops.common.store import open_store, ops_table
 from platform_ops.cost.run import run_cost
 from platform_ops.cost.storage import StorageWatch
+from platform_ops.incidents.production import CompanyDesk
+from platform_ops.incidents.run import run_incidents
 from platform_ops.metadata.lineage import build_graph
 from platform_ops.metadata.manifest import Node, load_manifest
 from platform_ops.reconcile.parallel import ParallelRun
 from platform_ops.reconcile.report import write_report
 from platform_ops.simulation import raw_data
 from platform_ops.simulation.company import fingerprints, remove_company, run_company
+from platform_ops.simulation.faults import STOPS_LOADER
 from platform_ops.simulation.legacy_reports import report_names
 
 pytestmark = pytest.mark.integration
@@ -182,10 +185,23 @@ def test_every_load_is_recorded_with_its_range(company_warehouse: Settings) -> N
         "ingestion_loads",
     )
     assert {name for name, *_ in rows} == set(raw_data.TABLES)
-    for _, loads, with_range, until in rows:
-        # The first load and the fixed job's backfill read everything; every
-        # other daily load starts at a watermark.
-        assert (loads, with_range, until) == (days + 1, days - 1, _last_run(company_warehouse))
+    fixes = _store(
+        company_warehouse,
+        "SELECT table_name, fault_type FROM {} WHERE repaired_at IS NOT NULL",
+        "incident_faults",
+    )
+    resynced = {table: sum(1 for t, _ in fixes if t == table) for table, _ in fixes}
+    stopped = {table for table, kind in fixes if kind in STOPS_LOADER}
+    for table, loads, with_range, until in rows:
+        # The first load, the fixed job's backfill and every fix's resync read
+        # everything; every other daily load starts at a watermark, except on
+        # the nights a stopped loader skipped.
+        assert loads - with_range == 2 + resynced.get(table, 0), table
+        assert until == _last_run(company_warehouse), table
+        if table in stopped:
+            assert with_range < days - 1, table
+        else:
+            assert with_range == days - 1, table
 
 
 # -- freshness on simulated time --------------------------------------------------------------
@@ -304,20 +320,25 @@ def test_two_runs_leave_identical_data(
     short_parallel_run: dict[str, dict[str, Any]],
 ) -> None:
     """Every table and view in ClickHouse, by row count and content hash, every
-    legacy table in Postgres, the sign-off report and the cost report, after a
-    second run in its own namespace, parallel run and all. The cost report names
-    the namespaced tables and users, so it is compared with the namespace out."""
+    legacy table in Postgres, the sign-off, incident and cost reports, after a
+    second run in its own namespace, parallel run and production week and all.
+    The cost report names the namespaced tables and users, so it is compared
+    with the namespace out."""
     second = load_settings(
-        isolated_config(tmp_path, 0.01, weeks=2, namespace="t_twice_", overrides=short_parallel_run)
+        isolated_config(tmp_path, 0.01, weeks=3, namespace="t_twice_", overrides=short_parallel_run)
     )
     try:
         reconciliation = ParallelRun(second)
-        run_company(second, nightly=reconciliation, daily=StorageWatch(second))
+        run_company(
+            second, nightly=reconciliation, daily=StorageWatch(second), desk=CompanyDesk(second)
+        )
         reconciliation.finish()
         assert fingerprints(second) == fingerprints(company_warehouse)
         assert _legacy_fingerprints(second) == _legacy_fingerprints(company_warehouse)
         mine = company_warehouse.resolve(company_warehouse.paths.reports) / "reconciliation.md"
         assert write_report(second).read_bytes() == mine.read_bytes()
+        incidents = company_warehouse.resolve(company_warehouse.paths.reports) / "incidents.md"
+        assert run_incidents(second).report_path.read_bytes() == incidents.read_bytes()
         costs = [
             run_cost(s).report_path.read_text(encoding="utf-8").replace(s.company.namespace, "")
             for s in (company_warehouse, second)

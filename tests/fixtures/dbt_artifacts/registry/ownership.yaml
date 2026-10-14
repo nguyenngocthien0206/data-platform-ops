@@ -1,0 +1,17 @@
+datasets:
+  - match: "source.shop.*"
+    owner: dana
+    team: data
+    tier: important
+  - match: "model.shop.stg_*"
+    owner: dana
+    team: data
+    tier: important
+  - match: "model.shop.fct_*"
+    owner: fiona
+    team: finance
+    tier: critical
+  - match: "exposure.shop.*"
+    owner: fiona
+    team: finance
+    tier: critical
