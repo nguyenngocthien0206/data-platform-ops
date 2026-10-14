@@ -1,29 +1,30 @@
-"""Everything the dashboards read, as named SQL over the ``ops`` schema only.
+"""Everything the dashboards read, as named SQL over the ops store only (version 2.0).
 
-The dashboards are a window on what the modules already computed and stored
-(CLAUDE.md: module outputs are tables in ``ops``). They never read raw data or
-dbt models, never recompute a number, and never write. Keeping every query in
+The dashboards are a window on what the modules already computed and stored in
+the Postgres ops store (``common.store``). They never read the company's data,
+never recompute a number the report states, and never write: they connect as
+their own read-only role (``ensure_dashboard_role``). Keeping every query in
 this one module, with the tables it needs, makes that checkable: a test parses
 each query and fails on any table outside ``ops``.
 
-A table that does not exist yet means a module has not run. That is reported
-as :class:`MissingData` naming the command to run, not as a DuckDB error.
+Queries name the schema ``{ops}``, filled in with the namespaced ops schema at
+run time. A table that does not exist yet means a module has not run, which is
+reported as :class:`MissingData` naming the command to run, not as an error.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-import duckdb
 import pandas as pd
+from psycopg import sql
 
-from platform_ops.common.db import OPS_SCHEMA
+from platform_ops.common.config import Settings
 
 
 class MissingData(RuntimeError):
-    """A table the dashboard needs has not been produced yet."""
+    """Something the dashboard needs is not there yet: a table, a password, a server."""
 
 
 @dataclass(frozen=True)
@@ -34,140 +35,123 @@ class Query:
 
 # Which command produces each table, for the message when one is missing.
 PRODUCED_BY: dict[str, str] = {
-    "node_ownership": "make cost",
+    "query_": "make cost",
     "cost_": "make cost",
-    "incident": "make incidents",
-    "check_events": "make incidents",
-    "notifications": "make incidents",
-    "fault_incidents": "make incidents",
-    "reconcile_": "make reconcile",
 }
 
 QUERIES: dict[str, Query] = {
     # -- overview -----------------------------------------------------------------
+    "company_run": Query(
+        "SELECT window_start, days FROM {ops}.company_run",
+        ("company_run",),
+    ),
+    "ingestion": Query(
+        """SELECT count(*) AS loads, coalesce(sum(rows_read), 0) AS rows_read
+           FROM {ops}.ingestion_loads""",
+        ("ingestion_loads",),
+    ),
     "ownership_coverage": Query(
-        """SELECT resource_type, count(*) AS datasets, count(owner) AS owned,
-                  count(DISTINCT team) AS teams
-           FROM ops.node_ownership GROUP BY resource_type ORDER BY resource_type""",
+        """SELECT resource_type, count(*) AS datasets, count(DISTINCT team) AS teams,
+                  count(*) FILTER (WHERE tier = 'critical') AS critical
+           FROM {ops}.node_ownership GROUP BY resource_type ORDER BY resource_type""",
         ("node_ownership",),
     ),
     "owners_by_team": Query(
         """SELECT team, count(*) AS datasets,
                   count(*) FILTER (WHERE tier = 'critical') AS critical
-           FROM ops.node_ownership WHERE team IS NOT NULL
-           GROUP BY team ORDER BY datasets DESC, team""",
+           FROM {ops}.node_ownership GROUP BY team ORDER BY datasets DESC, team""",
         ("node_ownership",),
     ),
+    "lineage": Query(
+        "SELECT count(*) AS edges FROM {ops}.lineage_edges",
+        ("lineage_edges",),
+    ),
     # -- cost ---------------------------------------------------------------------
+    "cost_months": Query(
+        """SELECT month, days, compute_usd::float8 AS compute_usd,
+                  storage_usd::float8 AS storage_usd, stated_usd::float8 AS stated_usd,
+                  shared_usd::float8 AS shared_usd
+           FROM {ops}.cost_months ORDER BY month""",
+        ("cost_months",),
+    ),
     "showback": Query(
-        """SELECT team, pricing_model,
-                  CAST(production_usd AS DOUBLE) AS production_usd,
-                  CAST(consumption_usd AS DOUBLE) AS consumption_usd,
-                  CAST(total_usd AS DOUBLE) AS total_usd
-           FROM ops.cost_report_showback ORDER BY pricing_model, total_usd DESC, team""",
-        ("cost_report_showback",),
+        """SELECT month, team, model, cost_kind, actor_type, usd::float8 AS usd
+           FROM {ops}.cost_showback ORDER BY month, team, model, cost_kind, actor_type""",
+        ("cost_showback",),
     ),
-    "cost_by_month": Query(
-        """SELECT month, team, pricing_model, CAST(total_usd AS DOUBLE) AS total_usd
-           FROM ops.cost_by_team ORDER BY month, team""",
-        ("cost_by_team",),
+    "workload": Query(
+        """SELECT actor_type, count(*) AS queries, sum(bytes_scanned)::float8 AS bytes_read
+           FROM {ops}.query_log GROUP BY actor_type ORDER BY actor_type""",
+        ("query_log",),
     ),
-    "cost_by_workload": Query(
-        """SELECT workload, CAST(scan_usd AS DOUBLE) AS scan_usd,
-                  CAST(compute_usd AS DOUBLE) AS compute_usd,
-                  CAST(bytes_scanned AS DOUBLE) AS bytes_scanned,
-                  busy_seconds, billed_seconds
-           FROM ops.cost_report_pricing ORDER BY workload""",
-        ("cost_report_pricing",),
+    "business_case": Query(
+        """SELECT month, days, legacy_days, legacy_usd::float8 AS legacy_usd,
+                  clickhouse_usd::float8 AS clickhouse_usd,
+                  reconcile_usd::float8 AS reconcile_usd
+           FROM {ops}.cost_business_case ORDER BY month""",
+        ("cost_business_case",),
     ),
-    "top_models": Query(
-        """SELECT rank, relation, team, CAST(scan_usd AS DOUBLE) AS scan_usd,
-                  CAST(compute_usd AS DOUBLE) AS compute_usd
-           FROM ops.cost_report_models ORDER BY rank""",
-        ("cost_report_models",),
+    "business_summary": Query(
+        """SELECT cutover, legacy_monthly_usd::float8 AS legacy_monthly_usd,
+                  clickhouse_monthly_usd::float8 AS clickhouse_monthly_usd,
+                  monthly_saving_usd::float8 AS monthly_saving_usd,
+                  overlap_usd::float8 AS overlap_usd, payback_months::float8 AS payback_months
+           FROM {ops}.cost_business_summary""",
+        ("cost_business_summary",),
     ),
-    "unused_tables": Query(
+    "unused": Query(
         """SELECT lookback_days, relation, team, owner,
-                  CAST(monthly_saving_scan AS DOUBLE) AS monthly_saving_scan,
-                  CAST(monthly_saving_compute AS DOUBLE) AS monthly_saving_compute
-           FROM ops.cost_report_unused ORDER BY lookback_days, monthly_saving_compute DESC""",
-        ("cost_report_unused",),
+                  cluster_usd_month::float8 AS cluster_usd_month,
+                  scan_usd_month::float8 AS scan_usd_month,
+                  compute_usd_month::float8 AS compute_usd_month
+           FROM {ops}.cost_unused ORDER BY lookback_days, cluster_usd_month DESC, relation""",
+        ("cost_unused",),
     ),
     "hotspots": Query(
-        """SELECT table_name, column_name, reads, table_bytes, bytes_scanned,
-                  CAST(scan_usd AS DOUBLE) AS scan_usd
-           FROM ops.cost_report_hotspots ORDER BY bytes_scanned DESC""",
-        ("cost_report_hotspots",),
+        """SELECT table_name, column_name, reads, table_rows, rows_scanned, bytes_scanned,
+                  sorting_key, suggestion
+           FROM {ops}.cost_hotspots ORDER BY bytes_scanned DESC, table_name, column_name""",
+        ("cost_hotspots",),
     ),
     "incremental": Query(
-        """SELECT relation, team, candidate, CAST(compute_usd AS DOUBLE) AS compute_usd,
-                  array_to_string(sources, ', ') AS sources,
-                  array_to_string(blocked_by, ', ') AS blocked_by
-           FROM ops.cost_report_incremental ORDER BY candidate DESC, compute_usd DESC""",
-        ("cost_report_incremental",),
+        """SELECT rank, relation, team, cluster_usd::float8 AS cluster_usd, sources,
+                  blocked_by, candidate
+           FROM {ops}.cost_incremental ORDER BY rank""",
+        ("cost_incremental",),
     ),
-    # -- incidents ----------------------------------------------------------------
-    "incident_metrics": Query(
-        "SELECT metric, dimension, value FROM ops.incident_metrics ORDER BY metric, dimension",
-        ("incident_metrics",),
-    ),
-    "incidents": Query(
-        """SELECT i.incident_id, f.fault_id, i.root_node, i.severity, i.score, i.owner, i.team,
-                  i.naive_owner, i.opened_at, i.acknowledged_at, i.resolved_at, i.runs,
-                  i.failing_checks, i.previous_incident_id,
-                  date_diff('minute', i.opened_at, i.resolved_at) / 60.0 AS hours_to_resolve
-           FROM ops.incidents AS i
-           LEFT JOIN ops.fault_incidents AS f ON f.incident_id = i.incident_id
-           ORDER BY i.incident_id""",
-        ("incidents", "fault_incidents"),
-    ),
-    "check_events_by_kind": Query(
-        """SELECT check_type, count(*) AS failing_checks, count(DISTINCT incident_id) AS incidents
-           FROM ops.check_events GROUP BY check_type ORDER BY check_type""",
-        ("check_events",),
-    ),
-    "incident_runs": Query(
-        """SELECT run_at, selected_sources, checks_run, failing_checks, opened, appended
-           FROM ops.incident_runs ORDER BY run_at""",
-        ("incident_runs",),
-    ),
-    "notifications_by_kind": Query(
-        """SELECT kind, recipient, count(*) AS sent
-           FROM ops.notifications GROUP BY kind, recipient ORDER BY kind, recipient""",
-        ("notifications",),
+    "quotas": Query(
+        """SELECT user_name, team, active_days, p95_daily_bytes, max_query_bytes,
+                  daily_quota_bytes, query_limit_bytes, statements
+           FROM {ops}.cost_quotas ORDER BY user_name""",
+        ("cost_quotas",),
     ),
     # -- reconciliation -----------------------------------------------------------
-    "reconcile_tables": Query(
-        """SELECT engine, pass, table_name, source_rows, target_rows, row_match_rate, passed,
-                  summary_rows, fetched_rows, summary_rows + fetched_rows AS segmented_rows,
-                  naive_rows, queries
-           FROM ops.reconcile_tables ORDER BY engine, pass, table_name""",
-        ("reconcile_tables",),
+    "cutover": Query(
+        """SELECT recommended, night, run_at, clean_nights, required, parallel_nights
+           FROM {ops}.reconcile_cutover""",
+        ("reconcile_cutover",),
     ),
-    "reconcile_metrics": Query(
-        """SELECT engine, pass, metric, dimension, value
-           FROM ops.reconcile_metrics ORDER BY engine, pass, metric, dimension""",
-        ("reconcile_metrics",),
+    "nights": Query(
+        """SELECT night, run_at, job, backfilled, planted, repaired, level, name, passed,
+                  explained, source_rows, missing, extra, rows_with_diffs, row_match_rate,
+                  failures, differing_upstream, rows_moved, rows_moved_naive
+           FROM {ops}.reconcile_nights ORDER BY night, level DESC, name""",
+        ("reconcile_nights",),
     ),
-    "discrepancies_by_class": Query(
-        """SELECT engine, pass, table_name, class, count(*) AS discrepancies
-           FROM ops.reconcile_discrepancies
-           GROUP BY engine, pass, table_name, class
-           ORDER BY engine, pass, table_name, class""",
-        ("reconcile_discrepancies",),
+    "grades": Query(
+        """SELECT night, expected, detected, true_positives, correctly_classified
+           FROM {ops}.reconcile_grades ORDER BY night""",
+        ("reconcile_grades",),
     ),
-    "discrepancy_samples": Query(
-        """SELECT engine, pass, class, table_name, key, column_name, source_value, target_value
-           FROM (SELECT *, row_number() OVER (PARTITION BY engine, pass, class
-                                              ORDER BY table_name, key, column_name) AS n
-                 FROM ops.reconcile_discrepancies)
-           WHERE n <= 5 ORDER BY engine, pass, class, n""",
-        ("reconcile_discrepancies",),
+    "labels": Query(
+        "SELECT night, label, planted, found FROM {ops}.reconcile_labels ORDER BY night, label",
+        ("reconcile_labels",),
     ),
-    "reconcile_segments": Query(
-        """SELECT engine, pass, table_name, level, width, segments, differing
-           FROM ops.reconcile_segments ORDER BY engine, pass, table_name, level""",
-        ("reconcile_segments",),
+    "examples": Query(
+        """SELECT night, level, name, class, key, column_name, source_value, target_value
+           FROM {ops}.reconcile_examples
+           ORDER BY night, level DESC, name, class, key, column_name""",
+        ("reconcile_examples",),
     ),
 }
 
@@ -179,45 +163,55 @@ def producer(table: str) -> str:
     return "make demo"
 
 
-class Warehouse:
-    """A read-only view of the warehouse's ``ops`` schema.
+class Store:
+    """A read-only view of the ops store, as the dashboards' role.
 
-    Each call opens and closes its own read-only connection, so a dashboard left
-    open never holds a lock that would stop the next ``make`` run.
+    Each call opens and closes its own connection, so a dashboard left open
+    never holds a lock or a session that would get in the next run's way.
     """
 
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.schema = settings.company.name(settings.company.ops_schema)
 
-    def _connect(self) -> duckdb.DuckDBPyConnection:
-        if not self.path.is_file():
-            raise MissingData(f"No warehouse at {self.path}. Run `make demo` first.")
-        return duckdb.connect(str(self.path), read_only=True)
+    def _connect(self) -> Any:
+        from platform_ops.common.servers import MissingPasswordError
+        from platform_ops.common.store import connect_dashboard
 
-    @staticmethod
-    def _tables(connection: duckdb.DuckDBPyConnection) -> set[str]:
-        rows = connection.execute(
-            "SELECT table_name FROM duckdb_tables() WHERE schema_name = ?", [OPS_SCHEMA]
-        ).fetchall()
-        return {str(r[0]) for r in rows}
+        try:
+            return connect_dashboard(self.settings)
+        except MissingPasswordError as error:
+            raise MissingData(f"No password for the dashboards: {error}.") from error
+        except Exception as error:  # the server is down, or the role is not there yet
+            raise MissingData(
+                f"Cannot reach the ops store as the dashboards' role ({type(error).__name__}). "
+                "Run `make up`, then `make demo`, which creates the role."
+            ) from error
 
     def frame(self, name: str) -> pd.DataFrame:
         query = QUERIES[name]
         connection = self._connect()
         try:
-            present = self._tables(connection)
+            present = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema = %s",
+                    [self.schema],
+                ).fetchall()
+            }
             missing = [t for t in query.tables if t not in present]
             if missing:
                 commands = sorted({producer(t) for t in missing})
                 raise MissingData(
                     f"ops.{', ops.'.join(missing)} not found. Run `{'` and `'.join(commands)}`."
                 )
-            result: Any = connection.execute(query.sql).df()
-            return pd.DataFrame(result)
+            cursor = connection.execute(sql.SQL(query.sql).format(ops=sql.Identifier(self.schema)))
+            columns = [column.name for column in cursor.description or []]
+            return pd.DataFrame(cursor.fetchall(), columns=columns)
         finally:
             connection.close()
 
-    def metric(self, frame: pd.DataFrame, metric: str, dimension: str = "all") -> float | None:
-        """One value from a long-form metrics frame, or ``None``."""
-        rows = frame[(frame["metric"] == metric) & (frame["dimension"] == dimension)]
-        return None if rows.empty else float(rows["value"].iloc[0])
+
+def metric(frame: pd.DataFrame, column: str) -> Any:
+    """The single value of a one-row frame's column, or ``None``."""
+    return None if frame.empty else frame[column].iloc[0]

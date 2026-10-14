@@ -202,7 +202,7 @@ def company_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Sett
     Through the real CLI: ``company run`` (seed Postgres, backfill ClickHouse,
     then each day's data, ingestion and a dbt build on the first day; the
     second week is the parallel run, built and reconciled every night), then
-    ``metadata check``. Every test that only reads a built company uses this
+    ``metadata check`` and ``cost report``. Every test that only reads a built company uses this
     one, because it is the most expensive thing the suite builds.
     """
     from typer.testing import CliRunner
@@ -221,7 +221,7 @@ def company_warehouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Sett
     patch.setenv(CONFIG_PATH_ENV_VAR, str(settings_path))
     runner = CliRunner()
     try:
-        for command in (["company", "run"], ["metadata", "check"]):
+        for command in (["company", "run"], ["metadata", "check"], ["cost", "report"]):
             result = runner.invoke(app, command)
             assert result.exit_code == 0, f"{' '.join(command)} failed:\n{result.output}"
     finally:

@@ -36,7 +36,14 @@ from psycopg import sql
 from platform_ops.common.config import Settings
 from platform_ops.common.dbt_invoke import invocation_from_settings, run_dbt
 from platform_ops.common.servers import clickhouse_client, connect_postgres
-from platform_ops.common.store import open_store, ops_table, replace_ops_table
+from platform_ops.common.store import (
+    dashboard_password,
+    drop_dashboard_role,
+    ensure_dashboard_role,
+    open_store,
+    ops_table,
+    replace_ops_table,
+)
 from platform_ops.common.tagging import Tag, current_run, start_run
 from platform_ops.simulation import raw_data
 from platform_ops.simulation.access import DBT_LAYERS, drop_users, ensure_users
@@ -75,9 +82,12 @@ def start_over(settings: Settings, legacy: LegacyCompany, ingestion: Ingestion) 
     """Users, then seed Postgres, empty ClickHouse, backfill raw.
 
     Returns (rows seeded, rows ingested). The users come first, so a missing
-    password stops the run before anything is written.
+    password stops the run before anything is written: the dashboards' read-only
+    role on the ops store, then the company's ClickHouse users.
     """
+    dashboard_password(settings)
     ensure_users(settings)
+    ensure_dashboard_role(settings)
     seeded = sum(legacy.seed().values())
     client = clickhouse_client(settings)
     try:
@@ -108,6 +118,7 @@ def remove_company(settings: Settings) -> None:
     finally:
         client.close()
     drop_users(settings)
+    drop_dashboard_role(settings)
     for dbname, schemas in (
         (None, (company.legacy_schema, company.reporting_schema)),
         (company.ops_database, (company.ops_schema,)),

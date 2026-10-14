@@ -25,12 +25,12 @@ from playwright.sync_api import ConsoleMessage, Page, Response, sync_playwright
 PAGES = [
     ("overview", "/"),
     ("cost", "/cost"),
-    ("incidents", "/incidents"),
     ("reconciliation", "/reconciliation"),
 ]
 THEMES = ("light", "dark")
 VIEWPORT = {"width": 1440, "height": 900}
 LOAD_TIMEOUT_MS = 60_000
+STABLE_MS = 750
 
 
 @dataclass
@@ -53,6 +53,13 @@ def _wait_until_rendered(page: Page) -> None:
         timeout=LOAD_TIMEOUT_MS,
     )
     page.wait_for_selector('[data-testid="stMainBlockContainer"] h1', timeout=LOAD_TIMEOUT_MS)
+    # st.navigation runs app.py, then the page, and the app reports "not running"
+    # for a moment in between, which a cold first load can land on: the script
+    # is only done once it stays done.
+    idle = '[data-testid="stApp"][data-test-script-state="notRunning"]'
+    for _ in range(2):
+        page.wait_for_timeout(STABLE_MS)
+        page.wait_for_selector(idle, timeout=LOAD_TIMEOUT_MS)
     # Vega draws each chart into a canvas or an svg after its data arrives.
     page.wait_for_function(
         """() => [...document.querySelectorAll('[data-testid="stVegaLiteChart"]')]

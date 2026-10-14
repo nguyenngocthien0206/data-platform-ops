@@ -1,118 +1,155 @@
-"""Reconciliation: the sign-off verdict, what differs, and what the diff cost."""
+"""Reconciliation: the parallel run night by night, and the cutover it led to."""
 
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 from platform_ops.dashboard import charts, page
+from platform_ops.dashboard.queries import metric
 
 st.title("Migration reconciliation")
 st.caption(
-    "Legacy tables migrated into Iceberg and compared with a segmented checksum diff, against "
-    "thresholds fixed before the run. See `reports/reconciliation.md` for the sign-off document."
+    "Every night of the parallel run, the legacy Postgres tables and reports were compared "
+    "with ClickHouse's raw tables and dbt marts, against thresholds fixed before the run. "
+    "The sign-off is `reports/reconciliation.md`."
 )
 colors = page.colors()
-PASS_LABEL = {"as_delivered": "The job as delivered", "fixed": "The job after fixing its defects"}
 
-tables = page.frame("reconcile_tables")
-if tables is not None:
-    engines = sorted(tables["engine"].unique())
-    engine = st.selectbox("Legacy engine", engines) if len(engines) > 1 else engines[0]
-    chosen_pass = (
-        st.segmented_control(
-            "Run", list(PASS_LABEL), default="as_delivered", format_func=PASS_LABEL.get, key="pass"
+
+def events(row: pd.Series) -> str:
+    """What happened on a night besides the comparison, in words."""
+    said = ["the job as delivered" if row["job"] == "delivered" else "the fixed job"]
+    if row["backfilled"]:
+        said.append("raw backfilled")
+    if row["planted"]:
+        said.append(f"fault {row['planted']} planted")
+    if row["repaired"]:
+        said.append(f"fault {row['repaired']} repaired")
+    return ", ".join(said)
+
+
+cutover = page.frame("cutover")
+if cutover is not None and not cutover.empty:
+    a, b, c = st.columns(3)
+    if bool(metric(cutover, "recommended")):
+        a.markdown(
+            ":green[:material/check_circle: **Cutover recommended**]  \n"
+            f"on {metric(cutover, 'run_at'):%Y-%m-%d}"
         )
-        or "as_delivered"
+    else:
+        a.markdown(":red[:material/cancel: **Cutover not recommended**]")
+    b.metric(
+        "Clean nights in a row",
+        f"{int(metric(cutover, 'clean_nights'))} of {int(metric(cutover, 'required'))}",
     )
-    mine = tables[(tables["engine"] == engine) & (tables["pass"] == chosen_pass)]
+    c.metric("Nights compared", int(metric(cutover, "parallel_nights")))
 
-    st.subheader("Verdict")
-    verdicts = st.columns(len(mine) or 1)
-    for column, row in zip(verdicts, mine.itertuples(), strict=False):
-        with column:
-            st.markdown(f"**{row.table_name}**  \n{page.status(bool(row.passed))}")
-            st.metric("Row match", f"{row.row_match_rate:.3%}", label_visibility="visible")
-
-    metrics = page.frame("reconcile_metrics")
-    if metrics is not None:
-        m = metrics[(metrics["engine"] == engine) & (metrics["pass"] == chosen_pass)]
-
-        def value(name: str) -> float:
-            rows = m[(m["metric"] == name) & (m["dimension"] == "all")]["value"]
-            return float(rows.iloc[0]) if not rows.empty else 0.0
-
-        st.subheader("Detection against ground truth")
-        a, b, c, d = st.columns(4)
-        a.metric("Planted discrepancies", f"{value('expected'):,.0f}")
-        b.metric("Recall", f"{value('recall'):.2%}")
-        c.metric("Precision", f"{value('precision'):.2%}")
-        d.metric("Classified correctly", f"{value('classification_accuracy'):.2%}")
-
-        columns = m[m["metric"] == "column_match_rate"].rename(
-            columns={"dimension": "column", "value": "match_rate"}
-        )[["column", "match_rate"]]
-        below = columns[columns["match_rate"] < 1]
-        if not below.empty:
-            with st.expander(f"{len(below)} columns below 100%"):
-                st.dataframe(
-                    below.style.format({"match_rate": "{:.3%}"}), hide_index=True, width="stretch"
-                )
-
-    classes = page.frame("discrepancies_by_class")
-    if classes is not None:
-        st.subheader("Discrepancies by class")
-        mine_classes = classes[(classes["engine"] == engine) & (classes["pass"] == chosen_pass)]
-        pivot = mine_classes.pivot_table(
-            index="class",
-            columns="table_name",
-            values="discrepancies",
-            fill_value=0,
-            aggfunc="sum",
+nights = page.frame("nights")
+grades = page.frame("grades")
+if nights is not None and not nights.empty:
+    first = int(nights["night"].min())
+    nights = nights.assign(
+        n=nights["night"] - first + 1,
+        date=nights["run_at"].dt.strftime("%Y-%m-%d"),
+        pair=nights["level"] + ": " + nights["name"],
+    )
+    nights["status"] = [
+        "passed"
+        if passed
+        else ("differs, cause upstream" if level == "report" and explained else "failed")
+        for passed, level, explained in zip(
+            nights["passed"], nights["level"], nights["explained"].fillna(False), strict=True
         )
-        st.dataframe(pivot, width="stretch")
+    ]
+    nights["detail"] = [
+        upstream if status == "differs, cause upstream" else (failures or "")
+        for status, upstream, failures in zip(
+            nights["status"], nights["differing_upstream"], nights["failures"], strict=True
+        )
+    ]
+    per_night = nights.drop_duplicates("n").set_index("n")
 
-    samples = page.frame("discrepancy_samples")
-    if samples is not None:
-        with st.expander("Sample rows per class"):
-            st.dataframe(
-                samples[(samples["engine"] == engine) & (samples["pass"] == chosen_pass)].drop(
-                    columns=["engine", "pass"]
-                ),
-                hide_index=True,
-                width="stretch",
-            )
-
-    st.subheader("Rows moved: segmented diff against a naive copy")
+    st.subheader("Night by night")
     st.caption(
-        "A systematic defect makes nearly every segment differ, so the first run moves about as "
-        "much as a full copy. Once the job is fixed, only the few differing segments are opened."
+        "A cell per night and compared pair. A report that differs only because a table it is "
+        "built from differs the same night is explained by lineage; anything else fails."
     )
-    page.chart(
-        charts.accent_against_grey(
-            mine,
-            "table_name",
-            "segmented_rows",
-            "naive_rows",
-            ("Segmented diff", "Naive copy"),
-            colors,
-        ),
-        mine[
-            [
-                "table_name",
-                "summary_rows",
-                "fetched_rows",
-                "segmented_rows",
-                "naive_rows",
-                "queries",
-            ]
-        ],
+    grid = nights[["n", "date", "pair", "status", "detail"]].rename(columns={"n": "night"})
+    page.chart(charts.night_grid(grid, colors), grid, "Every cell")
+    timeline = pd.DataFrame(
+        {
+            "night": per_night.index,
+            "date": per_night["date"],
+            "what happened": [events(row) for _, row in per_night.iterrows()],
+        }
     )
+    with st.expander("What happened each night"):
+        st.dataframe(timeline, hide_index=True, width="stretch")
 
-    segments = page.frame("reconcile_segments")
-    if segments is not None:
-        with st.expander("Segments per level"):
-            st.dataframe(
-                segments[(segments["engine"] == engine) & (segments["pass"] == chosen_pass)],
-                hide_index=True,
-                width="stretch",
+    st.subheader("One night in detail")
+    chosen = st.select_slider(
+        "Night",
+        options=list(per_night.index),
+        value=int(per_night.index[0]),
+        format_func=lambda n: f"{n} ({per_night.loc[n, 'date']})",
+    )
+    st.caption(events(per_night.loc[chosen]).capitalize() + ".")
+    if grades is not None:
+        grade = grades[grades["night"] == chosen + first - 1]
+        if not grade.empty:
+            row = grade.iloc[0]
+            expected, detected, hits = (
+                int(row["expected"]),
+                int(row["detected"]),
+                int(row["true_positives"]),
             )
+            a, b, c, d = st.columns(4)
+            a.metric("Planted", f"{expected:,}")
+            b.metric("Recall", f"{hits / expected:.2%}" if expected else "nothing planted")
+            c.metric("Precision", f"{hits / detected:.2%}" if detected else "nothing found")
+            d.metric(
+                "Classified correctly",
+                f"{int(row['correctly_classified']) / hits:.2%}" if hits else "n/a",
+            )
+    tonight = nights[(nights["n"] == chosen) & (nights["status"] != "passed")]
+    if tonight.empty:
+        st.markdown(":green[:material/check_circle: Every table and report within thresholds.]")
+    else:
+        page.table(
+            tonight[
+                ["pair", "status", "source_rows", "missing", "extra", "rows_with_diffs", "detail"]
+            ],
+            counts=("source_rows", "missing", "extra", "rows_with_diffs"),
+        )
+    labels = page.frame("labels")
+    if labels is not None:
+        found = labels[labels["night"] == chosen + first - 1].drop(columns=["night"])
+        if not found.empty:
+            with st.expander("Planted against found, by kind"):
+                page.table(found, counts=("planted", "found"))
+    examples = page.frame("examples")
+    if examples is not None:
+        mine = examples[examples["night"] == chosen + first - 1].drop(columns=["night"])
+        if not mine.empty:
+            with st.expander(f"Examples ({len(mine)})"):
+                st.dataframe(mine, hide_index=True, width="stretch")
+
+    st.subheader("What the comparison moved")
+    st.caption(
+        "Rows read to compare each night: the segmented checksum diff only fetches the "
+        "segments whose checksums differ; a naive comparison moves every row of both sides."
+    )
+    moved = nights.groupby("n", as_index=False)[["rows_moved", "rows_moved_naive"]].sum()
+    page.chart(
+        charts.accent_lines(
+            moved.rename(columns={"n": "night"}),
+            "night",
+            "rows_moved",
+            "rows_moved_naive",
+            ("Segmented diff", "Naive comparison"),
+            colors,
+            log=True,
+        ),
+        moved.rename(columns={"n": "night"}),
+    )

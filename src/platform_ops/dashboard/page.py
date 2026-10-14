@@ -1,8 +1,8 @@
-"""Helpers every dashboard page shares: settings, the warehouse, the theme."""
+"""Helpers every dashboard page shares: settings, the ops store, the theme."""
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
 
 import altair as alt
 import pandas as pd
@@ -10,9 +10,11 @@ import streamlit as st
 
 from platform_ops.common.config import Settings, load_settings
 from platform_ops.dashboard.charts import Palette, palette
-from platform_ops.dashboard.queries import MissingData, Warehouse
+from platform_ops.dashboard.queries import MissingData, Store
 from platform_ops.metadata.registry import Registry
 
+# The store can be watched while a run is still writing it (a parallel run's
+# nights land one by one), so cached frames expire quickly.
 REFRESH_SECONDS = 30
 
 
@@ -22,20 +24,16 @@ def settings() -> Settings:
     return load_settings()
 
 
-def warehouse() -> Warehouse:
-    current = settings()
-    return Warehouse(Path(current.resolve(current.paths.duckdb)))
-
-
 @st.cache_data(ttl=REFRESH_SECONDS, show_spinner=False)
-def _frame(path: str, name: str) -> pd.DataFrame:
-    return Warehouse(Path(path)).frame(name)
+def _frame(root: str, name: str) -> pd.DataFrame:
+    del root  # part of the cache key only: one entry per configuration
+    return Store(settings()).frame(name)
 
 
 def frame(name: str) -> pd.DataFrame | None:
     """A named query's result, or ``None`` after telling the reader what to run."""
     try:
-        return _frame(str(warehouse().path), name)
+        return _frame(str(settings().root), name)
     except MissingData as missing:
         st.info(str(missing), icon=":material/info:")
         return None
@@ -53,12 +51,39 @@ def colors() -> Palette:
 
 
 def chart(figure: alt.Chart | alt.LayerChart, data: pd.DataFrame, label: str = "Data") -> None:
-    """A chart with its data table beside it (the relief for low-contrast slots)."""
+    """A chart with its data table under it (the relief for low-contrast slots)."""
     st.altair_chart(figure, width="stretch")
     with st.expander(label):
         st.dataframe(data, hide_index=True, width="stretch")
 
 
-def status(passed: bool) -> str:
-    """A verdict as icon, word and colour together, never colour alone."""
-    return ":green[:material/check_circle: PASS]" if passed else ":red[:material/cancel: FAIL]"
+def usd(value: float) -> str:
+    """Money as the cost report writes it: cents above a dollar, four places below."""
+    return f"${value:,.2f}" if abs(value) >= 1 or value == 0 else f"${value:.4f}"
+
+
+def size(value: float) -> str:
+    """Bytes in MB below a gigabyte and in GB above, as the cost report writes them."""
+    return f"{value / 10**6:,.1f} MB" if value < 10**9 else f"{value / 10**9:,.2f} GB"
+
+
+def table(
+    data: pd.DataFrame,
+    counts: tuple[str, ...] = (),
+    dollars: tuple[str, ...] = (),
+    cents: tuple[str, ...] = (),
+) -> None:
+    """A data table with counts grouped by thousands and money as money.
+
+    ``dollars`` show cents; ``cents`` (amounts that are often below a dollar,
+    such as a month's saving) show four places, as the cost report does.
+    """
+    config: dict[str, Any] = {c: st.column_config.NumberColumn(format="localized") for c in counts}
+    config.update({c: st.column_config.NumberColumn(format="$%.2f") for c in dollars})
+    config.update({c: st.column_config.NumberColumn(format="$%.4f") for c in cents})
+    st.dataframe(data, hide_index=True, width="stretch", column_config=config)
+
+
+def caption(text: str) -> None:
+    """A caption whose dollar signs stay dollar signs (two of them start LaTeX)."""
+    st.caption(text.replace("$", r"\$"))

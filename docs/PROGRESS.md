@@ -6,13 +6,24 @@ Last updated: 2026-10-14
 
 ## Current phase
 
-Phase 13a: Cost attribution and FinOps on ClickHouse's query log (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a, 11b and 12 are merged (PRs #15, #16 and #17). Phase 13b (the Streamlit dashboards on the ops store) follows.
-Branch: `phase-13-cost` (off `main` at `49d3050`).
+Phase 13b: the Streamlit dashboards on the Postgres ops store (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a to 13a are merged (PRs #15 to #18).
+Branch: `phase-13b-dashboards` (off `main` at `3ab2d22`).
 
 Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
 
+- Phase 13b implemented (branch `phase-13b-dashboards`, uncommitted):
+  - **The cost report stores everything it states**: `ops.cost_months`, `cost_business_case`, `cost_business_summary`, `cost_unused`, `cost_hotspots`, `cost_incremental`, `cost_quotas`, written from the same data as `reports/cost.md`.
+  - **A read-only role for the dashboards** (`common/store.py`): `dashboard`, `SELECT` on the ops schema (default privileges cover the tables every run recreates), read-only sessions by default, its password from `POSTGRES_PASSWORD_DASHBOARD` with no default. `company run` checks the password before writing anything and creates the role after the ClickHouse users; `remove_company` drops it.
+  - **The data layer reads Postgres** (`dashboard/queries.py`: `Store`, queries against `{ops}`, a missing table names its command, a missing password or server says what to do).
+  - **Three pages**: Overview (the run, one headline per module, ownership), Cost (model switch, showback by team and month, by workload, the business case, the four recommendation tabs), Reconciliation (the verdict, the 42-night grid against the 21 pairs, one night in detail, rows moved segmented against naive). The Incidents page is removed until Phase 14.
+  - `make dashboard` runs again; `scripts/check_dashboards.py` checks the three pages and waits for a page to stay rendered.
+  - dashboards README rewritten; later notes on ADR 0016; SPEC 13b note; root README.
+- Phase 13b verification:
+  - `make lint` clean. `make docker-test`: 387 passed, 6 skipped (incidents until Phase 14), 6 min 48 s; the dashboard tests render every page on the shared test company and check the role.
+  - `make docker-clean docker-demo` at scale 1.0: 44 min 51 s and 44 min 35 s. Two clean runs: 184 of 185 relations identical, the seven new cost tables and the dashboard role's 24 grants included; `ops.company_run` differs by its random run id, as in 13a. `cost.md` and `reconciliation.md` byte-identical, and `cost.md` identical to 13a's.
+  - `make docker-browser-check` on the demo: 6 of 6 page loads (three pages, light and dark), and twice more from a cold dashboard; every screenshot read.
 - Phase 13a implemented (branch `phase-13-cost`, uncommitted):
   - **Every query the company runs is tagged** (`common/tagging.py`) through ClickHouse's `log_comment`: run, simulated time, kind of work (dbt, ingestion, maintenance, reconcile, dashboard, ad hoc), subject and person. dbt carries it through its profile's `custom_settings` (`PLATFORM_OPS_LOG_COMMENT`), the others per query.
   - **The company's days gained** the nightly merge of raw (`OPTIMIZE TABLE ... FINAL`, `ops.raw_maintenance`), the record of in-place source changes (`ops.source_changes`), the daily workload (`simulation/workload.py`: every Metabase card on its refresh schedule as `metabase`, ad hoc SQL per person as their team's user, `FORMAT Null`, one thread) and month-end storage snapshots (`cost/storage.py`, `ops.storage_snapshots`).
@@ -144,9 +155,23 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 
 ## In progress
 
-Phase 13a, waiting for the owner's review and commits.
+Phase 13b, waiting for the owner's review and commits.
 
 ## Decisions made
+
+### Phase 13b (owner, at planning, 2026-10-14)
+
+1. **The Incidents page is hidden until Phase 14**, when the incident module moves to the store. The 1.x page file is deleted rather than left broken (it is in git and at `v1.2.0`).
+2. **The dashboards read as their own read-only Postgres role**, with its own password and no default, like the company's ClickHouse users.
+3. **The Reconciliation page is a timeline** of the 42 nights against the 21 pairs, with one night in detail.
+4. **The Cost page has four views**: showback by team and month with a model switch, by workload, the business case, and what to change.
+
+### Phase 13b, made during implementation
+
+- **Everything the cost report states is stored**, so the pages never recompute: the business case and the recommendations were only computed at render time before.
+- **Status is a fixed status colour plus a glyph** on the reconciliation grid (✕ failed, ↑ a report whose difference comes from an upstream table), never a team colour and never colour alone.
+- **The browser check found three presentation bugs no assertion caught**: two dollar amounts in one caption became a LaTeX formula (dollar signs are now escaped), axis labels were cut off or every other row label dropped (wider label limits, taller grid rows), and rounded cells left dark dots where four corners met (band padding instead).
+- **The browser check waits for a page to stay rendered**: Streamlit reports a page done for a moment between `app.py` and the page, and the first cold load of the overview landed on it once.
 
 ### Phase 13 (owner, at planning, 2026-10-13)
 
@@ -434,7 +459,7 @@ For version 2.0:
 - At scale 1.0 an incremental build is not faster than a full refresh (30 s against 26 s): about 290 nodes of fixed overhead dominate. In bytes read the incremental marts save 77%, but `int_order_items_enriched` and `int_sessions_enriched` read all of raw on every build, because staging is a view over raw sorted by key. A skip index on raw's `updated_at`, or materialized staging for the event tables, would fix it; not done, so the 2.0 numbers stay comparable.
 - `readme-check` on the cost README finds six numbers not in `cost.md`, all derived on purpose: the incremental models' bytes read per build (from `ops.query_log`) and the unused tables' monthly total. Phase 15, which brings `readme-check` back, decides whether the report prints them.
 - The nightly merge of raw is a quarter of the cluster's compute in the cost report. It is what makes reads repeat; a real team would merge less often or deduplicate with `argMax` in staging.
-- The dashboard, browser-check and incident targets fail by design until their phase (exit 2 with the reason).
+- The incident target fails by design until Phase 14 (exit 2 with the reason).
 
 Kept on purpose (design limits, documented in the ADRs):
 
@@ -444,11 +469,7 @@ Kept on purpose (design limits, documented in the ADRs):
 - The alert storm is modest: 18 failing checks for 8 faults. The volume drop is the one fault with a real cascade (5 checks).
 - Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0008).
 
-Found by the Phase 7 browser check, stated as known limits in `dashboards/README.md` and ADR 0012 (presentation only; reports are unaffected):
-
-- Cost page, "By month": the x axis repeats month labels (two ticks per month), and the last point is April, of which the 13-week window from 5 January covers only a few days, so every line drops at the end without saying why.
-- Incidents page, "Timeline": every x-axis tick reads "12 PM"; the dates are only in the tooltips.
-- Overview "Ownership" and Incidents "Nights dbt ran": narrow columns cut off the last table column (coverage, failing checks); it is reachable by scrolling the table.
+The Phase 7 browser check's limits are gone with the 1.x pages (Phase 13b): the monthly chart names each month with the days the window covers in it, and the Incidents page returns in Phase 14.
 
 From Phase 11b (presentation only):
 
@@ -465,6 +486,6 @@ None open.
 
 ## Next step
 
-1. The owner reviews Phase 13a, commits it in the proposed sequence, and merges.
-2. Plan Phase 13b: the Streamlit dashboards back, reading the Postgres ops store (overview, cost with showback and the business case, reconciliation), with the browser check.
+1. The owner reviews Phase 13b, commits it in the proposed sequence, and merges.
+2. Plan Phase 14: incidents on real dbt runs, with the Postgres incident store, the orchestrator integrations and the Incidents page back.
 3. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).

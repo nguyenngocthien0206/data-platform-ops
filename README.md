@@ -23,7 +23,7 @@ Version 1.x (up to [`v1.2.0`](https://github.com/nguyenngocthien0206/data-platfo
 | Metabase dashboards built from the exposures, one ClickHouse user per team | running | 11b, done |
 | Reconciliation: a six-week parallel run, tables and reports every night, and the cutover sign-off | running | 12, done |
 | Cost and FinOps on ClickHouse's query log: the cluster's bill per team, the migration's business case, BigQuery and Snowflake on the same workload | running | 13a, done |
-| The Streamlit dashboards on the ops store | paused | 13b |
+| The Streamlit dashboards on the ops store, read as their own read-only role | running | 13b, done |
 | Incidents on real dbt runs | paused | 14 |
 | Documentation and release 2.0.0 | | 15 |
 
@@ -100,6 +100,7 @@ make up                   # Postgres (legacy and ops store) and ClickHouse
 make demo                 # the company's 91 days with the parallel run, ownership, lineage, cost
 make reconcile            # the cutover sign-off, reports/reconciliation.md
 make cost                 # who spends what on ClickHouse, reports/cost.md
+make dashboard            # the toolkit's results on http://localhost:8501
 make metabase             # the company's BI on http://localhost:3000, 12 dashboards
 make paused               # the 1.x modules not moved yet, and when they return
 make test                 # unit and integration tests
@@ -140,6 +141,8 @@ From the verification of each phase at the default scale, in the container on on
 **The migration is signed off the way a data owner would sign it.** Over the 42-night parallel run, the delivered job failed its first compared night with 476,961 shifted timestamps, 26,335 amounts a cent short, 351 trimmed emails and 74 lost sessions, all found and classified. The fixed job shipped a week later, seven one-off faults were each found the night they landed, and the cutover was recommended on 2026-03-30, after 14 clean nights in a row. Across the run, 3,576,917 planted discrepancies were all detected and correctly classified, no report differed without a cause in its upstream tables, and on matching nights the segmented diff moved 11,200 rows instead of 378,892,260. Building the comparison had already found two places where the new marts disagreed with the legacy reports (a ratio truncated instead of rounded, and 0 where the old report said "none"), which is the kind of thing a finance user would otherwise have found in the first week after cutover ([reconcile](src/platform_ops/reconcile/README.md)).
 
 **The bill is split the way finance can check it.** The cluster's stated cost over the 91 days, $973.02 at public list prices for one node and 500 GB, is shared out by the bytes each of 25,549 queries read and the size of each table, and the shares add up to it exactly. Each query is tagged with who ran it and why, so a dashboard refresh lands on the dashboard's owner and an ad hoc query on the person's team. What the split shows is not what a team would guess: 687 ad hoc queries took $137.51 of the cluster and 10,192 dashboard refreshes $3.12, while on Snowflake the same dashboards would cost $167.90 in idle warehouse time. The nightly merge of raw, which makes those reads repeat between runs, is a quarter of the compute, and the first line to make cheaper. The migration retires a reporting replica of $577.50 a month for a cluster of $320.32, and the saving pays back the cost of running both until cutover in 3.5 months ([cost](src/platform_ops/cost/README.md), [ADR 0018](docs/adr/0018-finops-on-a-self-managed-clickhouse.md)).
+
+**The results are on a page, read the way the BI is.** The Streamlit app shows the run, the bill and the parallel run night by night, reading the ops store as its own read-only role, the same rule the company's ClickHouse users follow: nobody reads as the admin. It recomputes nothing; everything the cost report states is stored for it. A headless browser opens every page in both themes after a demo, and its screenshots caught three things no assertion would have, from a caption that turned two dollar amounts into a formula to grid labels Vega silently dropped ([dashboards](dashboards/README.md)).
 
 **Incremental pays only where the layout lets it.** At this size an incremental build takes about as long as a full refresh, because about 290 dbt nodes of fixed overhead dominate. Bytes read tell the real story: the two incremental marts read 77% less in their last build than in their first, while the two incremental intermediate models read more with every build, because they filter staging views over raw, and raw is sorted by its key, not by date. An `incremental` setting is a promise; the sort key decides whether ClickHouse keeps it.
 
@@ -189,7 +192,7 @@ config/            settings, teams and the ownership registry
 dbt/               the company's dbt project on ClickHouse
 src/platform_ops/  common, metadata, simulation (the company, its legacy Postgres and
                    the ingestion), cost, incidents, reconcile, dashboard
-dashboards/        the Streamlit app (paused until Phase 13b)
+dashboards/        the Streamlit app over the ops store
 scripts/           vendor fixtures, README check, browser checks of the dashboards and of
                    Metabase, release notes
 tests/             unit, integration and contract tests

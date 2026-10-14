@@ -70,7 +70,6 @@ def _fail(message: str, code: int = 1) -> NoReturn:
 # no longer exists, so its command says when it returns instead of failing
 # somewhere deep inside. 1.x is available at tag v1.2.0.
 PAUSED_UNTIL: dict[str, int] = {
-    "dashboard": 13,
     "incidents": 14,
 }
 
@@ -98,7 +97,7 @@ def _start(name: str) -> tuple[Settings, SimulatedClock]:
 
 
 def _missing_passwords(error: Exception) -> NoReturn:
-    _fail(f"the company's ClickHouse users need their passwords: {error}", EXIT_UNUSABLE)
+    _fail(f"the company's users and roles need their passwords: {error}", EXIT_UNUSABLE)
 
 
 def _manifest(settings: Settings, parse: bool) -> Path:
@@ -335,16 +334,22 @@ def _wait_until_healthy(url: str, process: Any, timeout: float) -> bool:
 
 @app.command()
 def dashboard(port: int = PORT_OPTION, headless: bool = HEADLESS_OPTION) -> None:
-    """Launch the Streamlit dashboards (read-only over the ops schema)."""
-    _check_paused("dashboard")
+    """Launch the Streamlit dashboards (read-only over the ops store)."""
     import os
     import subprocess
     import sys
     import webbrowser
 
     from platform_ops.common.config import CONFIG_PATH_ENV_VAR
+    from platform_ops.common.servers import MissingPasswordError
+    from platform_ops.common.store import dashboard_password
 
     settings, _ = _start("dashboard")
+    try:
+        # Checked before Streamlit starts: the pages read as the dashboards' role.
+        dashboard_password(settings)
+    except MissingPasswordError as error:
+        _missing_passwords(error)
     # The dashboards ship with the repo, next to src/; the config may live elsewhere.
     repo = Path(__file__).resolve().parents[2]
     app_path = repo / "dashboards" / "app.py"
