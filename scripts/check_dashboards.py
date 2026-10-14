@@ -25,6 +25,7 @@ from playwright.sync_api import ConsoleMessage, Page, Response, sync_playwright
 PAGES = [
     ("overview", "/"),
     ("cost", "/cost"),
+    ("incidents", "/incidents"),
     ("reconciliation", "/reconciliation"),
 ]
 THEMES = ("light", "dark")

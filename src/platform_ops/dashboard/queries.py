@@ -37,6 +37,8 @@ class Query:
 PRODUCED_BY: dict[str, str] = {
     "query_": "make cost",
     "cost_": "make cost",
+    "incident_metrics": "make incidents",
+    "fault_incidents": "make incidents",
 }
 
 QUERIES: dict[str, Query] = {
@@ -124,6 +126,32 @@ QUERIES: dict[str, Query] = {
                   daily_quota_bytes, query_limit_bytes, statements
            FROM {ops}.cost_quotas ORDER BY user_name""",
         ("cost_quotas",),
+    ),
+    # -- incidents ----------------------------------------------------------------
+    "incident_metrics": Query(
+        "SELECT metric, dimension, value FROM {ops}.incident_metrics ORDER BY metric, dimension",
+        ("incident_metrics",),
+    ),
+    "incidents": Query(
+        """SELECT i.incident_id, i.root, i.severity, i.score, i.owner, i.team, i.opened_at,
+                  r.acknowledged_at, r.fixed_at, i.resolved_at, f.fault_id
+           FROM {ops}.incidents AS i
+           LEFT JOIN {ops}.incident_responses AS r ON r.incident_id = i.incident_id
+           LEFT JOIN {ops}.fault_incidents AS f ON f.incident_id = i.incident_id
+           WHERE i.merged_into IS NULL ORDER BY i.seq""",
+        ("incidents", "incident_responses", "fault_incidents"),
+    ),
+    "incident_checks": Query(
+        """SELECT check_type, count(*) AS failing_checks,
+                  count(DISTINCT incident_id) AS incidents
+           FROM {ops}.incident_check_events GROUP BY check_type ORDER BY check_type""",
+        ("incident_check_events",),
+    ),
+    "incident_nights": Query(
+        """SELECT run_id, min(detected_at) AS detected_at, count(*) AS invocations,
+                  sum(checks_run) AS checks_run
+           FROM {ops}.incident_invocations GROUP BY run_id ORDER BY min(detected_at), run_id""",
+        ("incident_invocations",),
     ),
     # -- reconciliation -----------------------------------------------------------
     "cutover": Query(
