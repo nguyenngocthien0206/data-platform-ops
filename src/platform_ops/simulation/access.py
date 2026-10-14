@@ -19,8 +19,9 @@ The users, all namespaced like every database:
 People and BI read through a ``reader`` settings profile (``readonly = 2``: no
 writes, but a session may still change settings); the pipelines use
 ``writer``. Both carry the same session settings as the dbt profile, so a
-query means the same thing whoever runs it. Resource limits and quotas are left
-to Phase 13, which can base them on measured load.
+query means the same thing whoever runs it, and ``writer`` also writes the way
+dbt does: one part per partition per insert. No resource limits or quotas are
+applied; the cost report suggests them from measured load (Phase 13).
 
 Passwords come from ``CLICKHOUSE_PASSWORD_<USER>``, one variable per user, with
 no default (``common.servers``). The admin that creates the users is the
@@ -41,9 +42,16 @@ DBT_LAYERS = ("reference", "staging", "intermediate", "marts", "snapshots")
 
 # What every session means by SQL, the same as the dbt profile's custom_settings.
 _SESSION = "join_use_nulls = 1, union_default_mode = 'DISTINCT'"
+# How every insert writes, the same as the dbt profile's: on one thread and
+# squashed into one block, so a table gets one part per partition and what a
+# later query reads does not depend on when background merges ran.
+_WRITES = (
+    "max_insert_threads = 1, min_insert_block_size_rows = 1000000000, "
+    "min_insert_block_size_bytes = 100000000000"
+)
 PROFILES = {
     "reader": f"readonly = 2, {_SESSION}",
-    "writer": _SESSION,
+    "writer": f"{_SESSION}, {_WRITES}",
 }
 
 Role = Literal["team", "platform", "bi", "transform", "load"]
