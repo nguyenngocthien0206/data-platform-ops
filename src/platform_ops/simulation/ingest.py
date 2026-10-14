@@ -36,6 +36,7 @@ the admin.
 from __future__ import annotations
 
 import re
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -130,15 +131,34 @@ class Ingestion:
         self._empty_raw()
         return self.load(until, full=True)
 
+    def resync(self, table: str, until: datetime) -> int:
+        """Recreate one raw table and reload it in full from Postgres, up to ``until``.
+
+        How a team fixes a raw copy that went wrong (Phase 14): the source of
+        truth is Postgres, so the copy is replaced, not patched. The load is
+        recorded like any other, so the watermark moves on from it.
+        """
+        self._create(table)
+        loader = clickhouse_client(self.settings, "loader")
+        try:
+            moved, records = self._pull(loader, {}, until, [table])
+        finally:
+            loader.close()
+        self._record(records)
+        return moved[table]
+
     def _empty_raw(self) -> None:
         self.client.command(f"CREATE DATABASE IF NOT EXISTS `{self.database}`")
         for table in raw_data.TABLES:
-            columns = ", ".join(f"`{name}` {data_type}" for name, data_type in raw_columns(table))
-            key = raw_data.PRIMARY_KEYS[table]
-            self.client.command(
-                f"CREATE OR REPLACE TABLE `{self.database}`.`{table}` ({columns}) "
-                f"ENGINE = ReplacingMergeTree({UPDATED_AT}) ORDER BY {key}"
-            )
+            self._create(table)
+
+    def _create(self, table: str) -> None:
+        columns = ", ".join(f"`{name}` {data_type}" for name, data_type in raw_columns(table))
+        key = raw_data.PRIMARY_KEYS[table]
+        self.client.command(
+            f"CREATE OR REPLACE TABLE `{self.database}`.`{table}` ({columns}) "
+            f"ENGINE = ReplacingMergeTree({UPDATED_AT}) ORDER BY {key}"
+        )
 
     def _loads(self) -> sql.Composed:
         return ops_table(self.settings, "ingestion_loads")
@@ -152,29 +172,35 @@ class Ingestion:
             ).fetchall()
         return {str(name): until for name, until in rows}
 
-    def load(self, until: datetime, *, full: bool = False) -> dict[str, int]:
+    def load(
+        self, until: datetime, *, full: bool = False, skip: Collection[str] = ()
+    ) -> dict[str, int]:
         """Pull every table up to ``until`` from its watermark, minus the overlap, as ``loader``.
 
         ``full`` ignores the watermarks and reads everything up to ``until``.
+        ``skip`` names tables the loader cannot load tonight (a stopped feed, a
+        changed raw table): their watermark stays put, so the first load after
+        the fix catches up on everything they missed.
         """
         marks = {} if full else self.watermarks()
+        tables = [t for t in raw_data.TABLES if t not in skip]
         loader = clickhouse_client(self.settings, "loader")
         try:
-            moved, records = self._pull(loader, marks, until)
+            moved, records = self._pull(loader, marks, until, tables)
         finally:
             loader.close()
         self._record(records)
         return moved
 
     def _pull(
-        self, loader: Any, marks: dict[str, datetime], until: datetime
+        self, loader: Any, marks: dict[str, datetime], until: datetime, tables: Sequence[str]
     ) -> tuple[dict[str, int], list[tuple[Any, ...]]]:
         pg = postgres_params(self.settings)
         schema = self.settings.company.name(self.settings.company.legacy_schema)
         source_host = self.settings.company.postgres_from_clickhouse
         moved: dict[str, int] = {}
         records: list[tuple[Any, ...]] = []
-        for table in raw_data.TABLES:
+        for table in tables:
             mark = marks.get(table)
             since = None if mark is None else mark - self.overlap
             names = [name for name, _ in raw_columns(table) if name != LOADED_AT]
