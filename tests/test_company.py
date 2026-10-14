@@ -25,6 +25,8 @@ from platform_ops.common.config import Settings, load_settings
 from platform_ops.common.dbt_invoke import invocation_from_settings, run_dbt
 from platform_ops.common.servers import clickhouse_client, connect_postgres
 from platform_ops.common.store import open_store, ops_table
+from platform_ops.cost.run import run_cost
+from platform_ops.cost.storage import StorageWatch
 from platform_ops.metadata.lineage import build_graph
 from platform_ops.metadata.manifest import Node, load_manifest
 from platform_ops.reconcile.parallel import ParallelRun
@@ -302,19 +304,25 @@ def test_two_runs_leave_identical_data(
     short_parallel_run: dict[str, dict[str, Any]],
 ) -> None:
     """Every table and view in ClickHouse, by row count and content hash, every
-    legacy table in Postgres, and the sign-off report, after a second run in its
-    own namespace, parallel run and all."""
+    legacy table in Postgres, the sign-off report and the cost report, after a
+    second run in its own namespace, parallel run and all. The cost report names
+    the namespaced tables and users, so it is compared with the namespace out."""
     second = load_settings(
         isolated_config(tmp_path, 0.01, weeks=2, namespace="t_twice_", overrides=short_parallel_run)
     )
     try:
         reconciliation = ParallelRun(second)
-        run_company(second, nightly=reconciliation)
+        run_company(second, nightly=reconciliation, daily=StorageWatch(second))
         reconciliation.finish()
         assert fingerprints(second) == fingerprints(company_warehouse)
         assert _legacy_fingerprints(second) == _legacy_fingerprints(company_warehouse)
         mine = company_warehouse.resolve(company_warehouse.paths.reports) / "reconciliation.md"
         assert write_report(second).read_bytes() == mine.read_bytes()
+        costs = [
+            run_cost(s).report_path.read_text(encoding="utf-8").replace(s.company.namespace, "")
+            for s in (company_warehouse, second)
+        ]
+        assert costs[0] == costs[1]
     finally:
         remove_company(second)
 

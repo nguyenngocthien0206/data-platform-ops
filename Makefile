@@ -28,7 +28,7 @@ PYTEST_ARGS ?=
 # also holds the toolkit's ops store) and ClickHouse, its warehouse.
 DOCKER_ENGINES ?= postgres clickhouse
 
-.PHONY: help setup up down seed build company metabase simulate cost incidents reconcile \
+.PHONY: help setup up down seed build company metabase cost incidents reconcile \
         dashboard paused readme-check test lint fmt clean pipeline demo check-env \
         docker-build docker-up docker-demo docker-test docker-lint \
         docker-metadata-check docker-metabase-check docker-readme-check docker-dashboard \
@@ -57,7 +57,7 @@ seed: ## Seed the legacy Postgres, empty ClickHouse, backfill its raw layer
 build: ## Run dbt build on ClickHouse (add --full-refresh after a seed)
 	$(RUN) platform-ops build
 
-company: ## Replay the company's window: daily data, ingestion, dbt builds
+company: ## Replay the company's window: daily data, ingestion, dbt builds, BI and ad hoc reads
 	$(RUN) platform-ops company run
 
 # The company's BI. Not part of `demo`: Metabase is a heavy JVM service, and its
@@ -68,14 +68,11 @@ metabase: check-env ## Start Metabase and build one dashboard per exposure (afte
 	$(RUN) platform-ops metabase provision
 	@echo "Metabase: http://localhost:$${METABASE_PORT:-3000} (MB_ADMIN_EMAIL and MB_ADMIN_PASSWORD in .env)"
 
-# The 1.x modules below are paused in version 2.0 until their phase moves them
-# to ClickHouse; each command says so and exits 2. `make paused` lists them.
-simulate: ## Run the workload generator over the simulated window (paused)
-	$(RUN) platform-ops simulation run
-
-cost: ## Collect, price, attribute, write the cost report (paused)
+cost: ## Price the company run's query log, show it back by team, write the cost report
 	$(RUN) platform-ops cost report
 
+# The 1.x modules below are paused in version 2.0 until their phase moves them
+# to ClickHouse; each command says so and exits 2. `make paused` lists them.
 incidents: ## Inject faults, detect and group incidents, write metrics (paused)
 	$(RUN) platform-ops incidents run
 
@@ -119,12 +116,15 @@ clean: ## Remove generated data, reports and build artifacts
 # Version 2.0: the company runs on Postgres and ClickHouse, its last six weeks
 # are the migration's parallel run (reconciled every night, Phase 12), and the
 # ownership check and lineage run on its project. `company run` seeds and
-# builds itself, so `demo` needs no separate `seed` and `build` steps. The 1.x
-# modules return phase by phase; `paused` says which and when.
+# builds itself, so `demo` needs no separate `seed` and `build` steps. The cost
+# report (Phase 13) reads the run's query log, the ownership and the cutover,
+# so it comes last. The 1.x modules return phase by phase; `paused` says which
+# and when.
 pipeline: company ## Every module that runs in this phase, in order, on the current state
 	$(RUN) platform-ops metadata check
 	$(RUN) platform-ops metadata lineage
 	$(RUN) platform-ops reconcile run
+	$(RUN) platform-ops cost report
 	@$(RUN) platform-ops paused
 	@echo "pipeline complete."
 

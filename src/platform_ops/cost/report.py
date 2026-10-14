@@ -1,464 +1,438 @@
-"""The cost report: ``reports/cost.md``, plus the proxy-accuracy note.
+"""``reports/cost.md``: who spends what on the company's ClickHouse, and what to change.
 
-``cost.md`` is built only from priced, integer and ``Decimal`` data, so two runs
-produce byte-identical files. The proxy-accuracy note compares the estimate with
-DuckDB's profiler, whose row counts are not guaranteed to be stable across runs,
-so it lives in its own file (``cost_proxy_accuracy.md``) and never affects
-``cost.md``.
+The assumptions come first, because every number after them depends on them:
+the stated monthly prices and their sizing, and how the two cloud alternatives
+are priced. Nothing below is timed or random, so two runs write byte-identical
+files (version 2.0, Phase 13).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections import defaultdict
+from datetime import timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
-import duckdb
-
-from platform_ops.common.config import Settings
-from platform_ops.common.db import OPS_SCHEMA
+from platform_ops.common.config import ACTOR_TYPES
 from platform_ops.common.markdown import table
-from platform_ops.cost import recommend
-from platform_ops.metadata.manifest import Node
-from platform_ops.metadata.registry import Resolution
 
-WORKLOADS = ("dbt", "dashboard", "adhoc")
-WORKLOAD_LABEL = {"dbt": "dbt builds and tests", "dashboard": "dashboards", "adhoc": "ad hoc"}
+if TYPE_CHECKING:
+    from platform_ops.cost.run import CostData
+
+MODEL_LABEL = {
+    "cluster": "ClickHouse (stated cost)",
+    "scan": "BigQuery on demand",
+    "compute": "Snowflake warehouses",
+}
+ACTOR_LABEL = {
+    "dbt": "dbt builds and tests",
+    "ingestion": "ingestion from Postgres",
+    "maintenance": "nightly merge of raw",
+    "reconcile": "parallel run reconciliation",
+    "dashboard": "dashboards (Metabase)",
+    "adhoc": "ad hoc SQL",
+}
 
 
 def usd(value: Decimal | float | int) -> str:
     amount = Decimal(str(value))
+    if amount == 0:
+        return "$0.00"
     return f"${amount:,.2f}" if abs(amount) >= 1 else f"${amount:.4f}"
 
 
-def gigabytes(value: int | float) -> str:
-    return f"{Decimal(str(value)) / Decimal(10**9):,.2f} GB"
+def size(value: int | float) -> str:
+    """Bytes in MB below a gigabyte and in GB above, so small runs stay readable."""
+    amount = Decimal(str(value))
+    if amount < 10**9:
+        return f"{amount / Decimal(10**6):,.1f} MB"
+    return f"{amount / Decimal(10**9):,.2f} GB"
 
 
-@dataclass
-class ReportData:
-    showback: list[tuple[str, str, Decimal, Decimal, Decimal]] = field(default_factory=list)
-    monthly: list[tuple[object, str, str, Decimal]] = field(default_factory=list)
-    totals: dict[str, Decimal] = field(default_factory=dict)
-    top_models: list[tuple[int, str, str, str, Decimal, Decimal]] = field(default_factory=list)
-    by_workload: list[tuple[str, Decimal, Decimal, int, float, float]] = field(default_factory=list)
-    counts: dict[str, int] = field(default_factory=dict)
-    real_builds: int = 0
-    replayed_builds: int = 0
-    days: int = 0
+def _sum(values: object) -> Decimal:
+    return sum(values, Decimal(0))  # type: ignore[call-overload,no-any-return]
 
 
-def gather(
-    connection: duckdb.DuckDBPyConnection,
-    settings: Settings,
-    nodes: Mapping[str, Node],
-    resolutions: Mapping[str, Resolution],
-    window_days: int,
-) -> ReportData:
-    data = ReportData(days=window_days)
-    data.showback = [
-        (str(t), str(m), Decimal(p), Decimal(c), Decimal(total))
-        for t, m, p, c, total in connection.execute(
-            f"""SELECT team, pricing_model, sum(production_usd), sum(consumption_usd),
-                       sum(total_usd)
-                FROM {OPS_SCHEMA}.cost_by_team GROUP BY 1, 2 ORDER BY 1, 2"""
-        ).fetchall()
-    ]
-    data.monthly = [
-        (month, str(t), str(m), Decimal(total))
-        for month, t, m, total in connection.execute(
-            f"""SELECT month, team, pricing_model, total_usd
-                FROM {OPS_SCHEMA}.cost_by_team ORDER BY 1, 2, 3"""
-        ).fetchall()
-    ]
-    for model, total in connection.execute(
-        f"SELECT model, sum(usd) FROM {OPS_SCHEMA}.query_costs GROUP BY 1 ORDER BY 1"
-    ).fetchall():
-        data.totals[str(model)] = Decimal(total)
+def render(data: CostData) -> str:
+    s = data.settings
+    end = data.window_start + timedelta(days=data.window_days - 1)
+    billable = [r for r in data.records if r.billable]
+    by_id = {r.query_id: r for r in data.records}
+    ch, legacy = s.cost.clickhouse, s.cost.legacy_reporting
 
-    costs = recommend.production_costs(connection)
-    models = [
-        (c.get("scan", Decimal(0)), c.get("compute", Decimal(0)), uid)
-        for uid, c in costs.items()
-        if uid in nodes and nodes[uid].resource_type == "model"
-    ]
-    for rank, (scan, compute, uid) in enumerate(
-        sorted(models, key=lambda m: (-m[0], m[2]))[:10], start=1
-    ):
-        rule = resolutions[uid].rule if uid in resolutions else None
-        data.top_models.append(
-            (rank, uid, nodes[uid].relation, rule.team if rule else "unattributed", scan, compute)
-        )
-
-    rows = connection.execute(
-        f"""
-        WITH per_query AS (
-            SELECT e.actor_type, e.bytes_scanned, e.modeled_ms,
-                   sum(c.usd) FILTER (WHERE c.model = 'scan') AS scan_usd,
-                   sum(c.usd) FILTER (WHERE c.model = 'compute') AS compute_usd,
-                   sum(c.billed_ms) FILTER (WHERE c.model = 'compute') AS billed_ms
-            FROM {OPS_SCHEMA}.query_estimates e
-            JOIN {OPS_SCHEMA}.query_costs c USING (query_id)
-            GROUP BY e.query_id, e.actor_type, e.bytes_scanned, e.modeled_ms
-        )
-        SELECT actor_type, sum(scan_usd), sum(compute_usd), sum(bytes_scanned),
-               sum(modeled_ms) / 1000.0, sum(billed_ms) / 1000.0
-        FROM per_query GROUP BY actor_type
-        """
-    ).fetchall()
-    found = {str(r[0]): r for r in rows}
-    for workload in WORKLOADS:
-        if workload in found:
-            _, scan, compute, scanned, busy, billed = found[workload]
-            data.by_workload.append(
+    out = ["# Cost and FinOps: the company on ClickHouse", ""]
+    out += [
+        f"{data.window_days} simulated days, {data.window_start:%Y-%m-%d} to {end:%Y-%m-%d}. "
+        f"Every query the company ran on ClickHouse was read back from its query log, and the "
+        f"{len(billable):,} that read or wrote data are priced. Statements that only changed "
+        "the catalogue or read ClickHouse's own system tables are left out, as no warehouse "
+        "bills them.",
+        "",
+        "## Assumptions",
+        "",
+        table(
+            ["What", "Assumption"],
+            [
                 (
-                    workload,
-                    Decimal(scan),
-                    Decimal(compute),
-                    int(scanned),
-                    float(busy),
-                    float(billed),
+                    "ClickHouse, self-managed",
+                    f"{ch.nodes} node at {usd(ch.instance_usd_per_month)}/month and "
+                    f"{ch.storage_gb} GB at {usd(ch.storage_usd_per_gb_month)}/GB-month: "
+                    f"{usd(ch.compute_usd + ch.storage_usd)}/month",
+                ),
+                (
+                    "Legacy reporting replica",
+                    f"{legacy.nodes} RDS instance at "
+                    f"{usd(legacy.instance_usd_per_month)}/month and "
+                    f"{legacy.storage_gb} GB at {usd(legacy.storage_usd_per_gb_month)}/GB-month: "
+                    f"{usd(legacy.compute_usd + legacy.storage_usd)}/month",
+                ),
+                ("Compute share", "bytes each query read, as ClickHouse measured them"),
+                ("Storage share", "uncompressed bytes of each table at the month's end"),
+                (
+                    "BigQuery",
+                    f"{usd(s.pricing.scan.usd_per_tib)} per TiB read, at least "
+                    f"{s.pricing.scan.minimum_billed_bytes_per_table // 2**20} MB per table "
+                    "(a query's bytes split evenly over the tables it read)",
+                ),
+                (
+                    "Snowflake",
+                    f"{usd(s.pricing.compute.usd_per_credit)} per credit, "
+                    f"{s.pricing.compute.credits_per_hour:g} credit/hour, "
+                    f"{s.pricing.compute.minimum_billed_seconds} s minimum, "
+                    f"{s.pricing.compute.idle_timeout_seconds} s idle before suspending",
+                ),
+                (
+                    "Modelled time",
+                    f"{s.cost.per_query_overhead_ms} ms + bytes read at "
+                    f"{s.cost.throughput_bytes_per_second // 10**6} MB/s",
+                ),
+            ],
+        ),
+        "",
+        "Prices are public on-demand list prices (us-east-1); sources are next to them in "
+        "`config/settings.yaml`.",
+        "",
+    ]
+
+    compute_total = _sum(data.costs["cluster"].values())
+    storage_total = _sum(data.storage.values())
+    pool_total = _sum(p.total_usd for p in data.pools)
+    out += ["## The cluster's bill", ""]
+    month_compute: dict[str, Decimal] = defaultdict(Decimal)
+    for query_id, value in data.costs["cluster"].items():
+        month_compute[f"{by_id[query_id].started_at:%Y-%m}"] += value
+    month_storage: dict[str, Decimal] = defaultdict(Decimal)
+    for (month, _), value in data.storage.items():
+        month_storage[month] += value
+    out += [
+        table(
+            ["Month", "Days", "Compute", "Storage", "Stated cost", "Shared out"],
+            [
+                (
+                    p.month,
+                    p.days,
+                    usd(p.compute_usd),
+                    usd(p.storage_usd),
+                    usd(p.total_usd),
+                    usd(month_compute[p.month] + month_storage[p.month]),
                 )
-            )
+                for p in data.pools
+            ]
+            + [
+                (
+                    "**total**",
+                    data.window_days,
+                    usd(_sum(p.compute_usd for p in data.pools)),
+                    usd(_sum(p.storage_usd for p in data.pools)),
+                    usd(pool_total),
+                    usd(compute_total + storage_total),
+                )
+            ],
+            right=(1, 2, 3, 4, 5),
+        ),
+        "",
+        "Every dollar of the stated cost is shared out: the shares add up to "
+        + (
+            "the bill exactly."
+            if compute_total + storage_total == pool_total
+            else f"{usd(compute_total + storage_total)}, not {usd(pool_total)}."
+        ),
+        "",
+    ]
 
-    for actor_type, n in connection.execute(
-        f"SELECT actor_type, count(*) FROM {OPS_SCHEMA}.query_log GROUP BY 1 ORDER BY 1"
-    ).fetchall():
-        data.counts[str(actor_type)] = int(n)
-    runs = connection.execute(
-        f"""SELECT count(DISTINCT run_id) FILTER (WHERE NOT replayed),
-                   count(DISTINCT run_id) FILTER (WHERE replayed)
-            FROM {OPS_SCHEMA}.query_log WHERE actor_type = 'dbt'"""
-    ).fetchone()
-    if runs:
-        data.real_builds, data.replayed_builds = int(runs[0]), int(runs[1])
-    return data
-
-
-def render(
-    settings: Settings,
-    data: ReportData,
-    unused: list[recommend.UnusedTable],
-    spots: list[recommend.Hotspot],
-    incremental: list[recommend.IncrementalCandidate],
-) -> str:
-    sim = settings.simulation
-    scan = settings.pricing.scan
-    compute = settings.pricing.compute
-    minimum_mb = scan.minimum_billed_bytes_per_table // (1024 * 1024)
-    end = sim.start.date().fromordinal(sim.start.date().toordinal() + data.days - 1)
-    out: list[str] = []
-    out.append("# Cost report")
-    out.append("")
-    out.append(
-        f"Simulated window: {sim.start:%Y-%m-%d} to {end:%Y-%m-%d} ({data.days} days), "
-        f"scale factor {settings.scale_factor}. "
-        f"{data.counts.get('dbt', 0):,} dbt queries ({data.real_builds} real builds, "
-        f"{data.replayed_builds} replayed days), {data.counts.get('dashboard', 0):,} dashboard "
-        f"queries and {data.counts.get('adhoc', 0):,} ad hoc queries."
-    )
-    out.append("")
-    out.append(
-        "**How the numbers are made.** Bytes scanned are the uncompressed size of every column a "
-        "query reads, whatever its filter, which is how BigQuery bills. Compute time is modelled "
-        f"as {settings.cost.per_query_overhead_ms} ms per query plus bytes at "
-        f"{settings.cost.throughput_bytes_per_second / 1e6:,.0f} MB/s; both values are declared "
-        "assumptions, not vendor figures (docs/adr/0005). Scan pricing: "
-        f"${scan.usd_per_tib:.2f}/TiB with {minimum_mb} MB "
-        "billed at least per table referenced. Compute pricing: "
-        f"${compute.usd_per_credit:.2f}/credit, {compute.credits_per_hour:g} credit/hour, "
-        f"{compute.minimum_billed_seconds} s minimum per start, suspends after "
-        f"{compute.idle_timeout_seconds} s idle, one warehouse per workload."
-    )
-    out.append("")
-
-    out.append("## Showback by team")
-    out.append("")
-    teams = sorted({t for t, *_ in data.showback})
-    by = {(t, m): (p, c, total) for t, m, p, c, total in data.showback}
+    teams: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+    for model, by_query in data.costs.items():
+        for query_id, value in by_query.items():
+            key = "cluster compute" if model == "cluster" else model
+            teams[data.attributions[query_id].team][key] += value
+    for (_, table_name), value in data.storage.items():
+        teams[data.storage_owner[table_name][0]]["cluster storage"] += value
     rows = []
-    for team in teams:
-        s = by.get((team, "scan"), (Decimal(0),) * 3)
-        c = by.get((team, "compute"), (Decimal(0),) * 3)
-        rows.append([team, usd(s[0]), usd(s[1]), usd(s[2]), usd(c[0]), usd(c[1]), usd(c[2])])
+    for team, values in sorted(
+        teams.items(),
+        key=lambda kv: (-(kv[1]["cluster compute"] + kv[1]["cluster storage"]), kv[0]),
+    ):
+        rows.append(
+            (
+                team,
+                usd(values["cluster compute"]),
+                usd(values["cluster storage"]),
+                usd(values["cluster compute"] + values["cluster storage"]),
+                usd(values["scan"]),
+                usd(values["compute"]),
+            )
+        )
+    totals = {
+        k: _sum(v[k] for v in teams.values())
+        for k in ("cluster compute", "cluster storage", "scan", "compute")
+    }
     rows.append(
-        [
+        (
             "**total**",
-            "",
-            "",
-            usd(data.totals.get("scan", 0)),
-            "",
-            "",
-            usd(data.totals.get("compute", 0)),
-        ]
+            usd(totals["cluster compute"]),
+            usd(totals["cluster storage"]),
+            usd(totals["cluster compute"] + totals["cluster storage"]),
+            usd(totals["scan"]),
+            usd(totals["compute"]),
+        )
     )
-    out.append(
+    out += [
+        "## Showback by team",
+        "",
+        "Production cost (builds, loads, the nightly merge, storage) goes to the owner of "
+        "the table; consumption (dashboards, ad hoc SQL) to the reader; the parallel run's "
+        "reconciliation to the platform team, which runs the migration.",
+        "",
         table(
             [
                 "Team",
-                "Scan: production",
-                "Scan: consumption",
-                "Scan: total",
-                "Compute: production",
-                "Compute: consumption",
-                "Compute: total",
+                "ClickHouse compute",
+                "ClickHouse storage",
+                "ClickHouse total",
+                MODEL_LABEL["scan"],
+                MODEL_LABEL["compute"],
             ],
             rows,
-            right=range(1, 7),
-        )
-    )
-    out.append("")
-    out.append(
-        "Production is what it costs to build and test the tables a team owns. "
-        "Consumption is what a team's dashboards and people spend reading data, "
-        "whoever owns it. Each query is charged exactly once."
-    )
-    out.append("")
-    out.append("### By month")
-    out.append("")
-    months = sorted({str(m) for m, *_ in data.monthly})
-    monthly = {(str(m), t, p): v for m, t, p, v in data.monthly}
-    month_rows = []
-    for team in teams:
-        cells = [team]
-        for month in months:
-            cells += [
-                usd(monthly.get((month, team, "scan"), 0)),
-                usd(monthly.get((month, team, "compute"), 0)),
-            ]
-        month_rows.append(cells)
-    headers = ["Team"] + [f"{m[:7]} {p}" for m in months for p in ("scan", "compute")]
-    out.append(table(headers, month_rows, right=range(1, len(headers))))
-    out.append("")
-
-    out.append("## Top 10 most expensive models")
-    out.append("")
-    out.append("Build plus test cost over the window, ranked by scan pricing.")
-    out.append("")
-    out.append(
-        table(
-            ["#", "Model", "Team", "Scan", "Compute"],
-            [[r, rel, team, usd(s), usd(c)] for r, _, rel, team, s, c in data.top_models],
-            right=(0, 3, 4),
-        )
-    )
-    out.append("")
-
-    out.append("## Unused tables")
-    out.append("")
-    out.append(
-        "Built during the window, but neither the table nor anything downstream of it was "
-        "read by a dashboard or a person in the lookback period. Savings are the monthly "
-        "cost of building and testing them."
-    )
-    out.append("")
-    for days in sorted({u.lookback_days for u in unused}):
-        subset = [u for u in unused if u.lookback_days == days]
-        saving_scan = sum((u.monthly_saving["scan"] for u in subset), Decimal(0))
-        saving_compute = sum((u.monthly_saving["compute"] for u in subset), Decimal(0))
-        out.append(f"### Not read in the last {days} days: {len(subset)} tables")
-        out.append("")
-        out.append(
-            table(
-                ["Table", "Team", "Owner", "Monthly saving (scan)", "Monthly saving (compute)"],
-                [
-                    [
-                        u.relation,
-                        u.team,
-                        u.owner,
-                        usd(u.monthly_saving["scan"]),
-                        usd(u.monthly_saving["compute"]),
-                    ]
-                    for u in subset
-                ]
-                + [["**total**", "", "", usd(saving_scan), usd(saving_compute)]],
-                right=(3, 4),
-            )
-        )
-        out.append("")
-
-    out.append("## Recommendations")
-    out.append("")
-    out.append("### Full-scan hotspots")
-    out.append("")
-    if spots:
-        out.append(
-            "Large tables that dashboards and people filter on the same column over and over, "
-            "scanning the whole column every time. Partition or cluster on that column."
-        )
-        out.append("")
-        out.append(
-            table(
-                [
-                    "Table",
-                    "Filtered on",
-                    "Reads",
-                    "Table size",
-                    "Scanned by those reads",
-                    "Scan cost",
-                ],
-                [
-                    [
-                        h.table,
-                        h.column,
-                        f"{h.reads:,}",
-                        gigabytes(h.table_bytes),
-                        gigabytes(h.bytes_scanned),
-                        usd(h.scan_usd),
-                    ]
-                    for h in spots
-                ],
-                right=(2, 3, 4, 5),
-            )
-        )
-    else:
-        out.append("None above the configured thresholds.")
-    out.append("")
-    out.append("### Incremental candidates")
-    out.append("")
-    out.append(
-        f"The {len(incremental)} most expensive live models to build (scan pricing), checked "
-        "against their sources. Incremental builds are only safe when every source only "
-        "ever gains rows."
-    )
-    out.append("")
-    out.append(
-        table(
-            ["Model", "Team", "Build cost (scan)", "Build cost (compute)", "Verdict"],
-            [
-                [
-                    c.relation,
-                    c.team,
-                    usd(c.production.get("scan", 0)),
-                    usd(c.production.get("compute", 0)),
-                    "candidate: all sources append-only"
-                    if c.candidate
-                    else "not safe: " + ", ".join(c.blocked_by) + " change in place",
-                ]
-                for c in incremental
-            ],
-            right=(2, 3),
-        )
-    )
-    out.append("")
-
-    out.append("## Scan pricing versus compute pricing")
-    out.append("")
-    rows = []
-    for workload, scan_usd, compute_usd, scanned, busy, billed in data.by_workload:
-        idle = 1 - busy / billed if billed else 0.0
-        rows.append(
-            [
-                WORKLOAD_LABEL[workload],
-                usd(scan_usd),
-                usd(compute_usd),
-                gigabytes(scanned),
-                f"{busy / 3600:,.1f} h",
-                f"{billed / 3600:,.1f} h",
-                f"{idle:.0%}",
-            ]
-        )
-    out.append(
-        table(
-            [
-                "Workload",
-                "Scan",
-                "Compute",
-                "Bytes scanned",
-                "Busy time",
-                "Billed time",
-                "Idle share",
-            ],
-            rows,
-            right=range(1, 7),
-        )
-    )
-    out.append("")
-    out.append(
-        "Busy time is the modelled time queries were running; billed time adds each "
-        "warehouse's minimum charge per start and the idle minutes before it suspends."
-    )
-    out.append("")
-    out.append(
-        "How close the bytes estimate is to what DuckDB actually scanned is in "
-        "`cost_proxy_accuracy.md`, kept separate because profiler counts are not "
-        "guaranteed to be identical between runs."
-    )
-    out.append("")
-    return "\n".join(out)
-
-
-def proxy_accuracy(
-    connection: duckdb.DuckDBPyConnection,
-) -> list[tuple[str, int, int, int, float, float]]:
-    """Per workload: rows the proxy assumes scanned versus rows DuckDB's profiler saw."""
-    rows = connection.execute(
-        f"""
-        WITH table_rows AS (
-            SELECT DISTINCT snapshot_at, table_name, row_count FROM {OPS_SCHEMA}.table_sizes
+            right=(1, 2, 3, 4, 5),
         ),
-        reads AS (
-            SELECT qt.query_id, qt.table_name, ql.started_at
-            FROM {OPS_SCHEMA}.query_tables qt
-            JOIN {OPS_SCHEMA}.query_log ql USING (query_id)
-            WHERE ql.rows_scanned IS NOT NULL
-        ),
-        proxy AS (
-            SELECT r.query_id, sum(tr.row_count) AS proxy_rows
-            FROM reads r
-            ASOF JOIN table_rows tr
-              ON tr.table_name = r.table_name AND r.started_at >= tr.snapshot_at
-            GROUP BY r.query_id
-        )
-        SELECT ql.actor_type,
-               count(*) AS queries,
-               sum(p.proxy_rows) AS proxy_rows,
-               sum(ql.rows_scanned) AS scanned_rows,
-               median(p.proxy_rows / ql.rows_scanned) AS median_ratio,
-               avg(CASE WHEN abs(p.proxy_rows - ql.rows_scanned) <= 0.1 * ql.rows_scanned
-                        THEN 1.0 ELSE 0.0 END) AS within_10pct
-        FROM {OPS_SCHEMA}.query_log ql
-        JOIN proxy p USING (query_id)
-        WHERE ql.rows_scanned > 0
-        GROUP BY ql.actor_type ORDER BY ql.actor_type
-        """
-    ).fetchall()
-    return [(str(a), int(q), int(p), int(s), float(m), float(w)) for a, q, p, s, m, w in rows]
+        "",
+    ]
 
-
-def render_accuracy(
-    settings: Settings, accuracy: list[tuple[str, int, int, int, float, float]]
-) -> str:
-    out = ["# How close is the bytes estimate?", ""]
-    out.append(
-        "The estimate assumes a query reads every row of every table it references, the "
-        "way on-demand warehouses bill. DuckDB can skip whole row groups when a filter "
-        "rules them out, so it often scans fewer. This compares the rows the estimate "
-        "assumes with the rows DuckDB's profiler reported, for queries that ran to "
-        "completion (a result cut short at the first page has no final count)."
-    )
-    out.append("")
-    out.append(
+    workload: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+    counts: dict[str, int] = defaultdict(int)
+    read: dict[str, int] = defaultdict(int)
+    for r in billable:
+        counts[r.actor_type] += 1
+        read[r.actor_type] += r.bytes_scanned or 0
+        for model in data.costs:
+            workload[r.actor_type][model] += data.costs[model].get(r.query_id, Decimal(0))
+    out += [
+        "## By workload",
+        "",
         table(
             [
                 "Workload",
                 "Queries",
-                "Rows assumed",
-                "Rows scanned",
-                "Median overestimate",
-                "Within 10%",
+                "Read",
+                "ClickHouse compute",
+                MODEL_LABEL["scan"],
+                MODEL_LABEL["compute"],
             ],
             [
-                [WORKLOAD_LABEL.get(a, a), f"{q:,}", f"{p:,}", f"{s:,}", f"{m:.2f}x", f"{w:.0%}"]
-                for a, q, p, s, m, w in accuracy
+                (
+                    ACTOR_LABEL[a],
+                    f"{counts[a]:,}",
+                    size(read[a]),
+                    usd(workload[a]["cluster"]),
+                    usd(workload[a]["scan"]),
+                    usd(workload[a]["compute"]),
+                )
+                for a in ACTOR_TYPES
+                if counts[a]
             ],
-            right=range(1, 6),
-        )
-    )
-    out.append("")
-    out.append(
-        "Not part of `cost.md` on purpose: profiler counts depend on physical row order, "
-        "which DuckDB does not guarantee to be identical between runs."
-    )
-    out.append("")
+            right=(1, 2, 3, 4, 5),
+        ),
+        "",
+    ]
+
+    case = data.case
+    out += ["## The migration's business case", ""]
+    cut = f"{case.cutover:%Y-%m-%d}" if case.cutover else "not recommended in the window"
+    out += [
+        f"The legacy Postgres stays as the operational database; the migration retires its "
+        f"reporting replica at cutover ({cut}). ClickHouse runs for the whole window.",
+        "",
+        table(
+            ["Month", "Days", "Legacy replica", "ClickHouse", "Of which reconciliation"],
+            [
+                (
+                    m.month,
+                    m.days,
+                    f"{usd(m.legacy_usd)} ({m.legacy_days} days)" if m.legacy_days else usd(0),
+                    usd(m.clickhouse_usd),
+                    usd(m.reconcile_usd),
+                )
+                for m in case.months
+            ],
+            right=(1, 2, 3, 4),
+        ),
+        "",
+        table(
+            ["", "Per month"],
+            [
+                ("Before: the reporting replica", usd(case.legacy_monthly)),
+                ("After: ClickHouse", usd(case.clickhouse_monthly)),
+                ("Saving", usd(case.monthly_saving)),
+            ],
+            right=(1,),
+        ),
+        "",
+    ]
+    if case.monthly_saving <= 0:
+        out += ["At these prices ClickHouse does not cost less than the replica it replaces.", ""]
+    elif case.cutover is None:
+        out += [
+            f"The reconciliation did not clear the cutover in the window, so the company still "
+            f"pays for both: {usd(case.overlap_usd)} of ClickHouse so far on top of the replica. "
+            f"The saving starts the day the replica is retired.",
+            "",
+        ]
+    else:
+        out += [
+            f"Running both until cutover cost {usd(case.overlap_usd)} of ClickHouse on top of the "
+            f"replica; the saving pays that back in {case.payback_months} months.",
+            "",
+        ]
+
+    out += ["## What to change", ""]
+    previous: list[str] | None = None
+    for days in sorted(s.recommendations.unused_lookback_days):
+        mine = [u for u in data.unused if u.lookback_days == days]
+        out += [f"### Unused tables, last {days} days", ""]
+        if not mine:
+            out += ["None.", ""]
+            previous = []
+            continue
+        names = [u.unique_id for u in mine]
+        if names == previous:
+            out += [f"The same {len(mine)} tables.", ""]
+            continue
+        previous = names
+        out += [
+            table(
+                [
+                    "Model",
+                    "Team",
+                    "Owner",
+                    "ClickHouse/month",
+                    f"{MODEL_LABEL['scan']}/month",
+                    f"{MODEL_LABEL['compute']}/month",
+                ],
+                [
+                    (
+                        u.relation,
+                        u.team,
+                        u.owner,
+                        usd(u.monthly_saving.get("cluster", 0)),
+                        usd(u.monthly_saving.get("scan", 0)),
+                        usd(u.monthly_saving.get("compute", 0)),
+                    )
+                    for u in mine
+                ],
+                right=(3, 4, 5),
+            ),
+            "",
+        ]
+    out += ["### Full-scan hotspots", ""]
+    if data.hotspots:
+        out += [
+            "Dashboards and ad hoc SQL that filter a large table and still read nearly all of it.",
+            "",
+            table(
+                [
+                    "Table",
+                    "Filtered on",
+                    "Queries",
+                    "Rows read",
+                    "Read",
+                    "Sort key now",
+                    "Suggested",
+                ],
+                [
+                    (
+                        h.table,
+                        h.column,
+                        f"{h.reads:,}",
+                        f"{h.rows_scanned:,}",
+                        size(h.bytes_scanned),
+                        f"`{h.sorting_key}`" if h.sorting_key else "(none)",
+                        h.suggestion,
+                    )
+                    for h in data.hotspots
+                ],
+                right=(2, 3, 4),
+            ),
+            "",
+        ]
+    else:
+        out += ["None above the thresholds.", ""]
+    out += ["### Incremental candidates", ""]
+    appendable = sum(1 for c in data.incremental if c.candidate)
+    out += [
+        f"The {len(data.incremental)} models still rebuilt in full that cost the most. One can "
+        f"switch to appending new rows only if none of its sources change rows in place, as "
+        f"the legacy database's own updates show.",
+        "",
+        table(
+            ["Model", "Team", "ClickHouse", "Sources", "Verdict"],
+            [
+                (
+                    c.relation,
+                    c.team,
+                    usd(c.production.get("cluster", 0)),
+                    ", ".join(c.sources),
+                    "candidate"
+                    if c.candidate
+                    else f"no: {', '.join(c.blocked_by)} change in place",
+                )
+                for c in data.incremental
+            ],
+            right=(2,),
+        ),
+        "",
+    ]
+    if data.incremental and not appendable:
+        out += [
+            "None of them can simply append: each joins a source whose rows change in place, so "
+            "an incremental version would have to delete and insert by key over a lookback "
+            "window to pick those changes up.",
+            "",
+        ]
+    out += ["### Suggested quotas", ""]
+    out += [
+        "A daily read quota at twice each user's 95th-percentile day, and a per-query limit at "
+        "twice its largest query. Suggestions for the platform team, not applied. The users "
+        "that also build, load or reconcile get none: a limit there could stop the pipeline.",
+        "",
+        table(
+            ["User", "Active days", "p95 day", "Largest query", "Daily quota", "Per query"],
+            [
+                (
+                    q.user,
+                    q.active_days,
+                    size(q.p95_daily_bytes),
+                    size(q.max_query_bytes),
+                    size(q.daily_quota_bytes),
+                    size(q.query_limit_bytes),
+                )
+                for q in data.quotas
+            ],
+            right=(1, 2, 3, 4, 5),
+        ),
+        "",
+        "```sql",
+        *[statement + ";" for q in data.quotas for statement in q.statements],
+        "```",
+        "",
+    ]
     return "\n".join(out)

@@ -18,7 +18,6 @@ MAKEFILE_COMMANDS: list[list[str]] = [
     ["metabase", "prepare"],
     ["metabase", "provision"],
     ["paused"],
-    ["simulation", "run"],
     ["cost", "report"],
     ["incidents", "run"],
     ["reconcile", "run"],
@@ -33,7 +32,6 @@ def test_help_exits_zero_and_lists_every_command_group() -> None:
         "metadata",
         "company",
         "metabase",
-        "simulation",
         "cost",
         "incidents",
         "reconcile",
@@ -65,8 +63,6 @@ def test_every_makefile_command_is_built_and_documented(command: list[str]) -> N
 
 # Version 2.0: each 1.x module that has not moved yet, with the command that runs it.
 PAUSED_COMMANDS = {
-    "simulation": ["simulation", "run"],
-    "cost": ["cost", "report"],
     "incidents": ["incidents", "run"],
     "dashboard": ["dashboard"],
 }
