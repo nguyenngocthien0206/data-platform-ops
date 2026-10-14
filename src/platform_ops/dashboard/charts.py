@@ -134,7 +134,7 @@ def single_bars(
         alt.Chart(frame)
         .mark_bar(cornerRadiusEnd=BAR_CORNER, color=colors.accent)
         .encode(
-            y=alt.Y(f"{category}:N", sort="-x", title=None),
+            y=alt.Y(f"{category}:N", sort="-x", title=None, axis=alt.Axis(labelLimit=260)),
             x=alt.X(f"{value}:Q", title=value_title, axis=alt.Axis(format=value_format)),
             tooltip=[alt.Tooltip(f"{category}:N"), alt.Tooltip(f"{value}:Q", format=value_format)],
         )
@@ -146,14 +146,18 @@ def single_bars(
 def team_lines(
     frame: pd.DataFrame, x: str, value: str, team: str, scale: alt.Scale, value_format: str
 ) -> alt.LayerChart:
-    """One line per team over time, 2 px, with markers large enough to hover."""
+    """One line per team across ordered periods, 2 px, with markers large enough to hover.
+
+    ``x`` is a label per period, in order (e.g. "2026-04 (5 days)"), so a period
+    the window only partly covers says so instead of looking like a drop.
+    """
     base = alt.Chart(frame).encode(
-        x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%b %Y")),
+        x=alt.X(f"{x}:O", title=None, sort=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y(f"{value}:Q", title=None, axis=alt.Axis(format=value_format)),
         color=alt.Color(f"{team}:N", scale=scale, legend=alt.Legend(title=None, orient="top")),
         tooltip=[
             alt.Tooltip(f"{team}:N"),
-            alt.Tooltip(f"{x}:T", format="%B %Y"),
+            alt.Tooltip(f"{x}:O"),
             alt.Tooltip(f"{value}:Q", format=value_format),
         ],
     )
@@ -277,3 +281,94 @@ def accent_against_grey(
         .properties(height=alt.Step(18))
     )
     return chart
+
+
+# Status is state, not identity: the fixed status steps, never a categorical
+# slot, and always with a glyph and a label beside the colour.
+STATUS = {
+    "passed": ("#0ca30c", ""),
+    "differs, cause upstream": ("#ec835a", "↑"),
+    "failed": ("#d03b3b", "✕"),
+}
+
+
+def night_grid(frame: pd.DataFrame, colors: Palette) -> alt.LayerChart:
+    """Every night of a run against every compared pair, one cell each.
+
+    ``frame`` has ``night`` (1, 2, ...), ``date``, ``pair``, ``status`` (a key
+    of :data:`STATUS`) and ``detail``. A failing cell carries its glyph as well
+    as its colour, so the grid reads in grey too.
+    """
+    statuses = list(STATUS)
+    data = frame.assign(glyph=frame["status"].map({k: v[1] for k, v in STATUS.items()}))
+    base = alt.Chart(data).encode(
+        # Band padding leaves the surface showing between cells, in either theme.
+        x=alt.X(
+            "night:O",
+            title="Night of the parallel run",
+            axis=alt.Axis(labelAngle=0, grid=False),
+            scale=alt.Scale(paddingInner=0.12),
+        ),
+        y=alt.Y(
+            "pair:N",
+            title=None,
+            sort=None,
+            axis=alt.Axis(labelLimit=320, grid=False),
+            scale=alt.Scale(paddingInner=0.12),
+        ),
+    )
+    cells = base.mark_rect(cornerRadius=2, stroke=None).encode(
+        color=alt.Color(
+            "status:N",
+            scale=alt.Scale(domain=statuses, range=[STATUS[s][0] for s in statuses]),
+            legend=alt.Legend(title=None, orient="top"),
+        ),
+        tooltip=[
+            alt.Tooltip("night:O"),
+            alt.Tooltip("date:N"),
+            alt.Tooltip("pair:N"),
+            alt.Tooltip("status:N"),
+            alt.Tooltip("detail:N"),
+        ],
+    )
+    glyphs = base.mark_text(fontSize=11, color="#ffffff").encode(text="glyph:N")
+    layered: alt.LayerChart = (cells + glyphs).properties(height=alt.Step(24))
+    return layered
+
+
+def accent_lines(
+    frame: pd.DataFrame,
+    x: str,
+    accent: str,
+    grey: str,
+    labels: tuple[str, str],
+    colors: Palette,
+    log: bool = False,
+    value_format: str = ",.0f",
+) -> alt.LayerChart:
+    """The series that matters in the accent against its baseline in grey, one axis."""
+    long = frame.melt(id_vars=[x], value_vars=[accent, grey], var_name="series", value_name="value")
+    long["series"] = long["series"].map({accent: labels[0], grey: labels[1]})
+    base = alt.Chart(long).encode(
+        x=alt.X(f"{x}:O", title="Night of the parallel run", axis=alt.Axis(labelAngle=0)),
+        y=alt.Y(
+            "value:Q",
+            title=None,
+            scale=alt.Scale(type="log") if log else alt.Undefined,
+            axis=alt.Axis(format=value_format),
+        ),
+        color=alt.Color(
+            "series:N",
+            scale=alt.Scale(domain=list(labels), range=[colors.accent, colors.muted]),
+            legend=alt.Legend(title=None, orient="top"),
+        ),
+        tooltip=[
+            alt.Tooltip(f"{x}:O"),
+            alt.Tooltip("series:N"),
+            alt.Tooltip("value:Q", format=value_format),
+        ],
+    )
+    layered: alt.LayerChart = base.mark_line(strokeWidth=LINE_WIDTH) + base.mark_point(
+        filled=True, size=POINT_SIZE
+    )
+    return layered

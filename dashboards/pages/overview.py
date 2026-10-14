@@ -1,79 +1,81 @@
-"""Overview: one headline per module, and who owns what."""
+"""Overview: the company's run, one headline per module, and who owns what."""
 
 from __future__ import annotations
 
 import streamlit as st
 
 from platform_ops.dashboard import charts, page
+from platform_ops.dashboard.queries import metric
 
 st.title("Data platform operations")
 st.caption(
-    "The latest `make demo` run, read from the warehouse's `ops` schema. "
-    "Nothing on these pages is recomputed."
+    "The latest `make demo` run, read from the ops store in Postgres as the dashboards' "
+    "read-only role. Nothing on these pages is recomputed."
 )
 
-cost, incidents, reconcile = st.columns(3)
+company = page.frame("company_run")
+if company is not None and not company.empty:
+    start = metric(company, "window_start")
+    days = int(metric(company, "days"))
+    ingestion = page.frame("ingestion")
+    lineage = page.frame("lineage")
+    a, b, c = st.columns(3)
+    a.metric("Simulated window", f"{days} days")
+    a.caption(f"From {start:%Y-%m-%d}")
+    if ingestion is not None:
+        b.metric("Rows ingested into ClickHouse", f"{int(metric(ingestion, 'rows_read')):,}")
+    if lineage is not None:
+        c.metric("Lineage edges", f"{int(metric(lineage, 'edges')):,}")
+
+st.divider()
+cost, reconcile = st.columns(2)
 
 with cost:
     st.subheader("Cost")
-    showback = page.frame("showback")
-    if showback is not None:
-        totals = showback.groupby("pricing_model")["total_usd"].sum()
-        st.metric("Compute pricing, whole window", f"${totals.get('compute', 0):,.2f}")
-        st.metric("Scan pricing, same queries", f"${totals.get('scan', 0):,.2f}")
-    unused = page.frame("unused_tables")
-    if unused is not None:
-        st.metric("Unused tables (90 days)", int((unused["lookback_days"] == 90).sum()))
-
-with incidents:
-    st.subheader("Incidents")
-    metrics = page.frame("incident_metrics")
-    if metrics is not None:
-        wh = page.warehouse()
-        raw = wh.metric(metrics, "raw_alerts") or 0
-        opened = wh.metric(metrics, "incidents") or 0
-        pages_sent = wh.metric(metrics, "pages") or 0
-        st.metric("Failing checks", f"{raw:,.0f}")
-        st.metric("Incidents opened", f"{opened:,.0f}")
-        avoided = 1 - pages_sent / raw if raw else 0.0
-        st.metric("Pages avoided by grouping", f"{avoided:.0%}")
+    months = page.frame("cost_months")
+    summary = page.frame("business_summary")
+    if months is not None:
+        st.metric("ClickHouse's stated cost, whole window", page.usd(months["stated_usd"].sum()))
+    if summary is not None and not summary.empty:
+        saving = float(metric(summary, "monthly_saving_usd"))
+        payback = metric(summary, "payback_months")
+        st.metric("Saving once the reporting replica is retired", f"{page.usd(saving)} a month")
+        if payback is not None:
+            st.metric("Payback of running both until cutover", f"{payback:.1f} months")
 
 with reconcile:
     st.subheader("Reconciliation")
-    tables = page.frame("reconcile_tables")
-    if tables is not None:
-        delivered = tables[tables["pass"] == "as_delivered"]
-        signed = bool(delivered["passed"].all()) if not delivered.empty else False
-        st.markdown(
-            "Migration as delivered: "
-            + (
-                ":green[:material/check_circle: **signed off**]"
-                if signed
-                else ":red[:material/cancel: **not signed off**]"
+    cutover = page.frame("cutover")
+    grades = page.frame("grades")
+    if cutover is not None and not cutover.empty:
+        if bool(metric(cutover, "recommended")):
+            st.markdown(
+                ":green[:material/check_circle: **Cutover recommended**] on "
+                f"{metric(cutover, 'run_at'):%Y-%m-%d}"
             )
+        else:
+            st.markdown(":red[:material/cancel: **Cutover not recommended yet**]")
+        st.metric(
+            "Clean nights in a row",
+            f"{int(metric(cutover, 'clean_nights'))} of {int(metric(cutover, 'required'))}",
         )
-        rm = page.frame("reconcile_metrics")
-        if rm is not None:
-            recall = rm[(rm["pass"] == "as_delivered") & (rm["metric"] == "recall")]["value"]
-            if not recall.empty:
-                st.metric("Detection recall", f"{recall.min():.2%}")
-        st.metric("Legacy rows compared", f"{int(delivered['source_rows'].sum()):,}")
+    if grades is not None and not grades.empty:
+        expected = int(grades["expected"].sum())
+        found = int(grades["true_positives"].sum())
+        st.metric("Planted discrepancies found", f"{found:,} of {expected:,}")
 
 st.divider()
 st.subheader("Ownership")
 st.caption(
-    "Every source, model and dashboard resolves to one owner in `config/ownership.yaml`. "
-    "The platform team owns the shared layers, so most incidents route there."
+    "Every source, model, seed, snapshot and dashboard resolves to one owner in "
+    "`config/ownership.yaml`. The platform team owns the shared layers."
 )
 coverage = page.frame("ownership_coverage")
 by_team = page.frame("owners_by_team")
 if coverage is not None and by_team is not None:
-    left, right = st.columns([1, 2])
+    left, right = st.columns([2, 3])
     with left:
-        shown = coverage.assign(
-            coverage=lambda f: (f["owned"] / f["datasets"]).map("{:.0%}".format)
-        )
-        st.dataframe(shown, hide_index=True, width="stretch")
+        st.dataframe(coverage, hide_index=True, width="stretch")
     with right:
         page.chart(
             charts.single_bars(

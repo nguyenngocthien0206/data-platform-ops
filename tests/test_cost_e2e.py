@@ -48,7 +48,8 @@ def _cost_report(settings: Settings) -> Path:
 
 @pytest.fixture(scope="module")
 def costed(company_warehouse: Settings) -> tuple[Settings, bytes]:
-    report = _cost_report(company_warehouse)
+    """The shared company's cost report, written by the fixture through the CLI."""
+    report = company_warehouse.resolve(company_warehouse.paths.reports) / "cost.md"
     return company_warehouse, report.read_bytes()
 
 
