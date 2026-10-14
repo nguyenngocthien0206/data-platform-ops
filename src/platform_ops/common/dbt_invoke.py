@@ -63,7 +63,7 @@ class DbtInvocation:
 
 
 def invocation_from_settings(
-    settings: Settings, *, simulated_now: datetime | None = None
+    settings: Settings, *, simulated_now: datetime | None = None, log_comment: str = ""
 ) -> DbtInvocation:
     """Everything dbt needs, taken from settings.
 
@@ -96,6 +96,8 @@ def invocation_from_settings(
             "CLICKHOUSE_PORT": str(params.port),
             "CLICKHOUSE_USER": user,
             "CLICKHOUSE_PASSWORD": password,
+            # The query log tag of every statement dbt runs (common.tagging).
+            "PLATFORM_OPS_LOG_COMMENT": log_comment,
         },
         vars=variables,
     )

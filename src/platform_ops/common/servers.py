@@ -123,13 +123,16 @@ CLICKHOUSE_SESSION_SETTINGS: dict[str, Any] = {
 }
 
 
-def clickhouse_client(settings: Settings, user: str | None = None) -> Any:
+def clickhouse_client(
+    settings: Settings, user: str | None = None, session: dict[str, Any] | None = None
+) -> Any:
     """A clickhouse-connect HTTP client with the toolkit's session settings.
 
     Without ``user`` it connects as the server's admin, which the toolkit uses
     to set the company up and to read what it measures. With ``user`` (a base
     name such as ``loader``) it connects as that company user, namespaced, with
-    that user's own password.
+    that user's own password. ``session`` adds settings to every query the
+    client sends, such as the query log tag of ``common.tagging``.
     """
     import clickhouse_connect
 
@@ -143,5 +146,5 @@ def clickhouse_client(settings: Settings, user: str | None = None) -> Any:
         port=params.port,
         username=username,
         password=password,
-        settings=CLICKHOUSE_SESSION_SETTINGS,
+        settings={**CLICKHOUSE_SESSION_SETTINGS, **(session or {})},
     )

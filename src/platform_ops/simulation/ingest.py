@@ -45,6 +45,7 @@ from psycopg import sql
 from platform_ops.common.config import Settings
 from platform_ops.common.servers import clickhouse_client, postgres_params
 from platform_ops.common.store import open_store, ops_table
+from platform_ops.common.tagging import Tag
 from platform_ops.simulation import raw_data
 from platform_ops.simulation.legacy_db import LOADED_AT, UPDATED_AT
 
@@ -183,12 +184,14 @@ class Ingestion:
             if since is not None:
                 where = f"{UPDATED_AT} > {_ts(since)} AND {where}"
             where += self._dropped(table)
+            tag = Tag(until, "ingestion", subject=f"source.company.raw.{table}")
             summary = loader.command(
                 f"INSERT INTO `{self.database}`.`{table}` ({selected}, {LOADED_AT}) "
                 f"SELECT {read}, {_ts(until)} "
                 f"FROM postgresql('{source_host}', '{pg.dbname}', '{table}', "
                 f"'{pg.user}', '{pg.password}', '{schema}') "
-                f"WHERE {where} ORDER BY {raw_data.PRIMARY_KEYS[table]}"
+                f"WHERE {where} ORDER BY {raw_data.PRIMARY_KEYS[table]}",
+                settings=tag.settings(),
             )
             rows = int(getattr(summary, "written_rows", 0) or 0)
             moved[table] = rows
