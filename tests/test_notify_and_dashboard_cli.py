@@ -12,12 +12,14 @@ import threading
 from collections.abc import Iterator
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
 from platform_ops import cli
+from platform_ops.common.config import CONFIG_PATH_ENV_VAR
 from platform_ops.incidents.notify import CompositeNotifier, Notification, SlackNotifier
 
 NOTE = Notification(
@@ -74,10 +76,10 @@ def test_composite_sends_to_every_notifier() -> None:
     assert seen == ["a:INC-001", "b:INC-001"]
 
 
-@pytest.mark.skip(reason=cli.paused_reason("dashboard"))
 def test_dashboard_runs_streamlit_headless_without_telemetry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("POSTGRES_PASSWORD_DASHBOARD", "a-password")
     launched: list[list[str]] = []
 
     class FakeProcess:
@@ -105,3 +107,15 @@ def test_dashboard_runs_streamlit_headless_without_telemetry(
         "--browser.gatherUsageStats": "false",
     }
     assert opened == [], "--headless never opens a browser"
+
+
+def test_dashboard_without_its_password_exits_2_and_names_the_variable(
+    monkeypatch: pytest.MonkeyPatch, settings_file: Path
+) -> None:
+    """The pages read as their own role: no password, no Streamlit."""
+    monkeypatch.setenv(CONFIG_PATH_ENV_VAR, str(settings_file))
+    monkeypatch.delenv("POSTGRES_PASSWORD_DASHBOARD", raising=False)
+    monkeypatch.setattr("subprocess.Popen", lambda *_, **__: pytest.fail("Streamlit started"))
+    result = CliRunner().invoke(cli.app, ["dashboard", "--headless"])
+    assert result.exit_code == 2
+    assert "POSTGRES_PASSWORD_DASHBOARD" in result.output

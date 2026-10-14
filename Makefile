@@ -79,7 +79,7 @@ incidents: ## Inject faults, detect and group incidents, write metrics (paused)
 reconcile: ## Write the cutover sign-off from the parallel run (after make demo)
 	$(RUN) platform-ops reconcile run
 
-dashboard: ## Launch the Streamlit dashboards (paused)
+dashboard: ## Launch the Streamlit dashboards on the ops store (after make demo)
 	$(RUN) platform-ops dashboard
 
 paused: ## List the 1.x modules paused in version 2.0 and when each returns

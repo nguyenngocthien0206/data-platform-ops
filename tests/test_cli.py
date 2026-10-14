@@ -64,7 +64,6 @@ def test_every_makefile_command_is_built_and_documented(command: list[str]) -> N
 # Version 2.0: each 1.x module that has not moved yet, with the command that runs it.
 PAUSED_COMMANDS = {
     "incidents": ["incidents", "run"],
-    "dashboard": ["dashboard"],
 }
 
 
