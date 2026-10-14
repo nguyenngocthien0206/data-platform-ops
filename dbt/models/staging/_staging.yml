@@ -20,11 +20,11 @@ models:
     data_tests:
       - row_count_in_range:
           # Bounds hold across the whole simulated window: about 400k orders at the
-          # window start, growing to about 620k after 13 weeks. The lower bound is what
-          # catches a volume drop.
+          # window start, growing to about 676k after 16 weeks (about 18.7k a week by
+          # the end). The lower bound is what catches a volume drop.
           arguments:
             min_rows_at_scale_1: 350000
-            max_rows_at_scale_1: 680000
+            max_rows_at_scale_1: 760000
     columns:
       - name: order_id
         data_tests: [unique, not_null]
