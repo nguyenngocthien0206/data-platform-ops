@@ -11,15 +11,15 @@ The rules, in order (ADR 0008):
 4. A skipped node is impact of the root above it, never an alert of its own.
 5. A root that already has an open incident appends to it instead of opening a
    second one; the same broken table failing again the next night is the same
-   problem.
+   problem. The desk applies this rule against the store (``desk``).
 
-Everything here is pure: a graph and events in, groups out. The scenario does
-the reading and writing around it.
+Everything here is pure: a graph and events in, groups out. The desk does the
+reading and writing around it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import networkx as nx
@@ -84,24 +84,3 @@ def group_failures(
         )
         for root in sorted(events_by_root)
     ]
-
-
-@dataclass(frozen=True)
-class Assignment:
-    """What to do with this run's groups given the incidents already open."""
-
-    new: tuple[Group, ...]
-    # (incident id, group) for roots that already have an open incident.
-    appended: tuple[tuple[str, Group], ...]
-
-
-def assign(groups: Iterable[Group], open_by_root: Mapping[str, str]) -> Assignment:
-    new: list[Group] = []
-    appended: list[tuple[str, Group]] = []
-    for group in groups:
-        incident_id = open_by_root.get(group.root)
-        if incident_id is None:
-            new.append(group)
-        else:
-            appended.append((incident_id, group))
-    return Assignment(tuple(new), tuple(appended))

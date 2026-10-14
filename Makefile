@@ -71,9 +71,7 @@ metabase: check-env ## Start Metabase and build one dashboard per exposure (afte
 cost: ## Price the company run's query log, show it back by team, write the cost report
 	$(RUN) platform-ops cost report
 
-# The 1.x modules below are paused in version 2.0 until their phase moves them
-# to ClickHouse; each command says so and exits 2. `make paused` lists them.
-incidents: ## Inject faults, detect and group incidents, write metrics (paused)
+incidents: ## The incident report and postmortems from the store, graded (after make demo)
 	$(RUN) platform-ops incidents run
 
 reconcile: ## Write the cutover sign-off from the parallel run (after make demo)
@@ -82,7 +80,7 @@ reconcile: ## Write the cutover sign-off from the parallel run (after make demo)
 dashboard: ## Launch the Streamlit dashboards on the ops store (after make demo)
 	$(RUN) platform-ops dashboard
 
-paused: ## List the 1.x modules paused in version 2.0 and when each returns
+paused: ## List any 1.x module still paused in version 2.0 (none since Phase 14)
 	$(RUN) platform-ops paused
 
 # Not part of `demo`: the README numbers come from the reference run, and a
@@ -113,19 +111,20 @@ clean: ## Remove generated data, reports and build artifacts
 	rm -rf .pytest_cache .ruff_cache .mypy_cache
 	find reports -type f ! -name .gitkeep -delete 2>/dev/null || true
 
-# Version 2.0: the company runs on Postgres and ClickHouse, its last six weeks
-# are the migration's parallel run (reconciled every night, Phase 12), and the
-# ownership check and lineage run on its project. `company run` seeds and
-# builds itself, so `demo` needs no separate `seed` and `build` steps. The cost
-# report (Phase 13) reads the run's query log, the ownership and the cutover,
-# so it comes last. The 1.x modules return phase by phase; `paused` says which
-# and when.
-pipeline: company ## Every module that runs in this phase, in order, on the current state
+# Version 2.0: the company runs on Postgres and ClickHouse. Six weeks of its
+# window are the migration's parallel run (reconciled every night, Phase 12),
+# and its last three are production on ClickHouse, where faults happen and the
+# incident desk ingests every night's dbt invocations (Phase 14). `company run`
+# seeds and builds itself, so `demo` needs no separate `seed` and `build`
+# steps. Then the ownership check and lineage, the sign-off, the incident
+# report from the store, and the cost report (Phase 13), which reads the run's
+# query log, the ownership and the cutover, so it comes last.
+pipeline: company ## Every module, in order, on the current state
 	$(RUN) platform-ops metadata check
 	$(RUN) platform-ops metadata lineage
 	$(RUN) platform-ops reconcile run
+	$(RUN) platform-ops incidents run
 	$(RUN) platform-ops cost report
-	@$(RUN) platform-ops paused
 	@echo "pipeline complete."
 
 demo: clean setup up pipeline ## Full end to end run on a clean state

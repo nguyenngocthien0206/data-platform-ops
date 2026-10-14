@@ -16,13 +16,10 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-import duckdb
-
-from platform_ops.common.db import OPS_SCHEMA, insert_rows
 from platform_ops.metadata.manifest import Node
 
 CheckType = Literal["model", "test", "freshness"]
@@ -154,47 +151,58 @@ def merge(outcomes: Sequence[RunOutcome]) -> RunOutcome:
     return RunOutcome(tuple(events), tuple(skipped), sum(o.checks_run for o in outcomes))
 
 
-CHECK_EVENTS_DDL = """
-    run_id VARCHAR NOT NULL,
-    check_id VARCHAR NOT NULL,
-    check_type VARCHAR NOT NULL,
-    subject VARCHAR NOT NULL,
-    status VARCHAR NOT NULL,
-    message VARCHAR NOT NULL,
-    detected_at TIMESTAMP NOT NULL,
-    incident_id VARCHAR"""
+@dataclass(frozen=True)
+class Artifact:
+    """One dbt invocation's result file, as found in a target folder."""
 
-CHECK_EVENT_COLUMNS = (
-    "run_id",
-    "check_id",
-    "check_type",
-    "subject",
-    "status",
-    "message",
-    "detected_at",
-    "incident_id",
-)
+    invocation_id: str
+    kind: Literal["run_results", "sources"]
+    generated_at: datetime
+    data: dict[str, Any]
 
 
-def reset_check_events(connection: duckdb.DuckDBPyConnection) -> None:
-    connection.execute(f"CREATE OR REPLACE TABLE {OPS_SCHEMA}.check_events ({CHECK_EVENTS_DDL})")
+def _generated_at(data: Mapping[str, Any]) -> datetime:
+    """When dbt wrote the file, as a naive UTC time (the store's convention)."""
+    raw = str((data.get("metadata") or {}).get("generated_at") or "")
+    stamp = datetime.fromisoformat(raw.replace("Z", "+00:00")) if raw else datetime(1970, 1, 1)
+    return (
+        stamp.replace(tzinfo=None)
+        if stamp.tzinfo is None
+        else stamp.astimezone(UTC).replace(tzinfo=None)
+    )
 
 
-def persist_events(
-    connection: duckdb.DuckDBPyConnection, events: Sequence[tuple[CheckEvent, str | None]]
-) -> int:
-    """Append events, each tagged with the incident it was grouped into."""
-    rows = [
-        (
-            e.run_id,
-            e.check_id,
-            e.check_type,
-            e.subject,
-            e.status,
-            e.message,
-            e.detected_at,
-            incident_id,
-        )
-        for e, incident_id in events
-    ]
-    return insert_rows(connection, f"{OPS_SCHEMA}.check_events", CHECK_EVENT_COLUMNS, rows)
+def read_target(target: Path) -> list[Artifact]:
+    """The result files in a dbt target folder: ``run_results.json`` and ``sources.json``.
+
+    Either may be left over from an earlier invocation; the store recognises
+    those by their invocation id and ignores them.
+    """
+    found = []
+    for name, kind in (("sources.json", "sources"), ("run_results.json", "run_results")):
+        path = target / name
+        if path.is_file():
+            data = read_json(path)
+            invocation = str((data.get("metadata") or {}).get("invocation_id") or "")
+            if invocation:
+                found.append(Artifact(invocation, kind, _generated_at(data), data))  # type: ignore[arg-type]
+    return found
+
+
+def results(artifact: Artifact, nodes: Mapping[str, Node]) -> list[tuple[str, str, str]]:
+    """Every node an invocation reported on: (unique id, resource type, status)."""
+    out = []
+    for result in artifact.data.get("results", []):
+        unique_id = str(result.get("unique_id", ""))
+        node = nodes.get(unique_id)
+        kind = node.resource_type if node is not None else unique_id.split(".", 1)[0]
+        out.append((unique_id, kind, str(result.get("status", ""))))
+    return sorted(out)
+
+
+def parse(
+    artifact: Artifact, nodes: Mapping[str, Node], *, run_id: str, detected_at: datetime
+) -> RunOutcome:
+    if artifact.kind == "sources":
+        return parse_freshness(artifact.data, run_id=run_id, detected_at=detected_at)
+    return parse_run_results(artifact.data, nodes, run_id=run_id, detected_at=detected_at)

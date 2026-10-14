@@ -1,0 +1,75 @@
+{
+ "args": {
+  "which": "build"
+ },
+ "elapsed_time": 12.5,
+ "metadata": {
+  "adapter_type": "snowflake",
+  "dbt_schema_version": "https://schemas.getdbt.com/dbt/run-results/v6.json",
+  "dbt_version": "1.9.4",
+  "generated_at": "2026-03-02T02:14:09.120934Z",
+  "invocation_id": "9b2f0c1e-5d1a-4c55-9c8e-0a1b2c3d4e01"
+ },
+ "results": [
+  {
+   "adapter_response": {},
+   "execution_time": 0.5,
+   "failures": 0,
+   "message": null,
+   "status": "success",
+   "thread_id": "Thread-1",
+   "timing": [],
+   "unique_id": "model.shop.stg_orders"
+  },
+  {
+   "adapter_response": {},
+   "execution_time": 0.5,
+   "failures": 0,
+   "message": null,
+   "status": "success",
+   "thread_id": "Thread-1",
+   "timing": [],
+   "unique_id": "model.shop.stg_payments"
+  },
+  {
+   "adapter_response": {},
+   "execution_time": 0.5,
+   "failures": 3,
+   "message": "Got 3 results, configured to fail if != 0",
+   "status": "fail",
+   "thread_id": "Thread-1",
+   "timing": [],
+   "unique_id": "test.shop.not_null_stg_orders_customer_id.a1"
+  },
+  {
+   "adapter_response": {},
+   "execution_time": 0.5,
+   "failures": 0,
+   "message": null,
+   "status": "pass",
+   "thread_id": "Thread-1",
+   "timing": [],
+   "unique_id": "test.shop.relationships_stg_payments_order_id__order_id__ref_stg_orders_.b2"
+  },
+  {
+   "adapter_response": {},
+   "execution_time": 0.5,
+   "failures": 0,
+   "message": null,
+   "status": "success",
+   "thread_id": "Thread-1",
+   "timing": [],
+   "unique_id": "model.shop.fct_revenue"
+  },
+  {
+   "adapter_response": {},
+   "execution_time": 0.5,
+   "failures": 0,
+   "message": null,
+   "status": "pass",
+   "thread_id": "Thread-1",
+   "timing": [],
+   "unique_id": "test.shop.unique_fct_revenue_order_id.c3"
+  }
+ ]
+}

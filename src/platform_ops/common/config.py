@@ -193,7 +193,9 @@ class LifecycleSettings(_Strict):
 
 
 class IncidentSettings(_Strict):
-    scenario_days: Annotated[int, Field(ge=1)]
+    # Days into the production weeks on which faults happen, two at a time
+    # (simulation.faults.CATALOGUE, in order); days past the window are dropped.
+    fault_days: list[Annotated[int, Field(ge=0)]] = Field(default_factory=lambda: [2, 5, 9, 14])
     fault_hour: Annotated[int, Field(ge=0, le=23)]
     severity: SeveritySettings
     lifecycle: LifecycleSettings
@@ -329,10 +331,15 @@ class CompanySettings(_Strict):
     # come from the environment (METABASE_URL, MB_ADMIN_EMAIL, MB_ADMIN_PASSWORD).
     metabase_database: str = "metabase"
     clickhouse_from_metabase: str = "clickhouse:8123"
-    # The parallel run (Phase 12): the last weeks of the window, when legacy and
+    # The parallel run (Phase 12): the weeks before production, when legacy and
     # ClickHouse both run, dbt builds every night and the migration is
     # reconciled every night. Zero means no parallel run.
     parallel_run_weeks: Annotated[int, Field(ge=0)] = 0
+    # Production (Phase 14): the last weeks of the window, after the parallel
+    # run, when ClickHouse is what the business runs on. Every night runs source
+    # freshness, run, snapshot and test, faults happen in operation, and the
+    # incident desk ingests what dbt reports. Zero means no production weeks.
+    production_weeks: Annotated[int, Field(ge=0)] = 0
     # Nights into the parallel run when the migration team ships the fixed job
     # and backfills. Until then the job runs as delivered.
     fix_after_nights: Annotated[int, Field(ge=1)] = 7

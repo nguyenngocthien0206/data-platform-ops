@@ -24,9 +24,11 @@ simulation:
   # All simulated time is anchored here. Weeks of simulated activity are
   # generated in minutes of real time by common.clock.
   start: 2026-01-05T00:00:00
-  # 13 weeks (91 days) rather than the SPEC's default of 6, so the cost
-  # module's 90-day unused-table check covers a real 90 days of activity.
-  weeks: 13
+  # 16 weeks (112 days): seven weeks of the company before the migration's
+  # parallel run, the six-week parallel run, and three weeks of production on
+  # ClickHouse after it (`company`). The cost module's 90-day unused-table
+  # check covers a real 90 days of activity.
+  weeks: 16
   # Simulated hour of day at which the scheduled dbt run happens.
   daily_run_hour: 2
 
@@ -128,8 +130,9 @@ workload:
   customer_profile_changes_per_day: 40
 
 incidents:
-  # Length of the incident scenario, from its own fresh seed at simulation.start.
-  scenario_days: 21
+  # Faults happen in operation, during the production weeks after the parallel
+  # run (company.production_weeks): two on each of these days into production.
+  fault_days: [2, 5, 9, 14]
   # Faults happen during the working day; the next 02:00 run is the first
   # chance to catch them.
   fault_hour: 10
@@ -211,7 +214,7 @@ company:
   # dbt builds every N simulated days and on the last day, and every night
   # of the parallel run. Measured, not assumed: see docs/PROGRESS.md.
   build_every_days: 28
-  # The migration's parallel run (Phase 12): the last 6 weeks of the window.
+  # The migration's parallel run (Phase 12): the 6 weeks before production.
   # Legacy and ClickHouse both run, dbt builds and the migration is reconciled
   # every night. The ingestion runs as the migration team delivered it, with
   # the defects below, until fix_after_nights into the parallel run, when the
@@ -219,6 +222,11 @@ company:
   # next day, the way a team works through its morning reconciliation report.
   parallel_run_weeks: 6
   fix_after_nights: 7
+  # Production on ClickHouse after the parallel run (Phase 14): every night
+  # runs source freshness, run, snapshot and test as separate dbt invocations,
+  # faults happen in operation (incidents.fault_days), and the incident desk
+  # ingests what dbt reports. A failing check is recorded, not fatal.
+  production_weeks: 3
   delivered_job:
     timezone_table: payments
     timezone_column: created_at

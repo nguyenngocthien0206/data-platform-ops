@@ -61,27 +61,9 @@ def test_every_makefile_command_is_built_and_documented(command: list[str]) -> N
     assert "not implemented" not in result.output.lower()
 
 
-# Version 2.0: each 1.x module that has not moved yet, with the command that runs it.
-PAUSED_COMMANDS = {
-    "incidents": ["incidents", "run"],
-}
-
-
-def test_every_paused_module_has_its_command() -> None:
-    assert set(PAUSED_COMMANDS) == set(PAUSED_UNTIL)
-
-
-@pytest.mark.parametrize("module", sorted(PAUSED_COMMANDS))
-def test_a_paused_command_exits_2_and_names_the_phase_it_returns_in(module: str) -> None:
-    """Before reading any settings or data: the 1.x warehouse it needs is gone."""
-    result = runner.invoke(app, PAUSED_COMMANDS[module])
-    assert result.exit_code == 2
-    assert f"returns in Phase {PAUSED_UNTIL[module]}" in result.output
-    assert "v1.2.0" in result.output
-
-
-def test_paused_lists_every_paused_module() -> None:
+# Version 2.0 paused each 1.x module until its phase moved it; since Phase 14 none is.
+def test_nothing_is_paused_any_more() -> None:
+    assert PAUSED_UNTIL == {}
     result = runner.invoke(app, ["paused"])
     assert result.exit_code == 0
-    for module, phase in PAUSED_UNTIL.items():
-        assert f"{module:<12} paused, returns in Phase {phase}" in result.output
+    assert "Nothing is paused" in result.output

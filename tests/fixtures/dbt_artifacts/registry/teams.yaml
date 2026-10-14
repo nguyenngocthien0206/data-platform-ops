@@ -1,0 +1,10 @@
+teams:
+  - id: data
+    name: Data platform
+    channel: "#data-platform"
+    members: [dana]
+  - id: finance
+    name: Finance
+    channel: "#finance-data"
+    members: [fiona]
+    telegram_chat: "-1001"

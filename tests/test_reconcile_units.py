@@ -306,12 +306,13 @@ def test_no_streak_long_enough_means_no_cutover() -> None:
 # -- the company's timeline and the planted discrepancies -----------------------------------
 
 
-def test_the_parallel_run_is_the_last_weeks_and_the_fix_ships_inside_it(
+def test_the_parallel_run_comes_before_production_and_the_fix_ships_inside_it(
     repo_settings: Settings,
 ) -> None:
-    timeline = Timeline.of(repo_settings, 91)
+    timeline = Timeline.of(repo_settings, 112)
     assert (timeline.parallel_start, timeline.fix_night) == (49, 56)
     assert not timeline.parallel(48) and timeline.parallel(49)
+    assert timeline.parallel(90) and not timeline.parallel(91) and timeline.production(91)
     assert timeline.delivered(0) and timeline.delivered(55) and not timeline.delivered(56)
     nights = sorted(timeline.faults)
     assert nights == [58, 60, 62, 64, 66, 68, 70]

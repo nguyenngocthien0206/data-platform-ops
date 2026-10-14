@@ -9,6 +9,7 @@ another's command.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -65,26 +66,10 @@ def _fail(message: str, code: int = 1) -> NoReturn:
     raise typer.Exit(code=code)
 
 
-# Version 2.0 moves the company to Postgres and ClickHouse one module at a time.
-# Until its phase rewrites it, a 1.x module still reads the DuckDB warehouse that
-# no longer exists, so its command says when it returns instead of failing
-# somewhere deep inside. 1.x is available at tag v1.2.0.
-PAUSED_UNTIL: dict[str, int] = {
-    "incidents": 14,
-}
-
-
-def paused_reason(module: str) -> str:
-    """Why a paused module does not run, and when it returns. The tests skip with it too."""
-    return (
-        f"{module} is paused while version 2.0 moves it to ClickHouse; it returns in "
-        f"Phase {PAUSED_UNTIL[module]}. The 1.x version is at tag v1.2.0."
-    )
-
-
-def _check_paused(module: str) -> None:
-    if module in PAUSED_UNTIL:
-        _fail(paused_reason(module), EXIT_UNUSABLE)
+# Version 2.0 moved the company to Postgres and ClickHouse one module at a time,
+# pausing each 1.x module until its phase rewrote it. Since Phase 14 none is
+# paused; `make paused` says so. 1.x is available at tag v1.2.0.
+PAUSED_UNTIL: dict[str, int] = {}
 
 
 def _start(name: str) -> tuple[Settings, SimulatedClock]:
@@ -123,6 +108,8 @@ def paused() -> None:
     """List the 1.x modules paused in version 2.0, and the phase each returns in."""
     for module, phase in sorted(PAUSED_UNTIL.items(), key=lambda item: (item[1], item[0])):
         typer.echo(f"{module:<12} paused, returns in Phase {phase}")
+    if not PAUSED_UNTIL:
+        typer.echo("Nothing is paused: every module runs on version 2.0.")
     typer.echo("The 1.x versions are at tag v1.2.0.")
 
 
@@ -220,6 +207,7 @@ def company_run(days: int | None = DAYS_OPTION) -> None:
     """
     from platform_ops.common.dbt_invoke import DbtError, invocation_from_settings
     from platform_ops.common.servers import MissingPasswordError
+    from platform_ops.incidents.production import CompanyDesk
     from platform_ops.metadata.lineage import build_graph, store_edges
     from platform_ops.metadata.manifest import load_manifest
     from platform_ops.reconcile.parallel import ParallelRun
@@ -228,10 +216,13 @@ def company_run(days: int | None = DAYS_OPTION) -> None:
 
     settings, _ = _start("company")
     parallel = ParallelRun(settings) if settings.company.parallel_run_weeks else None
+    desk = CompanyDesk(settings) if settings.company.production_weeks else None
     try:
-        # The storage watch opens the ops store, so it starts after the passwords
-        # are known to be there (run_company checks them first).
-        summary = run_company(settings, days, nightly=parallel, daily=_LazyStorage(settings))
+        # The storage watch and the desk open the ops store, so they start after
+        # the passwords are known to be there (run_company checks them first).
+        summary = run_company(
+            settings, days, nightly=parallel, daily=_LazyStorage(settings), desk=desk
+        )
     except MissingPasswordError as error:
         _missing_passwords(error)
     except DbtError as error:
@@ -254,7 +245,8 @@ def company_run(days: int | None = DAYS_OPTION) -> None:
         f"simulated {summary.days} days: {summary.rows_seeded:,} rows of history, "
         f"{summary.rows_loaded:,} new and {summary.rows_changed:,} changed in Postgres, "
         f"{summary.rows_ingested:,} ingested into ClickHouse, {len(summary.builds)} dbt builds, "
-        f"{sum(summary.queries.values()):,} dashboard and ad hoc queries; "
+        f"{sum(summary.queries.values()):,} dashboard and ad hoc queries, "
+        f"{summary.production_nights} nights in production with {len(summary.faults)} faults; "
         f"lineage {edges:,} edges"
     )
 
@@ -577,29 +569,91 @@ def cost_report() -> None:
 
 @incidents_app.command("run")
 def incidents_run() -> None:
-    """Inject faults, detect and group incidents, write metrics.
+    """Write the incident report from the store, graded against the planted faults.
 
-    Starts from a fresh seed every time, so two runs produce the same report.
+    The incidents happen during `make demo`, in the company's production weeks;
+    this reads them back and writes reports/incidents.md and the postmortems.
     """
-    from platform_ops.common.dbt_invoke import DbtError
-    from platform_ops.incidents.run import run_incidents
-
-    _check_paused("incidents")
-    from platform_ops.incidents.scenario import ScenarioError
+    from platform_ops.incidents.run import IncidentError, run_incidents
 
     settings, _ = _start("incidents")
     try:
-        summary, _, _ = run_incidents(settings)
-    except (DbtError, ScenarioError) as error:
-        _fail(str(error))
+        summary = run_incidents(settings)
+    except IncidentError as error:
+        _fail(str(error), EXIT_UNUSABLE)
     typer.echo(
         f"{summary.faults} faults, {summary.raw_alerts} failing checks, "
-        f"{summary.incidents} incidents, {summary.pages} pages; dbt ran on {summary.runs} "
-        f"nights ({summary.dbt_invocations} invocations); wrote {summary.report_path} and "
-        f"{len(summary.postmortems)} postmortems"
+        f"{summary.incidents} incidents, {summary.pages} pages over {summary.runs} production "
+        f"nights; wrote {summary.report_path} and {len(summary.postmortems)} postmortems"
     )
     if not summary.one_incident_per_fault:
-        _fail("not every injected fault maps to exactly one incident; see the report")
+        _fail("not every planted fault maps to exactly one incident; see the report")
+
+
+TARGET_OPTION = typer.Option(
+    ..., "--target", help="The dbt target folder of one invocation (its artifacts and manifest)."
+)
+RUN_ID_OPTION = typer.Option(
+    ...,
+    "--run-id",
+    help="The orchestrator's run id: invocations that share it are one run.",
+)
+AT_OPTION = typer.Option(
+    None, "--at", help="When the run detected its failures (default: when dbt wrote each file)."
+)
+REGISTRY_DIR_OPTION = typer.Option(
+    None,
+    "--registry-dir",
+    help="Folder with teams.yaml, ownership.yaml and an optional incidents.yaml "
+    "(default: config/).",
+)
+
+
+@incidents_app.command("ingest")
+def incidents_ingest(
+    target: Path = TARGET_OPTION,
+    run_id: str = RUN_ID_OPTION,
+    at: datetime | None = AT_OPTION,
+    registry_dir: Path | None = REGISTRY_DIR_OPTION,
+) -> None:
+    """Ingest one dbt invocation's artifacts, from any adapter, into the incident store."""
+    from platform_ops.incidents.desk import Context, ingest_target
+    from platform_ops.incidents.notify import channels_from_env
+
+    settings, _ = _start("incidents")
+    if not (target / "manifest.json").is_file():
+        _fail(f"no manifest.json in {target}", EXIT_UNUSABLE)
+    context = Context.load(settings, target / "manifest.json", registry_dir)
+    result = ingest_target(
+        settings,
+        target,
+        run_id,
+        at=at,
+        context=context,
+        channels=channels_from_env(settings.root / ".env"),
+    )
+    if not result.new_invocations:
+        typer.echo(f"{run_id}: nothing new in {target}")
+        return
+    typer.echo(
+        f"{run_id}: {result.new_invocations} invocation(s), {result.failing_checks} failing "
+        f"checks in the run; opened {len(result.opened)}, appended {len(result.appended)}, "
+        f"resolved {len(result.resolved)}; {result.delivered} notification(s)"
+    )
+
+
+@incidents_app.command("summary")
+def incidents_summary() -> None:
+    """Failing checks against pages, per person and week, from the incident store."""
+    from platform_ops.common.dbt_invoke import invocation_from_settings
+    from platform_ops.incidents.desk import Context
+    from platform_ops.incidents.summary import render, weekly
+
+    settings, _ = _start("incidents")
+    manifest = invocation_from_settings(settings).manifest_path
+    if not manifest.is_file():
+        _fail(f"no dbt manifest at {manifest}; run `make demo` first", EXIT_UNUSABLE)
+    typer.echo(render(weekly(settings, Context.load(settings, manifest))))
 
 
 STRICT_OPTION = typer.Option(
