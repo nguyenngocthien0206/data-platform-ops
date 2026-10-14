@@ -18,7 +18,8 @@ import psycopg
 from psycopg import sql
 
 from platform_ops.common.config import Settings
-from platform_ops.common.servers import connect_postgres
+from platform_ops.common.env import env_value
+from platform_ops.common.servers import MissingPasswordError, connect_postgres, postgres_params
 
 
 def ensure_ops_database(settings: Settings) -> None:
@@ -84,3 +85,98 @@ def replace_ops_table(
             for row in rows:
                 copy.write_row(row)
     return len(rows)
+
+
+# -- the dashboards' read-only role ----------------------------------------------------
+
+DASHBOARD_ROLE = "dashboard"
+DASHBOARD_PASSWORD_VARIABLE = "POSTGRES_PASSWORD_DASHBOARD"
+
+
+def dashboard_password(settings: Settings) -> str:
+    """The dashboards' password, or an error naming the variable. No default:
+    a shared fallback password is how a read-only account ends up writable."""
+    password = env_value(DASHBOARD_PASSWORD_VARIABLE, settings.root / ".env")
+    if not password:
+        raise MissingPasswordError([DASHBOARD_PASSWORD_VARIABLE])
+    return password
+
+
+def ensure_dashboard_role(settings: Settings) -> str:
+    """Create or update the role the dashboards read the ops store as. Safe to repeat.
+
+    It may connect to the ops database, use the ops schema and select from its
+    tables, including the ones every run drops and recreates (default
+    privileges, set for the toolkit's own user, which creates them), and its
+    sessions are read-only by default. Nothing else.
+    """
+    password = dashboard_password(settings)
+    ensure_ops_database(settings)
+    role = sql.Identifier(settings.company.name(DASHBOARD_ROLE))
+    with connect_postgres(settings) as connection:
+        connection.autocommit = True
+        exists = connection.execute(
+            "SELECT 1 FROM pg_roles WHERE rolname = %s", [settings.company.name(DASHBOARD_ROLE)]
+        ).fetchone()
+        verb = "ALTER" if exists else "CREATE"
+        connection.execute(
+            sql.SQL(
+                verb + " ROLE {} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD {}"
+            ).format(role, sql.Literal(password))
+        )
+        connection.execute(
+            sql.SQL("ALTER ROLE {} SET default_transaction_read_only = on").format(role)
+        )
+        connection.execute(
+            sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                sql.Identifier(settings.company.ops_database), role
+            )
+        )
+    schema = sql.Identifier(settings.company.name(settings.company.ops_schema))
+    with connect_postgres(settings, settings.company.ops_database) as connection:
+        connection.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, role))
+        connection.execute(
+            sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(schema, role)
+        )
+        connection.execute(
+            sql.SQL(
+                "ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA {} "
+                "GRANT SELECT ON TABLES TO {}"
+            ).format(schema, role)
+        )
+        connection.commit()
+    return settings.company.name(DASHBOARD_ROLE)
+
+
+def drop_dashboard_role(settings: Settings) -> None:
+    """Remove the dashboards' role and every privilege granted to it (tests clean up with it)."""
+    name = settings.company.name(DASHBOARD_ROLE)
+    with connect_postgres(settings) as connection:
+        connection.autocommit = True
+        if (
+            connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", [name]).fetchone()
+            is None
+        ):
+            return
+    for dbname in (None, settings.company.ops_database):
+        with connect_postgres(settings, dbname) as connection:
+            connection.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(name)))
+            connection.commit()
+    with connect_postgres(settings) as connection:
+        connection.autocommit = True
+        connection.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(name)))
+
+
+def connect_dashboard(settings: Settings) -> psycopg.Connection[Any]:
+    """A read-only session on the ops database, as the dashboards' role, in UTC."""
+    params = postgres_params(settings, settings.company.ops_database)
+    connection = psycopg.connect(
+        host=params.host,
+        port=params.port,
+        user=settings.company.name(DASHBOARD_ROLE),
+        password=dashboard_password(settings),
+        dbname=params.dbname,
+    )
+    connection.execute("SET TimeZone = 'UTC'")
+    connection.commit()
+    return connection
