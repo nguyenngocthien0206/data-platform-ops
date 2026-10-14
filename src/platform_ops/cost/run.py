@@ -284,6 +284,187 @@ SHOWBACK_DDL = """
     actor_type text NOT NULL, usd numeric(30, 12) NOT NULL"""
 
 
+def _derived(data: CostData) -> list[tuple[str, str, list[str], list[tuple[Any, ...]]]]:
+    """What the report shows beyond the per-query facts, as ops tables, so the
+    dashboards read the same numbers instead of computing them again."""
+    by_id = {r.query_id: r for r in data.records}
+    shared: dict[str, Decimal] = defaultdict(Decimal)
+    for query_id, usd in data.costs["cluster"].items():
+        shared[f"{by_id[query_id].started_at:%Y-%m}"] += usd
+    for (month, _), usd in data.storage.items():
+        shared[month] += usd
+    case = data.case
+    return [
+        (
+            "cost_months",
+            "month text PRIMARY KEY, days integer NOT NULL, compute_usd numeric(30, 12) NOT NULL, "
+            "storage_usd numeric(30, 12) NOT NULL, stated_usd numeric(30, 12) NOT NULL, "
+            "shared_usd numeric(30, 12) NOT NULL",
+            ["month", "days", "compute_usd", "storage_usd", "stated_usd", "shared_usd"],
+            [
+                (p.month, p.days, p.compute_usd, p.storage_usd, p.total_usd, shared[p.month])
+                for p in data.pools
+            ],
+        ),
+        (
+            "cost_business_case",
+            "month text PRIMARY KEY, days integer NOT NULL, legacy_days integer NOT NULL, "
+            "legacy_usd numeric(30, 12) NOT NULL, clickhouse_usd numeric(30, 12) NOT NULL, "
+            "reconcile_usd numeric(30, 12) NOT NULL",
+            ["month", "days", "legacy_days", "legacy_usd", "clickhouse_usd", "reconcile_usd"],
+            [
+                (m.month, m.days, m.legacy_days, m.legacy_usd, m.clickhouse_usd, m.reconcile_usd)
+                for m in case.months
+            ],
+        ),
+        (
+            "cost_business_summary",
+            "cutover timestamp, legacy_monthly_usd numeric(30, 12) NOT NULL, "
+            "clickhouse_monthly_usd numeric(30, 12) NOT NULL, "
+            "monthly_saving_usd numeric(30, 12) NOT NULL, overlap_usd numeric(30, 12) NOT NULL, "
+            "payback_months numeric(10, 1)",
+            [
+                "cutover",
+                "legacy_monthly_usd",
+                "clickhouse_monthly_usd",
+                "monthly_saving_usd",
+                "overlap_usd",
+                "payback_months",
+            ],
+            [
+                (
+                    case.cutover,
+                    case.legacy_monthly,
+                    case.clickhouse_monthly,
+                    case.monthly_saving,
+                    case.overlap_usd,
+                    case.payback_months,
+                )
+            ],
+        ),
+        (
+            "cost_unused",
+            "lookback_days integer NOT NULL, unique_id text NOT NULL, relation text NOT NULL, "
+            "team text NOT NULL, owner text NOT NULL, cluster_usd_month numeric(30, 12), "
+            "scan_usd_month numeric(30, 12), compute_usd_month numeric(30, 12)",
+            [
+                "lookback_days",
+                "unique_id",
+                "relation",
+                "team",
+                "owner",
+                "cluster_usd_month",
+                "scan_usd_month",
+                "compute_usd_month",
+            ],
+            [
+                (
+                    u.lookback_days,
+                    u.unique_id,
+                    u.relation,
+                    u.team,
+                    u.owner,
+                    u.monthly_saving.get("cluster", Decimal(0)),
+                    u.monthly_saving.get("scan", Decimal(0)),
+                    u.monthly_saving.get("compute", Decimal(0)),
+                )
+                for u in data.unused
+            ],
+        ),
+        (
+            "cost_hotspots",
+            "table_name text NOT NULL, column_name text NOT NULL, reads integer NOT NULL, "
+            "table_rows bigint NOT NULL, rows_scanned bigint NOT NULL, "
+            "bytes_scanned bigint NOT NULL, sorting_key text NOT NULL, engine text NOT NULL, "
+            "suggestion text NOT NULL",
+            [
+                "table_name",
+                "column_name",
+                "reads",
+                "table_rows",
+                "rows_scanned",
+                "bytes_scanned",
+                "sorting_key",
+                "engine",
+                "suggestion",
+            ],
+            [
+                (
+                    h.table,
+                    h.column,
+                    h.reads,
+                    h.table_rows,
+                    h.rows_scanned,
+                    h.bytes_scanned,
+                    h.sorting_key,
+                    h.engine,
+                    h.suggestion,
+                )
+                for h in data.hotspots
+            ],
+        ),
+        (
+            "cost_incremental",
+            "rank integer NOT NULL, unique_id text NOT NULL, relation text NOT NULL, "
+            "team text NOT NULL, cluster_usd numeric(30, 12) NOT NULL, sources text NOT NULL, "
+            "blocked_by text NOT NULL, candidate boolean NOT NULL",
+            [
+                "rank",
+                "unique_id",
+                "relation",
+                "team",
+                "cluster_usd",
+                "sources",
+                "blocked_by",
+                "candidate",
+            ],
+            [
+                (
+                    rank,
+                    c.unique_id,
+                    c.relation,
+                    c.team,
+                    c.production.get("cluster", Decimal(0)),
+                    ", ".join(c.sources),
+                    ", ".join(c.blocked_by),
+                    c.candidate,
+                )
+                for rank, c in enumerate(data.incremental, start=1)
+            ],
+        ),
+        (
+            "cost_quotas",
+            "user_name text PRIMARY KEY, team text NOT NULL, active_days integer NOT NULL, "
+            "p95_daily_bytes bigint NOT NULL, max_query_bytes bigint NOT NULL, "
+            "daily_quota_bytes bigint NOT NULL, query_limit_bytes bigint NOT NULL, "
+            "statements text NOT NULL",
+            [
+                "user_name",
+                "team",
+                "active_days",
+                "p95_daily_bytes",
+                "max_query_bytes",
+                "daily_quota_bytes",
+                "query_limit_bytes",
+                "statements",
+            ],
+            [
+                (
+                    q.user,
+                    q.team,
+                    q.active_days,
+                    q.p95_daily_bytes,
+                    q.max_query_bytes,
+                    q.daily_quota_bytes,
+                    q.query_limit_bytes,
+                    "\n".join(f"{s};" for s in q.statements),
+                )
+                for q in data.quotas
+            ],
+        ),
+    ]
+
+
 def _persist(data: CostData) -> None:
     settings = data.settings
     queries = [
@@ -333,6 +514,8 @@ def _persist(data: CostData) -> None:
             ["month", "team", "model", "cost_kind", "actor_type", "usd"],
             [(*k, v) for k, v in sorted(showback.items())],
         )
+        for name, ddl, columns, rows in _derived(data):
+            replace_ops_table(connection, settings, name, ddl, columns, rows)
 
 
 def run_cost(settings: Settings) -> CostSummary:
