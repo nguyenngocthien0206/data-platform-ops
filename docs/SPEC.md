@@ -421,6 +421,8 @@ Decisions:
 
 Decided with the owner at planning (2026-10-13): the phase is split into **13a**, the cost core and `reports/cost.md`, and **13b**, the Streamlit dashboards back on the Postgres ops store with the browser check. Prices are public on-demand list prices with their sources; the raw layer is merged every night so measured reads repeat; quotas are suggested, never applied. During 13a, compute was shared by bytes read alone (rows read are reported alongside, and two weights would need a ratio nobody could defend) and storage by uncompressed bytes ([ADR 0018](adr/0018-finops-on-a-self-managed-clickhouse.md)).
 
+13b, decided with the owner at planning (2026-10-14): the dashboards read the Postgres ops store as their own read-only role (`POSTGRES_PASSWORD_DASHBOARD`, no default); the cost report stores everything it states (month pools, business case, recommendations) so the pages never recompute; the Reconciliation page shows the parallel run night by night; the Incidents page returns in Phase 14. **Acceptance:** every page renders on a real run in `AppTest` and in headless Chromium in both themes; the role reads every ops table and cannot write; reports and the ops store byte-identical across two runs.
+
 ---
 
 ## Phase 14: Incidents on real dbt runs

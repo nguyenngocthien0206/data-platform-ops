@@ -26,3 +26,9 @@ The query log now says who did what: in the first runs every dbt query is logged
 Ownership of a chart moves to where ownership of the data already lives. Adding a dashboard is adding an exposure, and changing a chart is a `meta` entry next to the model, so both go through the same pull request and the same reviewer as the SQL, and the registry decides which team's collection a dashboard lands in. The rules cover the project without hand-made dashboards; a team that wants a different chart says so in YAML.
 
 Metabase stays out of `make demo`, `make test` and pull request CI. Its image is 1.8 GB and it took 68 seconds to become healthy on the development laptop, so making every change wait for it would teach people to skip the check. The release workflow runs it instead, after a full demo. On the first full run, provisioning took 21 seconds and the check ran all 69 cards of the 12 dashboards without an error. Two limits remain visible on the charts: the last period of every line is partial, because the window ends at 02:00 on its last day, and resource limits per user wait for Phase 13's measurements.
+
+## Later notes
+
+Version 2.0, Phase 13: the cost report suggests per-user quotas from the measured load (`reports/cost.md`, ADR 0018); none are applied. The `writer` profile also writes one part per partition, as dbt does, so measured reads repeat.
+
+Version 2.0, Phase 13b: the same rule reaches the toolkit's own store. The Streamlit dashboards read the Postgres ops store as `dashboard`, a role with `SELECT` on the ops schema and nothing else, read-only by default, its password from `POSTGRES_PASSWORD_DASHBOARD` with no default. `make demo` creates it before it writes anything, next to the ClickHouse users.
