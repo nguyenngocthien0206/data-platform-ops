@@ -22,7 +22,8 @@ Version 1.x (up to [`v1.2.0`](https://github.com/nguyenngocthien0206/data-platfo
 | Ownership check and lineage | running, results in the Postgres ops store | 11a, done |
 | Metabase dashboards built from the exposures, one ClickHouse user per team | running | 11b, done |
 | Reconciliation: a six-week parallel run, tables and reports every night, and the cutover sign-off | running | 12, done |
-| Cost and FinOps on ClickHouse's query log, the Streamlit dashboards | paused | 13 |
+| Cost and FinOps on ClickHouse's query log: the cluster's bill per team, the migration's business case, BigQuery and Snowflake on the same workload | running | 13a, done |
+| The Streamlit dashboards on the ops store | paused | 13b |
 | Incidents on real dbt runs | paused | 14 |
 | Documentation and release 2.0.0 | | 15 |
 
@@ -62,15 +63,20 @@ flowchart LR
     rec --> ops
     rec --> signoff["reports/reconciliation.md<br/>cutover sign-off"]
 
-    subgraph modules["Modules, returning in 2.0"]
-        cost["cost and FinOps (13)"]
+    cost["cost and FinOps<br/>every query, tagged"]
+    warehouse -- "system.query_log,<br/>system.parts" --> cost
+    reg & lin --> cost
+    rec -- "cutover date" --> cost
+    cost --> ops
+    cost --> bill["reports/cost.md<br/>showback, business case"]
+
+    subgraph modules["Returning in 2.0"]
         inc["incidents (14)"]
     end
 
-    dbt -. query_log .-> cost
     dbt -. test results .-> inc
-    reg & lin -.-> cost & inc
-    cost & inc -.-> ops
+    reg & lin -.-> inc
+    inc -.-> ops
 ```
 
 The company has no change data capture, like many teams at the start of a migration, so an ingestion job pulls new and changed rows by an `updated_at` watermark and re-reads an hour before it to catch late commits. Raw tables in ClickHouse are `ReplacingMergeTree`, so a row read twice or changed in place keeps only its latest version. Staging reads them as views; every other model is a `MergeTree` table sorted by its own key, and the four large event tables rebuild only their last two monthly partitions. Those engine and key choices are made per layer and written down, because they decide what every team's queries cost once Phase 13 prices them, and a sort key chosen by the platform team is paid for by whoever reads the table.
@@ -91,14 +97,15 @@ On Windows, install [Git for Windows](https://git-scm.com/download/win) and GNU 
 cp .env.example .env      # local passwords for Postgres and ClickHouse
 make setup                # Python dependencies
 make up                   # Postgres (legacy and ops store) and ClickHouse
-make demo                 # the company's 91 days with the parallel run, ownership, lineage
+make demo                 # the company's 91 days with the parallel run, ownership, lineage, cost
 make reconcile            # the cutover sign-off, reports/reconciliation.md
+make cost                 # who spends what on ClickHouse, reports/cost.md
 make metabase             # the company's BI on http://localhost:3000, 12 dashboards
 make paused               # the 1.x modules not moved yet, and when they return
 make test                 # unit and integration tests
 ```
 
-`make demo` seeds the legacy Postgres with a year of history, then replays 91 simulated days: each day's orders, payments, sessions and in-place changes reach Postgres, the ingestion pulls them into ClickHouse at 02:00, and dbt builds the project on ClickHouse every four weeks. The last six weeks are the parallel run: dbt builds every night and the migration is reconciled every night, which is most of the demo's time. It starts from scratch every time, so two runs leave identical data on both servers and write the same sign-off. Afterwards, the legacy reports are in Postgres (`reporting` schema of the `legacy` database), the marts in ClickHouse (`marts` database, HTTP on port 8123), the ownership, lineage and reconciliation tables in the `ops` schema of the `platform_ops` database, and the sign-off in `reports/reconciliation.md`.
+`make demo` seeds the legacy Postgres with a year of history, then replays 91 simulated days: each day's orders, payments, sessions and in-place changes reach Postgres, the ingestion pulls them into ClickHouse at 02:00, dbt builds the project on ClickHouse every four weeks, and Metabase's dashboards and a few people's ad hoc SQL read it, each under their own ClickHouse user. The last six weeks are the parallel run: dbt builds every night and the migration is reconciled every night, which is most of the demo's time. It starts from scratch every time, so two runs leave identical data on both servers and write the same sign-off. Afterwards, the legacy reports are in Postgres (`reporting` schema of the `legacy` database), the marts in ClickHouse (`marts` database, HTTP on port 8123), the ownership, lineage, reconciliation and cost tables in the `ops` schema of the `platform_ops` database, the sign-off in `reports/reconciliation.md` and the cost report in `reports/cost.md`.
 
 `make metabase` starts Metabase (a separate, heavier service that `make demo` does not need), then builds its dashboards from the exposures; log in with `MB_ADMIN_EMAIL` and `MB_ADMIN_PASSWORD` from `.env`. It can be run again at any time and makes Metabase match the project.
 
@@ -122,7 +129,7 @@ make docker-metabase-check  # after docker-demo: every dashboard provisioned, ru
 
 From the verification of each phase at the default scale, in the container on one laptop. These numbers come from the console and the database, not from a report file, and every one of them is recorded in [docs/PROGRESS.md](docs/PROGRESS.md).
 
-**The company runs, and repeats itself exactly.** Since Phase 12, `make docker-demo` took 37 minutes 56 seconds and 38 minutes 37 seconds from a clean state, most of it the parallel run's nightly builds and checks; before it, 4 minutes 35 seconds. It seeds 3,507,865 rows of history into Postgres, then over 91 days adds 1,919,938 rows and changes 3,497 in place, ingests 10,142,605 rows into ClickHouse (the fixed job's backfill reloads everything once, and the overlap window re-reads about 80,000 rows on purpose), and runs 44 dbt builds. Two clean runs left all 168 relations and grants identical: every ClickHouse table and view, every legacy table and report, every ops table, every user's grants, and the sign-off byte for byte. That repeatability is what lets a cost or a sign-off be put on a number and reproduced by a reviewer.
+**The company runs, and repeats itself exactly.** Since Phase 13, `make docker-demo` took 44 minutes 35 seconds and 44 minutes 50 seconds from a clean state, most of it the parallel run's nightly builds and checks, with the dashboards and ad hoc SQL now running every day (38 minutes in Phase 12, 4 minutes 35 seconds before it). It seeds 3,507,865 rows of history into Postgres, then over 91 days adds 1,919,938 rows and changes 3,497 in place, ingests 10,142,605 rows into ClickHouse (the fixed job's backfill reloads everything once, and the overlap window re-reads about 80,000 rows on purpose), and runs 44 dbt builds. Two clean runs left 176 of 177 relations and grants identical: every ClickHouse table and view, every legacy table and report, every ops table but the run's own random id, every user's grants, and the sign-off and the cost report byte for byte. That repeatability is what lets a cost or a sign-off be put on a number and reproduced by a reviewer.
 
 **Ownership moved with the project.** All 141 datasets of the ClickHouse project have exactly one owner: 9 sources, 118 models, 12 exposures, the seed and the snapshot. The lineage graph has 376 edges. The same check runs on a company dbt repository's manifest in its own CI ([ADR 0014](docs/adr/0014-the-ownership-gate-in-the-consuming-repository.md)), so moving the warehouse did not reopen the question of who answers for each table.
 
@@ -132,7 +139,9 @@ From the verification of each phase at the default scale, in the container on on
 
 **The migration is signed off the way a data owner would sign it.** Over the 42-night parallel run, the delivered job failed its first compared night with 476,961 shifted timestamps, 26,335 amounts a cent short, 351 trimmed emails and 74 lost sessions, all found and classified. The fixed job shipped a week later, seven one-off faults were each found the night they landed, and the cutover was recommended on 2026-03-30, after 14 clean nights in a row. Across the run, 3,576,917 planted discrepancies were all detected and correctly classified, no report differed without a cause in its upstream tables, and on matching nights the segmented diff moved 11,200 rows instead of 378,892,260. Building the comparison had already found two places where the new marts disagreed with the legacy reports (a ratio truncated instead of rounded, and 0 where the old report said "none"), which is the kind of thing a finance user would otherwise have found in the first week after cutover ([reconcile](src/platform_ops/reconcile/README.md)).
 
-**Incremental is not yet faster, and that is expected.** At this size an incremental build takes 30 seconds and a full refresh 26, because about 290 dbt nodes of fixed overhead dominate. What incremental models save is bytes read, which Phase 13 measures from ClickHouse's own query log rather than assuming.
+**The bill is split the way finance can check it.** The cluster's stated cost over the 91 days, $973.02 at public list prices for one node and 500 GB, is shared out by the bytes each of 25,549 queries read and the size of each table, and the shares add up to it exactly. Each query is tagged with who ran it and why, so a dashboard refresh lands on the dashboard's owner and an ad hoc query on the person's team. What the split shows is not what a team would guess: 687 ad hoc queries took $137.51 of the cluster and 10,192 dashboard refreshes $3.12, while on Snowflake the same dashboards would cost $167.90 in idle warehouse time. The nightly merge of raw, which makes those reads repeat between runs, is a quarter of the compute, and the first line to make cheaper. The migration retires a reporting replica of $577.50 a month for a cluster of $320.32, and the saving pays back the cost of running both until cutover in 3.5 months ([cost](src/platform_ops/cost/README.md), [ADR 0018](docs/adr/0018-finops-on-a-self-managed-clickhouse.md)).
+
+**Incremental pays only where the layout lets it.** At this size an incremental build takes about as long as a full refresh, because about 290 dbt nodes of fixed overhead dominate. Bytes read tell the real story: the two incremental marts read 77% less in their last build than in their first, while the two incremental intermediate models read more with every build, because they filter staging views over raw, and raw is sorted by its key, not by date. An `incremental` setting is a promise; the sort key decides whether ClickHouse keeps it.
 
 ## Results (1.x, at `v1.2.0`)
 
@@ -158,9 +167,9 @@ Each choice that shapes a number is recorded, with what it costs ([index](docs/a
 | [0002](docs/adr/0002-ownership-resolution-and-platform-team.md) | Most specific ownership rule wins; the platform team owns the shared layers |
 | [0003](docs/adr/0003-source-freshness-on-simulated-time.md) | Source freshness on simulated time |
 | [0004](docs/adr/0004-deterministic-data-generation.md) | Deterministic data generation |
-| [0005](docs/adr/0005-scan-estimate-and-modelled-compute-time.md) | Bytes from logical sizes, compute time from a model |
+| [0005](docs/adr/0005-scan-estimate-and-modelled-compute-time.md) | Bytes from logical sizes, compute time from a model (superseded in 2.0) |
 | [0006](docs/adr/0006-pricing-models-and-attribution.md) | Pluggable pricing, each query charged exactly once |
-| [0007](docs/adr/0007-simulated-workload-real-builds-daily-replay.md) | Real dbt builds every four weeks, daily runs replayed |
+| [0007](docs/adr/0007-simulated-workload-real-builds-daily-replay.md) | Real dbt builds every four weeks, daily runs replayed (superseded in 2.0) |
 | [0008](docs/adr/0008-incident-grouping-severity-and-routing.md) | Incident grouping, severity and routing |
 | [0009](docs/adr/0009-cross-engine-hashing-and-canonicalization.md) | Cross-engine hashing and canonicalization |
 | [0010](docs/adr/0010-local-first-design.md) | Local first, every external system behind an interface |
@@ -171,6 +180,7 @@ Each choice that shapes a number is recorded, with what it costs ([index](docs/a
 | [0015](docs/adr/0015-clickhouse-modelling-and-watermark-ingestion.md) | ClickHouse modelling per layer, and ingestion by watermark |
 | [0016](docs/adr/0016-users-per-team-and-bi-from-exposures.md) | One ClickHouse user per team, and the BI built from the dbt exposures |
 | [0017](docs/adr/0017-the-parallel-run-and-the-cutover-rule.md) | The migration is signed off by a parallel run, inside the company's own history |
+| [0018](docs/adr/0018-finops-on-a-self-managed-clickhouse.md) | FinOps on a self-managed ClickHouse: the stated bill shared out by measured reads |
 
 ## Repository layout
 
@@ -179,7 +189,7 @@ config/            settings, teams and the ownership registry
 dbt/               the company's dbt project on ClickHouse
 src/platform_ops/  common, metadata, simulation (the company, its legacy Postgres and
                    the ingestion), cost, incidents, reconcile, dashboard
-dashboards/        the Streamlit app (paused until Phase 13)
+dashboards/        the Streamlit app (paused until Phase 13b)
 scripts/           vendor fixtures, README check, browser checks of the dashboards and of
                    Metabase, release notes
 tests/             unit, integration and contract tests

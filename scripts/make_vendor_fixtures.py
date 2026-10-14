@@ -15,6 +15,10 @@ unfinished job, and SQL without any comment or tag.
 
 The values are simulated, the shapes are the vendors'. The output is
 deterministic, so rerunning it only changes the files if the simulation does.
+
+A 1.x tool: it drives the DuckDB simulation and the estimated bytes, which
+version 2.0 removed (Phase 13). The committed fixtures were written by it at
+``v1.2.0``; to write them again, run it from that tag.
 """
 
 from __future__ import annotations
