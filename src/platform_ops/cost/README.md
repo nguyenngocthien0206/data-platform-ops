@@ -36,40 +36,40 @@ A self-managed cluster sends no bill per query. The company pays for machines an
 
 ## Results at scale 1.0
 
-From actual runs of `make docker-demo` over the 91-day window, which ends with `cost report`. Two clean runs wrote byte-identical `cost.md` files. `make cost` on its own takes about 13 seconds in the container. <!-- readme-check: runtime --> The run priced 25,549 queries: 12,009 from dbt builds and tests, 828 ingestion loads, 819 nightly merges, 1,014 reconciliation queries, 10,192 dashboard refreshes and 687 ad hoc queries.
+From actual runs of `make docker-demo` over the 112-day window (Phase 14 added three production weeks), which ends with `cost report`. Two clean runs wrote byte-identical `cost.md` files. `make cost` on its own takes about 13 seconds in the container. <!-- readme-check: runtime --> The run priced 34,207 queries: 17,779 from dbt builds and tests (the production nights' freshness, run, snapshot and test included), 1,018 ingestion loads, 1,008 nightly merges, 1,014 reconciliation queries, 12,544 dashboard refreshes and 844 ad hoc queries.
 
-The cluster's stated cost over the window is $973.02 ($851.51 compute, $121.51 storage), and the shares add up to it exactly, month by month. A merge is an `OPTIMIZE`, which the query log does not measure like a read, so its bytes are the uncompressed size of the table it rewrote (`ops.raw_maintenance`).
+The cluster's stated cost over the window is $1,197.24 ($1,047.73 compute, $149.51 storage), and the shares add up to it exactly, month by month. A merge is an `OPTIMIZE`, which the query log does not measure like a read, so its bytes are the uncompressed size of the table it rewrote (`ops.raw_maintenance`).
 
 | Team | ClickHouse compute | ClickHouse storage | ClickHouse total | BigQuery on demand | Snowflake warehouses |
 |---|---:|---:|---:|---:|---:|
-| platform | $458.63 | $71.26 | $529.89 | $1.11 | $33.44 |
-| sales | $126.64 | $17.83 | $144.47 | $0.5064 | $74.23 |
-| finance | $102.92 | $12.23 | $115.15 | $0.4593 | $80.39 |
-| marketing | $89.74 | $11.32 | $101.06 | $0.4648 | $50.57 |
-| product | $73.57 | $8.87 | $82.45 | $0.4289 | $56.63 |
-| **total** | $851.51 | $121.51 | $973.02 | $2.97 | $295.25 |
+| platform | $535.55 | $87.61 | $623.16 | $1.49 | $40.77 |
+| sales | $161.27 | $21.97 | $183.24 | $0.6986 | $91.53 |
+| finance | $138.54 | $15.08 | $153.62 | $0.6475 | $100.07 |
+| marketing | $122.44 | $13.95 | $136.39 | $0.6559 | $61.27 |
+| product | $89.93 | $10.89 | $100.82 | $0.5891 | $70.06 |
+| **total** | $1,047.73 | $149.51 | $1,197.24 | $4.08 | $363.71 |
 
 | Workload | Queries | Read | ClickHouse compute | BigQuery on demand | Snowflake warehouses |
 |---|---:|---:|---:|---:|---:|
-| dbt builds and tests | 12,009 | 165.51 GB | $416.22 | $1.68 | $7.63 |
-| ingestion from Postgres | 828 | 812.0 MB | $5.63 | $0.1013 | $2.78 |
-| nightly merge of raw | 819 | 35.12 GB | $209.44 | $0.2198 | $5.97 |
-| parallel run reconciliation | 1,014 | 27.21 GB | $79.59 | $0.1933 | $0.8248 |
-| dashboards (Metabase) | 10,192 | 485.1 MB | $3.12 | $0.6075 | $167.90 |
-| ad hoc SQL | 687 | 24.62 GB | $137.51 | $0.1623 | $110.14 |
+| dbt builds and tests | 17,779 | 254.72 GB | $581.03 | $2.53 | $11.59 |
+| ingestion from Postgres | 1,018 | 1.29 GB | $6.51 | $0.1259 | $2.88 |
+| nightly merge of raw | 1,008 | 45.48 GB | $228.57 | $0.2830 | $6.22 |
+| parallel run reconciliation | 1,014 | 27.21 GB | $79.77 | $0.1933 | $0.8248 |
+| dashboards (Metabase) | 12,544 | 602.6 MB | $3.34 | $0.7477 | $206.64 |
+| ad hoc SQL | 844 | 30.58 GB | $148.51 | $0.2012 | $135.56 |
 
 What the numbers say:
 
-- **On a fixed cluster, a few careless queries cost more than all the dashboards.** 687 ad hoc queries read 24.62 GB and took $137.51 of the cluster; 10,192 dashboard refreshes read 485.1 MB and took $3.12. On Snowflake the picture flips: the dashboards cost $167.90, because every refresh wakes a warehouse for seconds of work and five minutes of idling. Which habit to change first depends on how the warehouse is billed, and the report shows both.
-- **The platform team carries more than half the bill, and most of it is honest.** It owns the shared layers dbt rebuilds every night ($529.89 of $973.02). Two lines in it are choices rather than necessities: the nightly merge of raw ($209.44, a quarter of the compute), which buys repeatable reads and is the first thing to make cheaper (merge less often, or deduplicate in staging with `argMax` instead of `FINAL`), and the parallel run's reconciliation ($79.59), which ends at cutover.
+- **On a fixed cluster, a few careless queries cost more than all the dashboards.** 844 ad hoc queries read 30.58 GB and took $148.51 of the cluster; 12,544 dashboard refreshes read 602.6 MB and took $3.34. On Snowflake the picture flips: the dashboards cost $206.64, because every refresh wakes a warehouse for seconds of work and five minutes of idling. Which habit to change first depends on how the warehouse is billed, and the report shows both.
+- **The platform team carries more than half the bill, and most of it is honest.** It owns the shared layers dbt rebuilds every night ($623.16 of $1,197.24). Two lines in it are choices rather than necessities: the nightly merge of raw ($228.57, about a fifth of the compute), which buys repeatable reads and is the first thing to make cheaper (merge less often, or deduplicate in staging with `argMax` instead of `FINAL`), and the parallel run's reconciliation ($79.77), which ends with the parallel run.
 - **The migration pays for itself in 3.5 months.** The reporting replica costs $577.50 a month, ClickHouse $320.32, a saving of $257.18. Running ClickHouse alongside the replica until the cutover on 2026-03-30 cost $909.30, paid back in 3.5 months. The comparison is infrastructure only; the people who run a self-managed cluster are not in a list price, and the report says so.
-- **At this size, BigQuery on demand would cost $2.97.** The company's data is a few gigabytes, so a fixed cluster sized for growth is mostly idle. That is the cost argument for a serverless warehouse at small scale, and the one a platform lead should be ready to answer before the data grows into the cluster.
-- **The 12 abandoned models are exactly the unused list** at both 30 and 90 days, together about $16 a month of the cluster.
-- **Three full-scan hotspots**, each filtered 11 times and read in full. Two marts are filtered on `order_date` but sorted by `order_id`; the report suggests `(order_date, order_id)`. The third is `raw.orders`, filtered on `_loaded_at` by the platform team, where the sort key is also what `ReplacingMergeTree` deduplicates on, so the report suggests a skip index instead of a new key.
+- **At this size, BigQuery on demand would cost $4.08.** The company's data is a few gigabytes, so a fixed cluster sized for growth is mostly idle. That is the cost argument for a serverless warehouse at small scale, and the one a platform lead should be ready to answer before the data grows into the cluster.
+- **The 12 abandoned models are exactly the unused list** at both 30 and 90 days, together about $18 a month of the cluster.
+- **Two full-scan hotspots.** `marts.finance_fct_payments_reconciliation` is filtered on `order_date` 12 times and read in full, because it is sorted by `order_id`; the report suggests `(order_date, order_id)`. `raw.orders` is filtered on `_loaded_at` 10 times by the platform team, where the sort key is also what `ReplacingMergeTree` deduplicates on, so the report suggests a skip index instead of a new key.
 - **No incremental candidate.** The 15 most expensive full rebuilds all join customers or products, which the legacy database updates in place.
-- **Quotas** at twice the busiest days: from 12.0 MB a day for Metabase to 850.0 MB for sales.
+- **Quotas** at twice the busiest days: from 12.0 MB a day for Metabase to 700.0 MB for sales.
 
-The incremental models that already exist show why layout matters as much as the setting (bytes read per build, from `ops.query_log`). The two mart models (`sales_fct_order_items`, `marketing_fct_sessions`) read 77% less in their last build than in their first full one (150.3 MB, then 34.2 MB for order items). The two intermediate ones read more with every build (`int_order_items_enriched`: 68.0 MB in the first build, 105.2 MB in the last), because they read staging views over raw, and raw is sorted by its key, not by date, so the incremental filter skips nothing.
+The incremental models that already exist show why layout matters as much as the setting (bytes read per build, from `ops.query_log`). The two mart models (`sales_fct_order_items`, `marketing_fct_sessions`) read 63% less in their last build than in their first full one (150.3 MB, then 56.0 MB for order items). The two intermediate ones read more with every build (`int_order_items_enriched`: 68.0 MB in the first build, 115.0 MB in the last), because they read staging views over raw, and raw is sorted by its key, not by date, so the incremental filter skips nothing.
 
 ## On a real warehouse
 

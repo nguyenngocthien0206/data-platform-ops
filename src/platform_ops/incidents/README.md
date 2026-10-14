@@ -1,46 +1,52 @@
 # incidents
 
-> **Paused in version 2.0 until Phase 14.** The company now runs on Postgres and ClickHouse, and this module still runs its scenario on the 1.x DuckDB warehouse, so `make incidents` exits with code 2 and says so. Phase 14 moves it onto real dbt runs on ClickHouse, with the live incident store in Postgres and notifications to Slack and Telegram. Everything below describes 1.x, at tag `v1.2.0`.
+When one bad raw table fails a dozen checks, who gets woken up, and how many times? The company's last three weeks are production on ClickHouse, after the migration's parallel run. Every night runs dbt's source freshness, run, snapshot and test, and things go wrong the way they do in production: eight faults in operation, from a loader writing NULLs to a feed that stops. The incident desk ingests every invocation as it finishes and turns the failing checks into incidents: one per real problem, scored by how much of the business it reaches, paged to the person who can fix it, and resolved on its own once a later run finds the root healthy ([ADR 0019](../../../docs/adr/0019-incidents-on-the-companys-production-runs.md)).
 
-When one bad raw table fails a dozen checks, who gets woken up, and how many times? `make incidents` breaks the simulated company's raw data on purpose, eight times over three simulated weeks. It runs dbt the way production would, and turns the failures into incidents: one per real problem, scored by how much of the business it reaches, and paged to the person who can fix it. Then it grades itself against the faults it injected and writes `reports/incidents.md`, plus a postmortem draft for every SEV1.
+```bash
+make demo                 # the company's 16 weeks, the production weeks included
+make incidents            # reports/incidents.md and a postmortem per SEV1, from the store
+uv run platform-ops incidents summary     # failing checks against pages, per person and week
+uv run platform-ops incidents ingest --target <dbt target> --run-id <run>   # any dbt run
+```
 
 ## How it fits together
 
 | Step | Module | Output |
 |---|---|---|
-| Break | `simulation/faults.py`: eight labelled faults covering all six SPEC types, and a repair for each | `ops.fault_ground_truth` |
-| Run | `scenario.py`: fresh seed, green baseline, then 21 simulated nights of loads, faults and dbt runs | `ops.incident_runs` |
-| Ingest | `ingest.py`: model errors, test failures and freshness errors from dbt's result files | `ops.check_events` |
-| Group | `grouping.py`: one incident per root cause, appended to while it is still open | `ops.incidents`, `ops.incident_impact` |
-| Score | `severity.py`: root tier plus tier-weighted downstream reach, SEV1 to SEV3 | `ops.incidents` |
-| Route | `routing.py`: the root's owner, or the source owner when the root is a staging model | `ops.incidents` |
-| Notify | `notify.py`: local by default, Slack if `SLACK_WEBHOOK_URL` is set | `ops.notifications` |
-| Respond | `lifecycle.py`: simulated acknowledgement and fix times | `ops.incidents` |
+| Break | `simulation/faults.py`: eight faults in operation on ClickHouse's raw layer, with their ground truth; the fix resyncs the table from Postgres | `ops.incident_faults` |
+| Run | `simulation/company.py`: every production night's freshness, run, snapshot and test, each handed to the desk | dbt's artifacts |
+| Ingest | `ingest.py`: model errors, test failures and freshness errors from any adapter's `run_results.json` and `sources.json` | `incident_invocations`, `incident_results`, `incident_check_events` |
+| Group | `grouping.py` (pure) and `desk.py`: one incident per root, the whole run regrouped on every ingest | `incidents`, `incident_run_links` |
+| Score | `severity.py`: root tier plus tier-weighted downstream reach, SEV1 to SEV3, thresholds from an optional `incidents.yaml` | `incidents` |
+| Route | `routing.py`: the root's owner, or the source owner when the root is a staging model | `incidents` |
+| Resolve | `desk.py`: a later run that covered the root and found it healthy | `incidents` |
+| Notify | `notify.py`: Slack and Telegram bots per team, after commit, delivery recorded | `incident_notifications` |
+| Respond | `production.py`, `lifecycle.py`: the company's simulated owners acknowledge and fix on a modelled schedule | `incident_responses` |
 | Grade | `metrics.py`: fault to incident mapping, routing accuracy, MTTD, MTTR, pages per person | `ops.incident_metrics`, `ops.fault_incidents` |
-| Report | `report.py` | `reports/incidents.md`, `reports/postmortems/INC-*.md` |
+| Report | `report.py`, `summary.py` | `reports/incidents.md`, `reports/postmortems/INC-*.md` |
 
-Nothing but `metrics.py` reads the ground truth. The scenario finds its incidents the way a real team would, from dbt's output alone.
+The incident tables live in the Postgres ops store, versioned (`store.py`), and every ingest holds one lock, so concurrent ingests never interleave. Nothing but `metrics.py` reads the ground truth: the desk finds its incidents from what dbt reports, as a real team would.
 
 ## The decisions that shape the numbers
 
-**`dbt run` then `dbt test`, not `dbt build`.** `dbt build` skips everything below a failed test, so the downstream checks that make up an alert storm would never run. Separate run and test let bad data flow downstream as it does in production, and the grouping has something real to group (ADR 0008).
+**`dbt run` then `dbt test`, not `dbt build`.** `dbt build` skips everything below a failed test, so the downstream checks that make up an alert storm would never run. Separate invocations let bad data flow downstream as it does in production, and the grouping has something real to group ([ADR 0008](../../../docs/adr/0008-incident-grouping-severity-and-routing.md)).
 
-**One incident per root.** A failed node whose ancestors are all healthy is a root. Every other failure belongs to the root above it, and a diamond always resolves the same way. A test that reads two models, such as a relationships test, sits below both, so an orders problem does not open a second incident on order items.
+**One incident per root, across invocations.** A failed node whose ancestors are all healthy is a root, and every other failure belongs to the root above it. A run is every invocation that shares its run id, regrouped on every ingest, so a run split one invocation per model (as Cosmos runs it) gives the same incidents as one build, whatever order the pieces arrive in. When a later invocation shows an earlier root was not the real one, its incident is merged into the real root's.
 
 **Page whoever can fix it.** Staging models only rename and cast, so a staging failure almost always means the data arrived broken. The page goes to the source owner, not to whoever wrote the rename.
 
-**Run only what the faults touch.** dbt runs on the nights a fault is active, and only on `@source:raw.<table>`: everything downstream of the faulted source plus the parents of those models, so nothing is compared against a stale table. The end-to-end test checks that on every fault night a full run finds exactly the same failing checks.
+**Resolved by a run, not by a promise.** An incident resolves when a later run covers its root and finds it healthy: the model ran and its tests passed, or the source is fresh again. The owner's fix is not enough on its own, so MTTR includes the wait for the next run, which is what the business actually experiences.
+
+**Faults in operation, fixed from the source.** The faults are planted in ClickHouse's raw layer, the copy, never in Postgres, the source of truth, so the fix a team applies is to resync the copy. `ReplacingMergeTree` deduplicates raw by key, so duplicate keys cannot happen there; orphan payments take their place.
 
 ## Results at scale 1.0
 
-From two actual runs of `platform-ops incidents run` at scale 1.0, which wrote byte-identical `incidents.md` files and postmortems. dbt ran on 8 of the 21 nights.
-
-Across three timed runs the command took between 2 minutes 22 seconds and 2 minutes 56 seconds, with 19 dbt invocations each. <!-- readme-check: runtime -->
+From two clean runs of `make docker-demo`, which wrote byte-identical `incidents.md` files and postmortems. The production weeks are 21 nights; 9 had failing checks.
 
 | Measure | Count |
 |---|---:|
-| Faults injected | 8 |
-| Failing checks (raw alerts) | 18 |
+| Faults in operation | 8 |
+| Failing checks (raw alerts) | 34 |
 | Incidents, one per fault | 8 |
 | Pages sent | 8 |
 | Updates on incidents still open | 4 |
@@ -52,31 +58,19 @@ Across three timed runs the command took between 2 minutes 22 seconds and 2 minu
 
 | Severity | Incidents | Mean MTTD (h) | Mean MTTR (h) |
 |---|---:|---:|---:|
-| SEV1 | 2 | 16.0 | 5.9 |
-| SEV2 | 5 | 20.8 | 20.9 |
-| SEV3 | 1 | 16.0 | 60.1 |
-
-| Person | Pages before grouping | Pages after |
-|---|---:|---:|
-| marco | 13 | 2 |
-| priya | 1 | 6 |
-| kenji | 2 | 0 |
-| alice | 1 | 0 |
-| sam | 1 | 0 |
+| SEV1 | 2 | 16.0 | 24.0 |
+| SEV2 | 5 | 25.6 | 33.6 |
+| SEV3 | 1 | 16.0 | 72.0 |
 
 What the numbers say:
 
-- **Grouping cut 18 alerts to 8 pages.** The storm is smaller than the word suggests, because most downstream tests check keys and row counts that a few bad values do not break. The volume drop in `raw.orders` is the clearest case: five failing checks across staging, sales and finance models, one incident.
-- **Routing matters more than grouping here.** Before grouping, 13 of 18 alerts went to marco, who owns the staging models. Only the 3 about payments were about a source marco owns. The naive rule (page the root's owner) gets the team right every time and the person right only 3 times in 8. Paging the source owner gets all 8 right and moves the load to priya, who owns six of the eight faulted sources.
-- **Ownership concentration shows up as time.** Every incident pages someone on the platform team, as ADR 0002 predicted, and an owner who already has an incident open is modelled as slower on the next one. The support tickets incident was opened in the same run as the SEV1 on orders, for the same owner, and was the slowest SEV2 to resolve at 36.9 hours; the other four took 11.2 to 24.6. The random spread in response times plays a part too, so one run shows the direction, not the size, of the effect.
-- **Detection is bounded by the schedule.** Faults land at 10:00 and dbt runs at 02:00, so the fastest possible MTTD is 16 hours, and seven of eight faults hit it. The stale source took 40.0 hours, because freshness only errors after two days without data.
+- **34 failing checks became 8 pages, one per problem.** Without grouping, marco would have been paged 28 times in three weeks, mostly by tests on the models below two broken payment feeds; with it, twice.
+- **Paging whoever can fix it moves the load, and shows where it piles up.** The staging rule pages the right person 8 times out of 8, the root's owner only 3. But 6 of the 8 pages land on priya, who owns most of the feeds. Grouping does not spread that load; it makes it visible, which is the case for sharing source ownership before the pages do.
+- **The schedule, not the people, sets the floor of MTTR.** The simulated owners land most fixes within hours (the first SEV1 was fixed under 7 hours after detection), but nothing resolves until the next nightly run finds the root healthy, so no incident resolved in less than 24 hours. A rerun on demand after a fix is the cheapest way to cut MTTR here, cheaper than faster people.
+- **A stale feed is caught late by design.** Every fault was detected by the first night after it happened (16 hours), except the stopped web sessions feed: the freshness rule allows 48 hours, so it took 64.0. Tightening the rule would catch it a night earlier, and page someone on every quiet night.
 
-## Running it
+## On a real dbt project
 
-```bash
-make incidents                      # the scenario, tables, report and postmortems
-```
+`incidents ingest` is the same code the company's desk runs. Point it at a dbt target folder after each invocation, with the orchestrator's run id, and it does the rest; `--registry-dir` takes the consuming repository's registry, and an `incidents.yaml` there sets its own severity thresholds. Set `SLACK_BOT_TOKEN` and `TELEGRAM_BOT_TOKEN` to page the teams in `teams.yaml`. The tests ingest artifacts recorded from a Snowflake build and a BigQuery night of a small shop project (`tests/fixtures/dbt_artifacts`, written by `scripts/make_artifact_fixtures.py`), Cosmos-style partial invocations in both orders, and two ingests at once.
 
-Slack is off unless `SLACK_WEBHOOK_URL` is set in the environment or in `.env`. With it set, every page, update and resolution is also posted to that webhook; a failed post is logged and never stops the run.
-
-Tunables live under `incidents:` in `config/settings.yaml`: the scenario length, the hour faults land, the severity thresholds and the response-time model. The severity thresholds were calibrated on this project's lineage (ADR 0008); a different graph needs new ones.
+Phase 14b wires real Airflow (Cosmos) and Dagster (dagster-dbt) in Docker to the same command.

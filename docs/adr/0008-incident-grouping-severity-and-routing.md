@@ -42,6 +42,8 @@ Severity rewards breadth. A critical dataset with nothing downstream scores 30, 
 
 Running only on fault nights means a check that would fail on a green night is never seen. The baseline build on day 0 has to be fully green or the scenario stops, which is what makes skipping green nights safe.
 
-## Later note
+## Later notes
+
+Version 2.0, Phase 14: the rules stand (one incident per root by lineage, staging roots page the source owner, severity from tier and reach, separate run and test), and the scenario around them is replaced ([ADR 0019](0019-incidents-on-the-companys-production-runs.md)). Incidents now happen in the company's production weeks, where dbt runs the whole schedule every night, so the targeted runs and the fault-night-only schedule are gone. Resolution is observed by a later run instead of scheduled, the incidents live in a versioned Postgres store, and a run is regrouped across its invocations on every ingest.
 
 The 10-minute budget mentioned above was lifted before Phase 7. The parse reuse and the fault pairing were reviewed after Phase 7 and kept: reusing the parse costs nothing in what the scenario shows, and spreading the faults out would move every incident figure for no gain in what the grouping proves.

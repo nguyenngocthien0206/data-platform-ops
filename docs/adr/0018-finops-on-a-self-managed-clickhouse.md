@@ -31,3 +31,7 @@ The 1.x estimate is gone with its biases: no logical sizes, no snapshots up to f
 The nightly merge has a price, and the report shows it: at scale 1.0 it rewrote 35.12 GB over the 91 days and took $209.44 of the cluster's $851.51 compute, a quarter. That is the cost of reads that repeat, and of deduplicating with `FINAL`. A real team would weigh it against merging less often or deduplicating in staging with `argMax`; here it stays, because a cost report that changes between two identical runs could not be signed off.
 
 The sizing is an assumption, stated first in the report. A self-managed cluster's real cost also includes the people who run it, which no list price covers; the business case compares infrastructure only, and says so.
+
+## Later note
+
+Version 2.0, Phase 14: the window grew to 112 days with three production weeks ([ADR 0019](0019-incidents-on-the-companys-production-runs.md)), so the figures above are the 91-day ones of Phase 13; the cost README has the current ones (the merge is now about a fifth of the compute). The snapshot tables are merged before every snapshot and build, for the same reason as raw: a pair of clean runs differed by 80 bytes read in one snapshot upsert until they were.

@@ -6,13 +6,34 @@ Last updated: 2026-10-14
 
 ## Current phase
 
-Phase 13b: the Streamlit dashboards on the Postgres ops store (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a to 13a are merged (PRs #15 to #18).
-Branch: `phase-13b-dashboards` (off `main` at `3ab2d22`).
+Phase 14a: incidents on the company's own production runs (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a to 13b are merged (PRs #15 to #19). Phase 14b (real Airflow and Dagster in Docker) follows.
+Branch: `phase-14a-incidents` (off `main` at `9d6a02a`).
 
 Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
 
+- Phase 14a implemented (branch `phase-14a-incidents`, uncommitted):
+  - **Three production weeks after the parallel run** (`company.production_weeks: 3`; `simulation.weeks` 13 to 16). Every production night runs `dbt source freshness`, `run`, `snapshot` and `test` as separate invocations, the project parsed once and the parse reused; a failing check is recorded, not fatal. Each invocation's target is cleared of older result files first.
+  - **Faults in operation** (`simulation/faults.py`, rewritten): eight on four days, two a day, planted in ClickHouse raw after the day's work; orphan keys replace duplicate keys. A stale feed and a changed raw table stop the loader for that table (`Ingestion.load(skip=...)`); the fix resyncs the table from Postgres (`Ingestion.resync`). Ground truth in `ops.incident_faults`.
+  - **The incident store** (`incidents/store.py`): versioned migrations, one advisory lock per ingest, one open incident per root by a partial unique index.
+  - **The desk** (`incidents/desk.py`): `ingest_target` reads one invocation's artifacts from any adapter, keyed by dbt's invocation id, regroups the whole run on every ingest, opens, appends, merges and resolves (a later run that covered the root and found it healthy), queues notifications and delivers them after commit. `incidents/production.py` is the company's desk: it plays the owners (ack and fix from `lifecycle`) and hands the company each fix.
+  - **Notifications** (`incidents/notify.py`): Slack (`chat.postMessage`, `SLACK_BOT_TOKEN`) and Telegram (`sendMessage`, `TELEGRAM_BOT_TOKEN`) per team; local by default; the company's own pages always local. The 1.x webhook is gone.
+  - **Policy** from an optional `incidents.yaml` next to the registry (`IncidentPolicy`).
+  - **CLI**: `incidents ingest --target --run-id [--at] [--registry-dir]`, `incidents run` (the report from the store), `incidents summary`. Nothing is paused any more; `make demo` runs `incidents run` before `cost report`.
+  - **The Incidents page is back**, reading the store; the browser check covers four pages.
+  - Removed: the 1.x scenario (`incidents/scenario.py`) and its DuckDB persistence, `grouping.assign`.
+  - Row-count bounds widened for 16 weeks; `support_tickets` freshness switched off (bursty at small scale).
+  - Fixture artifacts from a Snowflake build and a BigQuery night of a small shop project (`tests/fixtures/dbt_artifacts`, `scripts/make_artifact_fixtures.py`).
+  - ADR 0019, a later note on ADR 0008; SPEC 14a note; incidents, simulation, dashboards and root READMEs.
+- Phase 14a verification:
+  - `make lint` clean. `make docker-test`: 404 passed, nothing skipped, 10 min 48 s (the shared test company is now three weeks).
+  - `make docker-clean docker-demo` at scale 1.0: 56 min 11 s and 57 min 17 s (45 min in Phase 13). Two clean runs: 195 of 196 relations identical, the incident store included once dbt's invocation ids are left out; `ops.company_run` differs by its random run id. `incidents.md`, both postmortems, `cost.md` and `reconciliation.md` byte-identical.
+  - A first pair of clean runs left every report identical but differed by 80 bytes read in one snapshot upsert, and paged twice for F5; both fixed (Decisions above) before the pair recorded here.
+  - The production weeks: 21 nights, 9 with failing checks; 8 faults, 34 failing checks, 8 incidents, 8 pages, 4 updates; every fault one incident, every incident resolved; routing right 8 of 8 (naive 3 of 8); MTTD 16.0 h for every fault but the stale feed (64.0 h); MTTR 24.0 h (SEV1), 33.6 h (SEV2), 72.0 h (SEV3). Pages before grouping: marco 28, after 2; priya 2 before, 6 after (the owner of most feeds).
+  - Cost over 112 days: $1,197.24 stated and shared out exactly; 34,207 queries; BigQuery $4.08, Snowflake $363.71; the business case unchanged (payback 3.5 months).
+  - History at scale 1.0 with the 16-week window: 3,507,804 rows (61 fewer than 13 weeks: the id space is fitted to the window), seeded in 34.6 s; 18,472 late payments, 801 duplicate customer emails.
+  - `make docker-browser-check`: 8 of 8 page loads (four pages, light and dark), screenshots read.
 - Phase 13b implemented (branch `phase-13b-dashboards`, uncommitted):
   - **The cost report stores everything it states**: `ops.cost_months`, `cost_business_case`, `cost_business_summary`, `cost_unused`, `cost_hotspots`, `cost_incremental`, `cost_quotas`, written from the same data as `reports/cost.md`.
   - **A read-only role for the dashboards** (`common/store.py`): `dashboard`, `SELECT` on the ops schema (default privileges cover the tables every run recreates), read-only sessions by default, its password from `POSTGRES_PASSWORD_DASHBOARD` with no default. `company run` checks the password before writing anything and creates the role after the ClickHouse users; `remove_company` drops it.
@@ -155,9 +176,29 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 
 ## In progress
 
-Phase 13b, waiting for the owner's review and commits.
+Phase 14a, waiting for the owner's review and commits.
 
 ## Decisions made
+
+### Phase 14 (owner, at planning, 2026-10-14)
+
+1. **Split in two**: 14a is the core; 14b is real Airflow (Cosmos) and Dagster (dagster-dbt) in Docker, their integration tests and the release gate.
+2. **The incidents happen after cutover, inside the company's own timeline**: three production weeks extend the window to 16, the demo gets longer and every cost figure changes. A separate scenario (a second history of the same company) was the cheaper option, declined.
+3. **A demo of about an hour is acceptable.**
+
+### Phase 14a, made during implementation
+
+- **Orphan keys replace duplicate keys**: the raw `ReplacingMergeTree` deduplicates keys by design, so a duplicate cannot reach staging.
+- **Faults are planted in the raw copy and fixed by resyncing it from Postgres**, the source of truth; a fault that breaks the loader (a stale feed, a changed table) stops it for that table, and the watermark catches up after the fix.
+- **Resolution is observed**: a later run that covered the root and found it healthy (its tests must have run, if it has any); a model that ran before its tests did is not yet healthy.
+- **A run is regrouped on every ingest**, and an incident this run opened is merged into another when a later invocation finds the real root above it.
+- **Each production invocation clears older result files first**: the first production night once ingested the parallel run's last `dbt build` results as its own.
+- **`support_tickets` freshness is off**: at scale 0.01 a quarter of the days have no ticket, and the first test run opened an incident for a quiet day.
+- **The suite's faults moved to production days 0 and 1**: on days 1 and 3, the stale feed (an error only after 48 hours) was still open when the week ended.
+- **A new failure above an open incident's root appends to it.** The first full run paged twice for one fault: F5 dropped a column, the loader stopped, and two nights later the feed's freshness error (ingested before the night's run) opened a second incident before the run's model error merged it back. A stale feed whose staging model's incident is still open is the same problem, seen from the source.
+- **Snapshot tables are merged before every snapshot and build.** The first pair of clean runs left every report identical but differed by 80 bytes read in one snapshot upsert: each night's snapshot appends a part, merged in the background at different moments. The same reason raw is merged every night (Phase 13).
+- **The fingerprint leaves out dbt's invocation ids** in the incident tables: they are random by design, like the run id, and keying ingests by them is what makes a re-ingest change nothing.
+- **Every missing password is reported at once** (the dashboards' and the ClickHouse users'), not the first one found.
 
 ### Phase 13b (owner, at planning, 2026-10-14)
 
@@ -459,7 +500,6 @@ For version 2.0:
 - At scale 1.0 an incremental build is not faster than a full refresh (30 s against 26 s): about 290 nodes of fixed overhead dominate. In bytes read the incremental marts save 77%, but `int_order_items_enriched` and `int_sessions_enriched` read all of raw on every build, because staging is a view over raw sorted by key. A skip index on raw's `updated_at`, or materialized staging for the event tables, would fix it; not done, so the 2.0 numbers stay comparable.
 - `readme-check` on the cost README finds six numbers not in `cost.md`, all derived on purpose: the incremental models' bytes read per build (from `ops.query_log`) and the unused tables' monthly total. Phase 15, which brings `readme-check` back, decides whether the report prints them.
 - The nightly merge of raw is a quarter of the cluster's compute in the cost report. It is what makes reads repeat; a real team would merge less often or deduplicate with `argMax` in staging.
-- The incident target fails by design until Phase 14 (exit 2 with the reason).
 
 Kept on purpose (design limits, documented in the ADRs):
 
@@ -486,6 +526,6 @@ None open.
 
 ## Next step
 
-1. The owner reviews Phase 13b, commits it in the proposed sequence, and merges.
-2. Plan Phase 14: incidents on real dbt runs, with the Postgres incident store, the orchestrator integrations and the Incidents page back.
+1. The owner reviews Phase 14a, commits it in the proposed sequence, and merges.
+2. Plan Phase 14b: Airflow with Cosmos and Dagster with dagster-dbt in Docker, running the company's project and calling `incidents ingest`; integration tests on the real orchestrators, on demand and before every release.
 3. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).
