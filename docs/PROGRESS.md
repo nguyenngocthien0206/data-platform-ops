@@ -2,17 +2,30 @@
 
 Handoff file between sessions. Read this first, then `docs/SPEC.md`.
 
-Last updated: 2026-10-13
+Last updated: 2026-10-14
 
 ## Current phase
 
-Phase 12: Reconciliation from Postgres to ClickHouse, with a parallel run before cutover (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a and 11b are merged (PRs #15 and #16).
-Branch: `phase-12-reconcile` (off `main` at `7be6670`).
+Phase 13a: Cost attribution and FinOps on ClickHouse's query log (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a, 11b and 12 are merged (PRs #15, #16 and #17). Phase 13b (the Streamlit dashboards on the ops store) follows.
+Branch: `phase-13-cost` (off `main` at `49d3050`).
 
 Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
 
+- Phase 13a implemented (branch `phase-13-cost`, uncommitted):
+  - **Every query the company runs is tagged** (`common/tagging.py`) through ClickHouse's `log_comment`: run, simulated time, kind of work (dbt, ingestion, maintenance, reconcile, dashboard, ad hoc), subject and person. dbt carries it through its profile's `custom_settings` (`PLATFORM_OPS_LOG_COMMENT`), the others per query.
+  - **The company's days gained** the nightly merge of raw (`OPTIMIZE TABLE ... FINAL`, `ops.raw_maintenance`), the record of in-place source changes (`ops.source_changes`), the daily workload (`simulation/workload.py`: every Metabase card on its refresh schedule as `metabase`, ad hoc SQL per person as their team's user, `FORMAT Null`, one thread) and month-end storage snapshots (`cost/storage.py`, `ops.storage_snapshots`).
+  - **The cost module rebuilt on ClickHouse**: `collect.py` reads the run's tagged queries from `system.query_log` (billable only, literals redacted, numbered in a stable order); `cluster.py` shares the stated monthly cost out exactly; `pricing.py` prices the same bytes on BigQuery and Snowflake; `attribution.py` adds ingestion, maintenance and the reconciliation (migration cost); `business.py` builds the replica-to-ClickHouse business case on the reconciliation's cutover; `recommend.py` finds unused tables, hotspots (with a suggested sort key, or a skip index on a `ReplacingMergeTree`), incremental candidates and quotas; `report.py` writes `reports/cost.md`. Results in `ops.query_log`, `query_filters`, `query_costs`, `query_attribution`, `cost_showback`.
+  - Settings: `cost.clickhouse` and `cost.legacy_reporting` (public list prices with sources), warehouses for the new kinds of work.
+  - `make cost` runs (no longer paused) and `make demo` ends with it; `platform-ops simulation run` and `make simulate` are gone. Removed: `cost/estimate.py`, `sizes.py`, `growth.py`, `schema.py`.
+  - ADR 0018, later notes on ADRs 0005 to 0007; SPEC Phase 13 updated; cost README rewritten; simulation and root READMEs updated.
+- Phase 13a verification:
+  - `make lint` clean. `make docker-test`: 361 passed, 31 skipped (dashboard until 13b, incidents until 14).
+  - Two runs at scale 0.01 in their own namespaces: every cost ops table and `cost.md` identical; every kind of work measured the same bytes and rows.
+  - `make docker-clean docker-demo` at scale 1.0: 44 min 35 s and 44 min 50 s (38 min in Phase 12; the daily dashboards and ad hoc SQL, the nightly merge and the cost report). `cost report` alone: about 13 s in the container. Two clean runs: 176 of 177 relations identical (every ClickHouse table and view, the legacy tables and reports, every ops table including the cost tables, every user's grants); the one that differs is `ops.company_run`, whose run id is random by design, since runs share ClickHouse's query log. `cost.md` and `reconciliation.md` byte-identical. A first pair of clean runs differed by a few cents, which led to the one-part-per-partition decision above.
+  - At scale 1.0: 25,549 billable queries priced; the cluster's $973.02 over 91 days shared out to the cent and beyond; showback platform $529.89, sales $144.47, finance $115.15, marketing $101.06, product $82.45; BigQuery $2.97 and Snowflake $295.25 on the same workload. Ad hoc SQL $137.51 against dashboards $3.12 on the cluster ($110.14 against $167.90 on Snowflake); the nightly merge $209.44, a quarter of the compute. Business case: replica $577.50 a month against ClickHouse $320.32, overlap until the 2026-03-30 cutover $909.30, payback 3.5 months. Unused list exactly the 12 abandoned models; 3 hotspots; no incremental candidate; quotas from 12.0 MB a day (Metabase) to 850.0 MB (sales).
+  - Incremental models in bytes read: the two marts read 77% less in their last build than their first; the two intermediate ones read more each build (68.0 MB to 105.2 MB for `int_order_items_enriched`), because they filter staging views over raw, sorted by key.
 - Phase 12 implemented (branch `phase-12-reconcile`, uncommitted):
   - **The parallel run is the last 6 weeks of the company's window** (`company.parallel_run_weeks`). The ingestion runs as the migration team delivered it from day 0, with four defects (`company.delivered_job`, `simulation/ingest.py`): payments' `created_at` read as New York time, payments' `amount` through a float and truncated, customers' `email` right-trimmed, the last key of every 25,000-key page of web sessions lost. Seven nights into the parallel run the fixed job ships and backfills raw (`Ingestion.backfill`, keeping the load log). Seven one-off faults follow every other night (`simulation/migration.py`), planted after the ingestion and before the build, repaired the next day.
   - **Every night of the parallel run** dbt builds, and `reconcile/parallel.py` compares the 9 operational tables (Postgres `app` against ClickHouse `raw` with `FINAL`) and the 12 legacy reports (against the marts), six pairs at a time, as the `platform` user. Table differences are graded against the night's ground truth; report differences are explained through dbt lineage or flagged as logic differences. The cutover is recommended after 14 consecutive clean nights. Nights are recorded in `ops.reconcile_nights`, `_examples`, `_grades`, `_labels`, `_cutover`.
@@ -131,9 +144,29 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 
 ## In progress
 
-Phase 12, waiting for the owner's review and commits.
+Phase 13a, waiting for the owner's review and commits.
 
 ## Decisions made
+
+### Phase 13 (owner, at planning, 2026-10-13)
+
+1. **The raw layer is merged (`OPTIMIZE FINAL`) every night**, after the load, so `FINAL` reads measure the same bytes on every run. Measured at 3.6 s for all nine raw tables at scale 1.0; recorded as the platform team's maintenance work and priced like any other.
+2. **Public on-demand list prices with their sources** for the cluster (EC2 `m6i.2xlarge`, EBS gp3) and the legacy reporting replica (RDS `db.m6i.2xlarge` PostgreSQL, RDS gp3), us-east-1, looked up in October 2026. The sizing (one node and 500 GB each) is an assumption, printed first in the report.
+3. **Quotas are suggested in the report, never applied.**
+4. **Split in two**: 13a is the cost core and `reports/cost.md`; 13b brings the Streamlit dashboards back on the Postgres ops store, with the browser check.
+
+### Phase 13, made during implementation
+
+- **Bytes written are not collected.** `written_bytes` differed between two identical runs (how ClickHouse cuts blocks varies); `written_rows` repeats and is kept.
+- **Catalogue statements and reads of system tables are collected but not billed.** dbt's count of `CREATE`, `DROP` and `RENAME` statements differs by one or two between runs, and its reads of `system.*` with them; no warehouse bills either.
+- **The run id is a module value, not a `ContextVar`**: the reconciliation compares from a thread pool, and threads do not inherit a context, so its first queries went untagged.
+- **Query ids are a stable numbering**, by simulated time, kind of work, subject and the query's own text and measurements: the query log's ids are random.
+- **`ALTER USER ... SETTINGS` replaces a user's settings**, so the suggested per-query limit restates the reader profile. Checked by applying the suggestions to a test namespace.
+- **Users that also build, load or reconcile get no quota suggestion** (`dbt`, `loader`, `platform`): a limit there could stop the pipeline.
+- **Only billable statements are kept and numbered.** dbt sends one or two more or fewer catalogue statements from run to run; numbering them shifted every id after them. They are counted, not stored.
+- **dbt's invocation id is taken out of table names.** dbt-clickhouse names an incremental model's staging table `<model>__dbt_new_data_<uuid>`, new every run, and it showed in the tables read and the SQL text. Two runs at scale 0.01 then left every cost ops table and `cost.md` identical.
+- **dbt writes one part per partition** (`max_insert_threads = 1`, inserts squashed to one block, in the dbt profile and the `writer` settings profile). The first two clean runs at scale 1.0 differed by a few cents: ClickHouse's default of one insert thread per core wrote the four incremental models (two million rows each) into 20 to 29 parts in a different way on every run, and the same ad hoc query on `marketing_fct_sessions` read 262,491 rows in one run and 246,198 in the other. Scale 0.01 never showed it, because its tables fit in one block.
+- **Redaction found a NUL-byte bug**: the comment placeholder held digits, which the number pattern then replaced, and Postgres refused the text. The placeholder now has no digits.
 
 ### Phase 12 (owner, at planning, 2026-10-14)
 
@@ -398,8 +431,10 @@ For version 2.0:
 
 - Every figure in the README, the module READMEs, the ADRs, the CHANGELOG's 1.x sections and the owner's CV describes 1.x on DuckDB. They stay true for `v1.2.0` and are replaced by 2.0's own results in Phase 15.
 - Until each 2.0 phase lands, its module is paused: its command exits 2 and names the phase, `make demo` lists them, and its end-to-end tests skip. `readme-check` reads 1.x reports and is paused with them.
-- At scale 1.0 an incremental build is not faster than a full refresh (30 s against 26 s): about 290 nodes of fixed overhead dominate, and the incremental models rebuild two months each time. The point of the incremental models shows in bytes read, which Phase 13 measures.
-- The dashboard, browser-check and cost, incident and reconcile targets fail by design until their phase (exit 2 with the reason).
+- At scale 1.0 an incremental build is not faster than a full refresh (30 s against 26 s): about 290 nodes of fixed overhead dominate. In bytes read the incremental marts save 77%, but `int_order_items_enriched` and `int_sessions_enriched` read all of raw on every build, because staging is a view over raw sorted by key. A skip index on raw's `updated_at`, or materialized staging for the event tables, would fix it; not done, so the 2.0 numbers stay comparable.
+- `readme-check` on the cost README finds six numbers not in `cost.md`, all derived on purpose: the incremental models' bytes read per build (from `ops.query_log`) and the unused tables' monthly total. Phase 15, which brings `readme-check` back, decides whether the report prints them.
+- The nightly merge of raw is a quarter of the cluster's compute in the cost report. It is what makes reads repeat; a real team would merge less often or deduplicate with `argMax` in staging.
+- The dashboard, browser-check and incident targets fail by design until their phase (exit 2 with the reason).
 
 Kept on purpose (design limits, documented in the ADRs):
 
@@ -419,7 +454,6 @@ From Phase 11b (presentation only):
 
 - Every Metabase line ends with a partial period, because the window ends at 02:00 on its last day; the same limit the 1.x cost page had.
 - Daily rollups chart only their last 91 days, to stay under Metabase's 2,000-row display limit; the full history is in the weekly and monthly charts.
-- Users have no resource limits or quotas yet; Phase 13 suggests them from measured load.
 
 Kept on purpose since Phases 8 and 9:
 
@@ -431,6 +465,6 @@ None open.
 
 ## Next step
 
-1. The owner reviews Phase 12, commits it in the proposed sequence, and merges.
-2. Plan Phase 13: cost attribution and FinOps on ClickHouse's query log, with the workload generator back (the Metabase cards' SQL and the teams' ad hoc queries under their users), compute and storage per team, the migration's before-and-after cost (the parallel run is now in the query log), and BigQuery and Snowflake priced on the same workload.
+1. The owner reviews Phase 13a, commits it in the proposed sequence, and merges.
+2. Plan Phase 13b: the Streamlit dashboards back, reading the Postgres ops store (overview, cost with showback and the business case, reconciliation), with the browser check.
 3. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).

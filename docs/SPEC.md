@@ -419,6 +419,8 @@ Decisions:
 
 **Acceptance:** compute and storage shares add up to the stated infrastructure cost; the before-and-after cost of the migration comes from the same window; every abandoned model is in the unused list and no model with a live exposure is; the BigQuery and Snowflake comparison comes from the same measured workload; reports byte-identical across two runs. For the real pilot cluster, the same collector and pricing run against its query log with a read-only role, after the access and data handling review.
 
+Decided with the owner at planning (2026-10-13): the phase is split into **13a**, the cost core and `reports/cost.md`, and **13b**, the Streamlit dashboards back on the Postgres ops store with the browser check. Prices are public on-demand list prices with their sources; the raw layer is merged every night so measured reads repeat; quotas are suggested, never applied. During 13a, compute was shared by bytes read alone (rows read are reported alongside, and two weights would need a ratio nobody could defend) and storage by uncompressed bytes ([ADR 0018](adr/0018-finops-on-a-self-managed-clickhouse.md)).
+
 ---
 
 ## Phase 14: Incidents on real dbt runs

@@ -34,7 +34,7 @@ SKIP_MARKER = "<!-- readme-check: runtime -->"
 # README -> the report files (globs under reports/) its numbers must come from.
 SOURCES: dict[str, tuple[str, ...]] = {
     "README.md": ("*.md", "postmortems/*.md"),
-    "src/platform_ops/cost/README.md": ("cost.md", "cost_proxy_accuracy.md"),
+    "src/platform_ops/cost/README.md": ("cost.md",),
     "src/platform_ops/incidents/README.md": ("incidents.md", "postmortems/*.md"),
     "src/platform_ops/reconcile/README.md": ("reconciliation.md",),
 }

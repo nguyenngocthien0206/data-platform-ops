@@ -1,83 +1,102 @@
-"""Who pays for each query.
+"""Who pays for each query, and for each table's storage.
 
 Every query's cost is charged exactly once, so team totals always add up to the
 bill (ADR 0006):
 
-- **Production cost**: a dbt build is charged to the owner of the model it
-  writes. A dbt test is charged to the owner of the model it tests, because
-  testing is part of what it costs to publish that model.
-- **Consumption cost**: a dashboard refresh is charged to the dashboard owner's
-  team; an ad hoc query to the team of the person who ran it (from
-  ``config/teams.yaml``).
+- **Production cost** goes to the owner of what was built or loaded: a dbt
+  build to the owner of the model it writes, a dbt test to the owner of the
+  model it tests, the ingestion and the nightly merge of a raw table to the
+  owner of that source. dbt's own bookkeeping, outside any model, goes to the
+  platform team, which runs dbt.
+- **Consumption cost** goes to the reader: a dashboard refresh to the owner of
+  the dashboard (the ``metabase`` user only runs it for them), ad hoc SQL to
+  the team of the person who typed it.
+- **Migration cost**: the parallel run's reconciliation, carried by the
+  platform team, which runs the migration, and reported on its own.
 
-Charging the reader of a table, not its owner, is what makes a team see the cost
-of its own dashboards and habits, instead of the platform team quietly
-absorbing everyone's ``SELECT *``.
+Storage goes to the owner of each table. Charging the reader, not the owner,
+is what makes a team see the cost of its own dashboards and habits, instead of
+the platform team quietly absorbing everyone's ``SELECT *``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-import duckdb
-
-from platform_ops.common.db import replace_table
+from platform_ops.cost.collect import QueryRecord
 from platform_ops.metadata.manifest import Node
-from platform_ops.metadata.registry import Registry, Resolution
+from platform_ops.metadata.registry import Registry
 
 UNATTRIBUTED = "unattributed"
+PLATFORM = "platform"
 
 
 @dataclass(frozen=True)
 class Attribution:
     query_id: str
-    cost_kind: str  # production | consumption
+    cost_kind: str  # production | consumption | migration
     team: str
     owner: str
-    subject: str | None  # the model a production cost belongs to, or the dashboard
+    subject: str | None  # the model, source or dashboard the cost belongs to
 
 
-def attribute(
-    rows: list[tuple[str, str, str, str | None]],
-    nodes: Mapping[str, Node],
-    resolutions: Mapping[str, Resolution],
-    registry: Registry,
-) -> list[Attribution]:
-    """``rows`` are ``(query_id, actor, actor_type, node_id)`` from ``ops.query_log``."""
+@dataclass(frozen=True)
+class Owners:
+    nodes: Mapping[str, Node]
+    registry: Registry
 
-    def owner_of(unique_id: str | None) -> tuple[str, str]:
-        resolution = resolutions.get(unique_id or "")
-        if resolution is None or resolution.rule is None:
+    def of(self, unique_id: str | None) -> tuple[str, str]:
+        if not unique_id:
             return UNATTRIBUTED, UNATTRIBUTED
-        return resolution.rule.team, resolution.rule.owner
+        rule = self.registry.resolve(unique_id).rule
+        if rule is None:
+            return UNATTRIBUTED, UNATTRIBUTED
+        return rule.team, rule.owner
 
-    out: list[Attribution] = []
-    for query_id, actor, actor_type, node_id in rows:
-        if actor_type == "dbt":
-            node = nodes.get(node_id or "")
-            subject = node.attached_node if node and node.resource_type == "test" else node_id
-            team, owner = owner_of(subject)
-            out.append(Attribution(query_id, "production", team, owner, subject))
-        elif actor_type == "dashboard":
-            team, owner = owner_of(node_id)
-            out.append(Attribution(query_id, "consumption", team, owner, node_id))
+    def subject(self, node_id: str | None) -> str | None:
+        """What a dbt statement's cost belongs to: the model a test checks, else the node."""
+        node = self.nodes.get(node_id or "")
+        if node is not None and node.resource_type == "test":
+            return node.attached_node
+        return node_id
+
+    def platform_lead(self) -> str:
+        team = self.registry.teams.get(PLATFORM)
+        return team.members[0] if team and team.members else UNATTRIBUTED
+
+    def by_relation(self) -> dict[str, str]:
+        """``database.table`` to the unique id of the node stored there."""
+        return {
+            n.relation: n.unique_id
+            for n in self.nodes.values()
+            if n.resource_type in ("model", "seed", "snapshot", "source")
+        }
+
+
+def attribute(records: Iterable[QueryRecord], owners: Owners) -> dict[str, Attribution]:
+    out: dict[str, Attribution] = {}
+    for r in records:
+        if r.actor_type == "dbt":
+            subject = owners.subject(r.node_id)
+            if subject is None:
+                out[r.query_id] = Attribution(
+                    r.query_id, "production", PLATFORM, owners.platform_lead(), None
+                )
+                continue
+            team, owner = owners.of(subject)
+            out[r.query_id] = Attribution(r.query_id, "production", team, owner, subject)
+        elif r.actor_type in ("ingestion", "maintenance"):
+            team, owner = owners.of(r.node_id)
+            out[r.query_id] = Attribution(r.query_id, "production", team, owner, r.node_id)
+        elif r.actor_type == "reconcile":
+            out[r.query_id] = Attribution(
+                r.query_id, "migration", PLATFORM, owners.platform_lead(), r.node_id
+            )
+        elif r.actor_type == "dashboard":
+            team, owner = owners.of(r.node_id)
+            out[r.query_id] = Attribution(r.query_id, "consumption", team, owner, r.node_id)
         else:
-            team = registry.team_of(actor) or UNATTRIBUTED
-            out.append(Attribution(query_id, "consumption", team, actor, None))
+            team = owners.registry.team_of(r.actor) or UNATTRIBUTED
+            out[r.query_id] = Attribution(r.query_id, "consumption", team, r.actor, None)
     return out
-
-
-def persist(connection: duckdb.DuckDBPyConnection, attributions: list[Attribution]) -> int:
-    rows = [(a.query_id, a.cost_kind, a.team, a.owner, a.subject) for a in attributions]
-    return replace_table(
-        connection,
-        "query_attribution",
-        """query_id VARCHAR PRIMARY KEY,
-           cost_kind VARCHAR NOT NULL,
-           team VARCHAR NOT NULL,
-           owner VARCHAR NOT NULL,
-           subject VARCHAR""",
-        ("query_id", "cost_kind", "team", "owner", "subject"),
-        rows,
-    )

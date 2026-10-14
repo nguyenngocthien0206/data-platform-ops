@@ -27,9 +27,6 @@ app = typer.Typer(
 )
 
 metadata_app = typer.Typer(help="Ownership registry and lineage graph.", no_args_is_help=True)
-simulation_app = typer.Typer(
-    help="Simulated company: data, workload, faults.", no_args_is_help=True
-)
 cost_app = typer.Typer(help="Query cost collection, pricing and attribution.", no_args_is_help=True)
 incidents_app = typer.Typer(
     help="Data incident detection, grouping and routing.", no_args_is_help=True
@@ -52,7 +49,6 @@ metabase_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(metabase_app, name="metabase")
-app.add_typer(simulation_app, name="simulation")
 app.add_typer(cost_app, name="cost")
 app.add_typer(incidents_app, name="incidents")
 app.add_typer(reconcile_app, name="reconcile")
@@ -74,8 +70,6 @@ def _fail(message: str, code: int = 1) -> NoReturn:
 # no longer exists, so its command says when it returns instead of failing
 # somewhere deep inside. 1.x is available at tag v1.2.0.
 PAUSED_UNTIL: dict[str, int] = {
-    "cost": 13,
-    "simulation": 13,
     "dashboard": 13,
     "incidents": 14,
 }
@@ -199,6 +193,21 @@ def build(full_refresh: bool = FULL_REFRESH_OPTION) -> None:
     typer.echo(f"dbt build succeeded; lineage refreshed with {edges:,} edges")
 
 
+class _LazyStorage:
+    """The cost module's month-end storage snapshots, prepared on the first day."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.watch: Any = None
+
+    def __call__(self, day: Any) -> None:
+        if self.watch is None:
+            from platform_ops.cost.storage import StorageWatch
+
+            self.watch = StorageWatch(self.settings)
+        self.watch(day)
+
+
 DAYS_OPTION = typer.Option(None, "--days", help="Simulated days to replay (default: the window).")
 
 
@@ -221,7 +230,9 @@ def company_run(days: int | None = DAYS_OPTION) -> None:
     settings, _ = _start("company")
     parallel = ParallelRun(settings) if settings.company.parallel_run_weeks else None
     try:
-        summary = run_company(settings, days, nightly=parallel)
+        # The storage watch opens the ops store, so it starts after the passwords
+        # are known to be there (run_company checks them first).
+        summary = run_company(settings, days, nightly=parallel, daily=_LazyStorage(settings))
     except MissingPasswordError as error:
         _missing_passwords(error)
     except DbtError as error:
@@ -243,7 +254,8 @@ def company_run(days: int | None = DAYS_OPTION) -> None:
     typer.echo(
         f"simulated {summary.days} days: {summary.rows_seeded:,} rows of history, "
         f"{summary.rows_loaded:,} new and {summary.rows_changed:,} changed in Postgres, "
-        f"{summary.rows_ingested:,} ingested into ClickHouse, {len(summary.builds)} dbt builds; "
+        f"{summary.rows_ingested:,} ingested into ClickHouse, {len(summary.builds)} dbt builds, "
+        f"{sum(summary.queries.values()):,} dashboard and ad hoc queries; "
         f"lineage {edges:,} edges"
     )
 
@@ -541,43 +553,20 @@ def metadata_lineage(parse: bool = PARSE_OPTION) -> None:
     typer.echo(f"ops.lineage_edges: {edges:,} edges across {graph.number_of_nodes():,} nodes")
 
 
-@simulation_app.command("run")
-def simulation_run() -> None:
-    """Simulate the whole window: daily data, dbt runs, dashboards, ad hoc queries.
-
-    Starts from a fresh seed every time, so the collected workload is the same
-    on every run.
-    """
-    from platform_ops.simulation.workload import run_workload
-
-    _check_paused("simulation")
-
-    settings, _ = _start("simulation")
-    summary = run_workload(settings)
-    queries = ", ".join(f"{kind} {count:,}" for kind, count in sorted(summary.queries.items()))
-    typer.echo(
-        f"simulated {summary.days} days: {summary.real_builds} real dbt builds, "
-        f"{summary.replayed_builds} replayed; queries: {queries}; "
-        f"{summary.rows_loaded:,} rows loaded, {summary.rows_changed:,} changed in place"
-    )
-
-
 @cost_app.command("report")
 def cost_report() -> None:
-    """Price the collected workload, attribute it, and write reports/cost.md."""
+    """Collect the company run's query log, price it three ways, write reports/cost.md."""
     from platform_ops.cost.run import CostError, run_cost
-
-    _check_paused("cost")
 
     settings, _ = _start("cost")
     try:
         summary = run_cost(settings)
     except CostError as error:
-        _fail(str(error))
+        _fail(str(error), EXIT_UNUSABLE)
     totals = ", ".join(f"{model} ${usd:,.2f}" for model, usd in sorted(summary.total_usd.items()))
     typer.echo(
         f"priced {summary.queries:,} queries ({totals}); {summary.unused} unused tables; "
-        f"wrote {summary.report_path} and {summary.accuracy_path.name}"
+        f"wrote {summary.report_path}"
     )
 
 

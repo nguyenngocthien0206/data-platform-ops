@@ -44,10 +44,15 @@ SETTINGS_YAML = textwrap.dedent(
         credits_per_hour: 1.0
         minimum_billed_seconds: 60
         idle_timeout_seconds: 300
-        warehouses: {dbt: transform_wh, dashboard: bi_wh, adhoc: adhoc_wh}
+        warehouses: {dbt: transform_wh, ingestion: transform_wh, maintenance: transform_wh,
+          reconcile: transform_wh, dashboard: bi_wh, adhoc: adhoc_wh}
     cost:
       throughput_bytes_per_second: 200000000
       per_query_overhead_ms: 150
+      clickhouse: {nodes: 1, instance_usd_per_month: 280.32, storage_gb: 500,
+        storage_usd_per_gb_month: 0.08}
+      legacy_reporting: {nodes: 1, instance_usd_per_month: 520.0, storage_gb: 500,
+        storage_usd_per_gb_month: 0.115}
     recommendations:
       unused_lookback_days: [30, 90]
       hotspot_min_table_bytes: 20000000

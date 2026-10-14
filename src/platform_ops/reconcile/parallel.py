@@ -31,6 +31,7 @@ from platform_ops.common.config import DISCREPANCY_CLASSES, Settings
 from platform_ops.common.dbt_invoke import invocation_from_settings
 from platform_ops.common.servers import clickhouse_client, connect_postgres
 from platform_ops.common.store import open_store, replace_ops_table
+from platform_ops.common.tagging import Tag
 from platform_ops.reconcile.canonical import Rule, rules_for
 from platform_ops.reconcile.classify import classify
 from platform_ops.reconcile.connectors import ClickHouseConnector, PostgresConnector
@@ -188,6 +189,7 @@ class ParallelRun:
         self.rules: dict[str, dict[str, Rule]] = {}
         self.results: list[NightResult] = []
         self.tolerance = Decimal(str(settings.reconcile.rounding_tolerance))
+        self._night_at = settings.simulation.start
 
     # -- the ops store --------------------------------------------------------------
 
@@ -235,7 +237,9 @@ class ParallelRun:
     def _compare(self, spec: TableSpec) -> PairResult:
         connection = connect_postgres(self.settings)
         connection.autocommit = True
-        client = clickhouse_client(self.settings, "platform")
+        # The reconciliation's reads are the migration's own cost (Phase 13).
+        tag = Tag(self._night_at, "reconcile", subject=f"{spec.level}.{spec.name}")
+        client = clickhouse_client(self.settings, "platform", tag.settings())
         try:
             diff = diff_table(
                 spec,
@@ -253,6 +257,7 @@ class ParallelRun:
         )
 
     def __call__(self, night: Night) -> None:
+        self._night_at = night.run_at
         if not self.specs:
             # On the first night, not before: nothing is touched until the
             # company's run has checked its passwords and built the marts.

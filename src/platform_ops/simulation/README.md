@@ -1,13 +1,13 @@
 # simulation
 
-Everything that makes the simulated company behave like a real one. In version 2.0 that company runs its reporting on a legacy Postgres and is migrating to self-managed ClickHouse: the data generator feeds Postgres, hand-written reports read it, an ingestion job pulls it into ClickHouse, dbt builds the analytics there, and Metabase shows them, each under its own ClickHouse user. The workload generator and the fault injectors of 1.x live here too and come back with the modules that use them (Phases 12 to 14).
+Everything that makes the simulated company behave like a real one. In version 2.0 that company runs its reporting on a legacy Postgres and is migrating to self-managed ClickHouse: the data generator feeds Postgres, hand-written reports read it, an ingestion job pulls it into ClickHouse, dbt builds the analytics there, and Metabase and a few people read them, each under its own ClickHouse user. The incident faults of 1.x live here too and come back with the incident module (Phase 14).
 
 ## The company's days (`company.py`)
 
 `platform-ops company run` (and `make demo`) replays the company from scratch, always the same way:
 
 1. **History.** The company's ClickHouse users are created (a missing password stops the run here, before anything is written), the legacy Postgres is seeded with a year of data up to the window start (5 January 2026), every company database in ClickHouse is dropped, and the raw layer is backfilled from Postgres. Dropping everything matters: a dbt snapshot survives `--full-refresh`, so nothing less would start clean.
-2. **Every simulated day** for 13 weeks: the day's orders, payments, sessions and tickets reach Postgres, and at 01:00 a few products and customers change in place; at 02:00 the ingestion pulls everything newer than its watermark into ClickHouse; every 28 days and on the last day, dbt builds the project (the first build in full, later ones incrementally where a model is).
+2. **Every simulated day** for 13 weeks: the day's orders, payments, sessions and tickets reach Postgres, and at 01:00 a few products and customers change in place (recorded in `ops.source_changes`, which the cost module's incremental check reads); at 02:00 the ingestion pulls everything newer than its watermark into ClickHouse, and the raw layer is merged (`OPTIMIZE TABLE ... FINAL`, recorded in `ops.raw_maintenance`); every 28 days and on the last day, dbt builds the project (the first build in full, later ones incrementally where a model is); then the dashboards refresh and people run their ad hoc SQL (below). On the last day of each month and of the window, every table's size is recorded for the cost module (`ops.storage_snapshots`).
 3. **The last six weeks are the migration's parallel run** (Phase 12): dbt builds every night and the migration is reconciled every night, at both levels, ending in the cutover decision (`reconcile/README.md`). The ingestion runs as the migration team first delivered it until a week into the parallel run, when the fixed job ships and backfills raw; one-off faults follow and are repaired the next day (below).
 
 Outside the parallel run the build cadence is a setting (`company.build_every_days`), because a build per day costs minutes and changes nothing the later phases measure. It is the kind of trade-off a platform team makes with the business: how fresh the dashboards need to be against how much compute that freshness burns. The parallel run is the exception, because the reports are compared every night.
@@ -91,11 +91,18 @@ uv run python -m platform_ops.simulation.codegen
 
 A test compares the committed files with a fresh render, so a hand edit to a generated model fails CI instead of drifting from the spec.
 
-## Workload (`workload.py`), paused until Phase 13
+## Workload (`workload.py`)
 
-In 1.x, `platform-ops simulation run` simulated 13 weeks of the platform on DuckDB: dbt at 02:00, the 12 dashboards refreshing every 12 or 24 hours, and five people running ad hoc SQL during office hours, from careful queries to `SELECT *` on large tables ([ADR 0007](../../../docs/adr/0007-simulated-workload-real-builds-daily-replay.md)). It is paused while the company runs on ClickHouse; Phase 13 brings it back to replay the Metabase dashboards' cards (the same SQL `bi.py` generates) and the teams' ad hoc SQL under their own ClickHouse users, so the cost module can read who ran what from ClickHouse's query log.
+Every simulated day, after the build, the company reads its data the way people do:
 
-From two runs of `make simulate` in 1.x, at `v1.2.0`: 91 days, 4 real dbt builds and 87 replayed, 24,934 dbt queries, 10,192 dashboard queries and 687 ad hoc queries, 5,427,803 raw rows loaded and 3,497 changed in place, in 280 and 290 seconds.
+- **Metabase refreshes every dashboard** on its own schedule, every 12 hours for a `high` maturity exposure and every 24 otherwise, staggered after the 02:00 run. Each refresh runs exactly the cards `bi.py` generates for that dashboard, as the `metabase` user.
+- **A few people run ad hoc SQL** during office hours, as their team's user, from a careful aggregate to `SELECT *` on the largest fact. The business teams read the marts; the platform team reads every layer, raw included.
+
+Every query carries a tag through ClickHouse's `log_comment` setting: the run, the simulated time, the kind of work, what it was about and, for ad hoc SQL, who typed it. dbt, the ingestion, the nightly merge and the reconciliation carry the same tag (`common/tagging.py`), so the cost module reads who ran what from ClickHouse's own query log ([ADR 0018](../../../docs/adr/0018-finops-on-a-self-managed-clickhouse.md)). Rows are discarded on the server (`FORMAT Null`): what a query costs is what it reads, not what a client fetches.
+
+Two runs send the same queries and ClickHouse measures the same reads, which took two things. Everything that looks random comes from the seed through a stable hash. And the raw layer is merged every night: a `FINAL` read of a `ReplacingMergeTree` reads whatever parts the background merges have reached, so before the nightly merge the same query read a different number of bytes on each run. Workload queries also run on one thread, so a `LIMIT` stops after the same rows every time.
+
+In the demo at scale 1.0 the 91 days hold 10,192 dashboard refreshes and 687 ad hoc queries, the same counts as 1.x because the schedules and the seed did not change, and 819 merges of raw (nine tables a night). The merges took 3.6 seconds a night for all nine tables, and rewrote 35.12 GB over the window, a quarter of the cluster's compute in the cost report: the price of reads that repeat.
 
 ## The migration's planted discrepancies (`migration.py`, `ingest.py`)
 

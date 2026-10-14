@@ -9,6 +9,15 @@
 # the same name anywhere in the query; the models qualify such a column with
 # its table instead (prefer_column_name_to_alias would also fix it, but it
 # breaks dbt-clickhouse's own metadata queries).
+#
+# Three settings make every insert write one part per partition: one insert
+# thread (the default is one per core, which splits a table into parts in a
+# different way on every run) and blocks squashed to the whole insert. What a
+# later query reads then depends on the data, not on when ClickHouse's
+# background merges happened to run, so the measured reads repeat (Phase 13).
+#
+# log_comment tags every query in ClickHouse's query log with the run and the
+# simulated time it belongs to (common/tagging.py); the cost module reads it.
 company:
   target: local
   outputs:
@@ -24,3 +33,7 @@ company:
       custom_settings:
         join_use_nulls: 1
         union_default_mode: DISTINCT
+        max_insert_threads: 1
+        min_insert_block_size_rows: 1000000000
+        min_insert_block_size_bytes: 100000000000
+        log_comment: "{{ env_var('PLATFORM_OPS_LOG_COMMENT', '') }}"

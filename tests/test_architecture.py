@@ -20,18 +20,17 @@ ALLOWED: dict[str, set[str]] = {
     "common": set(),
     "metadata": {"common"},
     "simulation": {"common", "metadata"},
-    "cost": {"common", "metadata"},
+    "cost": {"common", "metadata", "simulation"},
     "incidents": {"common", "metadata", "simulation"},
     "reconcile": {"common", "metadata", "simulation"},
     "dashboard": {"common", "metadata"},
 }
 
-# The one accepted exception: the simulated warehouse carries the cost module's
-# collection instruments, the way a real warehouse carries a query history
-# (docs/review/phase-6-review.md).
-EXCEPTIONS: dict[str, set[str]] = {
-    "simulation": {"cost.collect", "cost.growth", "cost.sizes", "cost.schema"},
-}
+# Accepted exceptions, by package. Version 2.0 has none: the 1.x simulated
+# warehouse carried the cost module's collection instruments
+# (docs/review/phase-6-review.md); the company now leaves its traces in
+# ClickHouse's own query log, which the cost module reads (Phase 13).
+EXCEPTIONS: dict[str, set[str]] = {}
 
 
 def _imports(path: Path) -> set[str]:

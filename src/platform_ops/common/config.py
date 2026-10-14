@@ -60,7 +60,19 @@ class SimulationWindow(_Strict):
         return self.start + self.duration
 
 
-ActorType = Literal["dbt", "dashboard", "adhoc"]
+# Who ran a query, by the kind of work (version 2.0 adds the pipelines and the
+# migration's own load): dbt builds and tests, the ingestion, the platform's
+# maintenance (OPTIMIZE), the parallel run's reconciliation, BI refreshes, and
+# people's ad hoc SQL.
+ActorType = Literal["dbt", "ingestion", "maintenance", "reconcile", "dashboard", "adhoc"]
+ACTOR_TYPES: tuple[ActorType, ...] = (
+    "dbt",
+    "ingestion",
+    "maintenance",
+    "reconcile",
+    "dashboard",
+    "adhoc",
+)
 
 
 class ScanRates(_Strict):
@@ -77,7 +89,7 @@ class ComputeRates(_Strict):
 
     @model_validator(mode="after")
     def _every_workload_has_a_warehouse(self) -> ComputeRates:
-        missing = {"dbt", "dashboard", "adhoc"} - set(self.warehouses)
+        missing = set(ACTOR_TYPES) - set(self.warehouses)
         if missing:
             raise ValueError(f"pricing.compute.warehouses is missing {sorted(missing)}")
         return self
@@ -88,11 +100,31 @@ class PricingRates(_Strict):
     compute: ComputeRates
 
 
+class StatedCost(_Strict):
+    """What a piece of infrastructure costs a month, from public list prices."""
+
+    nodes: Annotated[int, Field(ge=1)] = 1
+    instance_usd_per_month: Annotated[float, Field(gt=0)]
+    storage_gb: Annotated[int, Field(ge=0)]
+    storage_usd_per_gb_month: Annotated[float, Field(ge=0)]
+
+    @property
+    def compute_usd(self) -> float:
+        return self.nodes * self.instance_usd_per_month
+
+    @property
+    def storage_usd(self) -> float:
+        return self.nodes * self.storage_gb * self.storage_usd_per_gb_month
+
+
 class CostModel(_Strict):
-    """Declared assumptions behind modelled compute time (ADR 0005)."""
+    """Declared assumptions behind modelled compute time (ADR 0005), and the stated
+    monthly cost of the company's ClickHouse and of the legacy reporting it replaces."""
 
     throughput_bytes_per_second: Annotated[int, Field(gt=0)]
     per_query_overhead_ms: Annotated[int, Field(ge=0)]
+    clickhouse: StatedCost
+    legacy_reporting: StatedCost
 
 
 class Recommendations(_Strict):

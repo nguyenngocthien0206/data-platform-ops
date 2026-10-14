@@ -1,163 +1,182 @@
-"""End to end: simulate, then cost, through the real CLI (SPEC Phase 2 acceptance).
+"""End to end: the cost report on the company's own query log (Phase 13).
 
-Three simulated weeks at scale 0.01, run twice in separate directories: the
-shared ``full_warehouse`` and one independent run. Proves:
+Read from the shared ``company_warehouse`` (two weeks at scale 0.01, the second
+a short parallel run), after ``cost report`` through the real CLI. Proves:
 
-- ``make simulate && make cost`` produce the report deterministically: two runs
-  give byte-identical ``cost.md`` files;
-- every abandoned model is in the unused list, and no model with a live
-  dashboard downstream is;
-- nobody's dashboards or ad hoc queries read an abandoned model;
-- for every dbt build query, the tables the SQL parser found are exactly the
-  model's parents in dbt's lineage.
+- every query the run tagged is collected, the billable ones are priced under
+  all three models, and every query is attributed exactly once;
+- the cluster's shares add up to its stated cost, prorated to the window, to
+  the cent and beyond;
+- every abandoned model is in the unused list, and no model with a dashboard
+  downstream is; nobody's dashboards or ad hoc queries read an abandoned model;
+- what ClickHouse says each dbt build read is that model's lineage;
+- the report is a pure function of the collected data.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+import json
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import pytest
+from psycopg import sql
 from typer.testing import CliRunner
 
-from platform_ops.cli import app, paused_reason
-from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings, load_settings
+from platform_ops.cli import app
+from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings
 from platform_ops.common.dbt_invoke import invocation_from_settings
-from platform_ops.metadata.lineage import build_graph, downstream
+from platform_ops.common.store import open_store, ops_table
+from platform_ops.cost import cluster
+from platform_ops.metadata.lineage import build_graph, downstream, upstream
 from platform_ops.metadata.manifest import Node, load_manifest
 
-# Version 2.0: the module reads the 1.x DuckDB warehouse until its phase moves it.
-pytestmark = [pytest.mark.integration, pytest.mark.skip(reason=paused_reason("cost"))]
-
-runner = CliRunner()
+pytestmark = pytest.mark.integration
 
 
-def _simulate_and_cost(root: Path, isolated_config: Callable[..., Path]) -> Settings:
-    # Three weeks, like the shared warehouse: its first real dbt build is the
-    # same, and the extra replayed days cost almost nothing.
-    settings_path = isolated_config(root, 0.01, weeks=3)
+def _cost_report(settings: Settings) -> Path:
     patch = pytest.MonkeyPatch()
-    patch.setenv(CONFIG_PATH_ENV_VAR, str(settings_path))
+    patch.setenv(CONFIG_PATH_ENV_VAR, str(settings.root / "config" / "settings.yaml"))
     try:
-        for command in ("simulation run", "cost report"):
-            result = runner.invoke(app, command.split())
-            assert result.exit_code == 0, f"{command} failed:\n{result.output}"
+        result = CliRunner().invoke(app, ["cost", "report"])
     finally:
         patch.undo()
-    return load_settings(settings_path)
+    assert result.exit_code == 0, result.output
+    return settings.resolve(settings.paths.reports) / "cost.md"
 
 
 @pytest.fixture(scope="module")
-def runs(
-    tmp_path_factory: pytest.TempPathFactory,
-    isolated_config: Callable[..., Path],
-    full_warehouse: Settings,
-) -> Iterator[tuple[Settings, Settings]]:
-    # The first run is the shared warehouse (simulate and cost through the CLI,
-    # then incidents and reconcile, which never touch the cost tables or report).
-    second = _simulate_and_cost(tmp_path_factory.mktemp("cost_b"), isolated_config)
-    yield full_warehouse, second
+def costed(company_warehouse: Settings) -> tuple[Settings, bytes]:
+    report = _cost_report(company_warehouse)
+    return company_warehouse, report.read_bytes()
 
 
-def _query(settings: Settings, sql: str) -> list[tuple[Any, ...]]:
-    connection = duckdb.connect(str(settings.resolve(settings.paths.duckdb)), read_only=True)
-    try:
-        return connection.execute(sql).fetchall()
-    finally:
-        connection.close()
+def _rows(settings: Settings, table: str, query: str) -> list[tuple[Any, ...]]:
+    with open_store(settings) as store:
+        return list(store.execute(sql.SQL(query).format(ops_table(settings, table))).fetchall())
 
 
 def _nodes(settings: Settings) -> dict[str, Node]:
     return load_manifest(invocation_from_settings(settings).manifest_path)
 
 
-def test_two_runs_produce_byte_identical_cost_reports(runs: tuple[Settings, Settings]) -> None:
-    first, second = runs
-    report_a = (first.resolve(first.paths.reports) / "cost.md").read_bytes()
-    report_b = (second.resolve(second.paths.reports) / "cost.md").read_bytes()
-    assert report_a == report_b
-    assert b"## Showback by team" in report_a
+def test_every_kind_of_work_is_collected_and_tagged(costed: tuple[Settings, bytes]) -> None:
+    settings, _ = costed
+    kinds = dict(
+        _rows(
+            settings,
+            "query_log",
+            "SELECT actor_type, count(*) FROM {} WHERE billable GROUP BY 1",
+        )
+    )
+    assert set(kinds) == {"dbt", "ingestion", "maintenance", "reconcile", "dashboard", "adhoc"}
+    assert all(n > 0 for n in kinds.values())
+    ((untyped,),) = _rows(
+        settings, "query_log", "SELECT count(*) FROM {} WHERE actor = '' OR started_at IS NULL"
+    )
+    assert untyped == 0
 
 
-def test_unused_list_is_exactly_the_abandoned_models(runs: tuple[Settings, Settings]) -> None:
-    settings, _ = runs
+def test_billable_queries_are_priced_three_ways_and_attributed_once(
+    costed: tuple[Settings, bytes],
+) -> None:
+    settings, _ = costed
+    ((billable, everything),) = _rows(
+        settings, "query_log", "SELECT count(*) FILTER (WHERE billable), count(*) FROM {}"
+    )
+    priced = dict(_rows(settings, "query_costs", "SELECT model, count(*) FROM {} GROUP BY 1"))
+    # A query that read nothing gets no share of the cluster; it still has a price elsewhere.
+    assert priced["scan"] == priced["compute"] == billable > 0
+    assert 0 < priced["cluster"] <= billable
+    ((attributed, unattributed),) = _rows(
+        settings,
+        "query_attribution",
+        "SELECT count(*), count(*) FILTER (WHERE team = 'unattributed') FROM {}",
+    )
+    assert attributed == everything
+    assert unattributed == 0
+
+
+def test_the_cluster_shares_add_up_to_the_stated_cost(costed: tuple[Settings, bytes]) -> None:
+    settings, report = costed
+    ((start, days),) = _rows(settings, "company_run", "SELECT window_start, days FROM {}")
+    pools = cluster.pools(settings.cost.clickhouse, cluster.window_months(start, days))
+    stated = sum((p.total_usd for p in pools), Decimal(0))
+    ((shared,),) = _rows(
+        settings, "cost_showback", "SELECT sum(usd) FROM {} WHERE model = 'cluster'"
+    )
+    assert shared == stated
+    assert b"the shares add up to the bill exactly" in report
+
+
+def test_unused_list_is_exactly_the_abandoned_models(costed: tuple[Settings, bytes]) -> None:
+    settings, report = costed
     nodes = _nodes(settings)
     abandoned = {n.relation for n in nodes.values() if n.folder == "abandoned"}
     assert len(abandoned) == 12
-    for days in settings.recommendations.unused_lookback_days:
-        unused = {
-            r[0]
-            for r in _query(
-                settings,
-                f"SELECT relation FROM ops.cost_report_unused WHERE lookback_days = {days}",
-            )
-        }
-        assert unused == abandoned, f"{days}-day list"
-
-
-def test_no_model_feeding_a_dashboard_is_called_unused(runs: tuple[Settings, Settings]) -> None:
-    settings, _ = runs
-    nodes = _nodes(settings)
+    section = report.decode().split("### Unused tables", 1)[1].split("### Full-scan", 1)[0]
+    listed = {
+        line.split(" | ")[0].lstrip("| ") for line in section.splitlines() if "_marts." in line
+    }
+    assert listed == abandoned
     graph = build_graph(nodes)
-    unused = {r[0] for r in _query(settings, "SELECT unique_id FROM ops.cost_report_unused")}
-    for unique_id in unused:
+    for relation in listed:
+        (unique_id,) = (u for u, n in nodes.items() if n.relation == relation)
         exposures = {n for n in downstream(graph, unique_id) if n.startswith("exposure.")}
         assert not exposures, f"{unique_id} feeds {exposures}"
 
 
-def test_consumers_never_read_abandoned_models(runs: tuple[Settings, Settings]) -> None:
-    settings, _ = runs
+def test_consumers_never_read_abandoned_models(costed: tuple[Settings, bytes]) -> None:
+    settings, _ = costed
     abandoned = {n.relation for n in _nodes(settings).values() if n.folder == "abandoned"}
     read = {
-        r[0]
-        for r in _query(
+        table
+        for (tables,) in _rows(
             settings,
-            """SELECT DISTINCT qt.table_name FROM ops.query_tables qt
-               JOIN ops.query_log ql USING (query_id)
-               WHERE ql.actor_type IN ('dashboard', 'adhoc')""",
+            "query_log",
+            "SELECT DISTINCT tables FROM {} WHERE actor_type IN ('dashboard', 'adhoc')",
         )
+        for table in tables.split(",")
+        if table
     }
     assert read and not (read & abandoned)
 
 
-def test_parsed_reads_of_every_model_build_match_dbt_lineage(
-    runs: tuple[Settings, Settings],
-) -> None:
-    settings, _ = runs
+def test_what_each_build_read_is_its_lineage(costed: tuple[Settings, bytes]) -> None:
+    """Its parents, plus the tables behind any view among them: ClickHouse
+    reports reading both when a query reads a view."""
+    settings, _ = costed
     nodes = _nodes(settings)
-    rows = _query(
+    graph = build_graph(nodes)
+    rows = _rows(
         settings,
-        """SELECT ql.node_id, list(qt.table_name ORDER BY qt.table_name)
-           FROM ops.query_log ql JOIN ops.query_tables qt USING (query_id)
-           WHERE ql.actor_type = 'dbt' AND ql.node_id LIKE 'model.%' AND NOT ql.replayed
-           GROUP BY ql.node_id""",
+        "query_log",
+        "SELECT DISTINCT node_id, tables FROM {} "
+        "WHERE actor_type = 'dbt' AND query_kind = 'Insert' AND node_id LIKE 'model.%%'",
     )
-    assert len(rows) == sum(1 for n in nodes.values() if n.resource_type == "model")
+    manifest = json.loads(invocation_from_settings(settings).manifest_path.read_text("utf-8"))
+    tables = {
+        uid
+        for uid, n in nodes.items()
+        if n.resource_type == "model" and manifest["nodes"][uid]["config"]["materialized"] != "view"
+    }
+    assert {node_id for node_id, _ in rows} == tables
     for node_id, tables in rows:
-        expected = sorted(nodes[d].relation for d in nodes[node_id].depends_on)
-        assert tables == expected, node_id
+        node = nodes[node_id]
+        # The table being written (or its __dbt_backup twin) is not a read.
+        read = {t for t in tables.split(",") if t and not t.startswith(node.relation)}
+        parents = {nodes[p].relation for p in node.depends_on}
+        behind = {nodes[u].relation for u in upstream(graph, node_id)}
+        assert parents <= read <= behind, node_id
 
 
-def test_every_query_is_priced_under_both_models_and_attributed_once(
-    runs: tuple[Settings, Settings],
+def test_the_report_is_a_pure_function_of_the_collected_data(
+    costed: tuple[Settings, bytes],
 ) -> None:
-    settings, _ = runs
-    (counts,) = _query(
-        settings,
-        """SELECT (SELECT count(*) FROM ops.query_log),
-                  (SELECT count(*) FROM ops.query_costs WHERE model = 'scan'),
-                  (SELECT count(*) FROM ops.query_costs WHERE model = 'compute'),
-                  (SELECT count(*) FROM ops.query_attribution),
-                  (SELECT count(*) FROM ops.query_attribution WHERE team = 'unattributed')""",
-    )
-    queries, scan, compute, attributed, unattributed = counts
-    assert queries == scan == compute == attributed > 0
-    assert unattributed == 0
-    (totals,) = _query(
-        settings,
-        """SELECT (SELECT sum(total_usd) FROM ops.cost_by_team WHERE pricing_model = 'scan'),
-                  (SELECT sum(usd) FROM ops.query_costs WHERE model = 'scan')""",
-    )
-    assert totals[0] == totals[1], "team totals add up to the bill"
+    settings, report = costed
+    showback = _rows(settings, "cost_showback", "SELECT * FROM {} ORDER BY 1, 2, 3, 4, 5")
+    assert _cost_report(settings).read_bytes() == report
+    assert _rows(settings, "cost_showback", "SELECT * FROM {} ORDER BY 1, 2, 3, 4, 5") == showback
+    for section in ("## Assumptions", "## Showback by team", "## The migration's business case"):
+        assert section.encode() in report

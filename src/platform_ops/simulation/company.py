@@ -29,10 +29,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Any
+
+from psycopg import sql
 
 from platform_ops.common.config import Settings
 from platform_ops.common.dbt_invoke import invocation_from_settings, run_dbt
 from platform_ops.common.servers import clickhouse_client, connect_postgres
+from platform_ops.common.store import open_store, ops_table, replace_ops_table
+from platform_ops.common.tagging import Tag, current_run, start_run
+from platform_ops.simulation import raw_data
 from platform_ops.simulation.access import DBT_LAYERS, drop_users, ensure_users
 from platform_ops.simulation.ingest import Ingestion
 from platform_ops.simulation.legacy_db import LegacyCompany
@@ -45,6 +51,7 @@ from platform_ops.simulation.migration import (
     plant,
     repair,
 )
+from platform_ops.simulation.workload import Workload
 
 
 @dataclass
@@ -55,6 +62,7 @@ class CompanySummary:
     rows_changed: int = 0
     rows_ingested: int = 0
     builds: list[datetime] = field(default_factory=list)
+    queries: dict[str, int] = field(default_factory=dict)
 
 
 def company_databases(settings: Settings) -> list[str]:
@@ -114,10 +122,69 @@ def remove_company(settings: Settings) -> None:
             connection.commit()
 
 
-def build(settings: Settings, *, full_refresh: bool = False) -> None:
-    """``dbt build`` of the company's project on ClickHouse."""
+def build(settings: Settings, *, full_refresh: bool = False, at: datetime | None = None) -> None:
+    """``dbt build`` of the company's project on ClickHouse, tagged with its simulated time."""
     command = ["build", "--full-refresh"] if full_refresh else ["build"]
-    run_dbt(invocation_from_settings(settings), command)
+    comment = Tag(at, "dbt").comment() if at is not None and current_run() else ""
+    run_dbt(invocation_from_settings(settings, log_comment=comment), command)
+
+
+# What the company's run records about itself in the ops store, for the cost
+# module: its run id (the tag in the query log), the platform's nightly
+# maintenance, and which sources changed rows in place (Phase 13).
+COMPANY_RUN_DDL = "run_id text NOT NULL, window_start timestamp NOT NULL, days integer NOT NULL"
+MAINTENANCE_DDL = """
+    sim_at timestamp NOT NULL, table_name text NOT NULL,
+    rows_rewritten bigint NOT NULL, bytes_rewritten bigint NOT NULL"""
+SOURCE_CHANGES_DDL = (
+    "sim_at timestamp NOT NULL, table_name text NOT NULL, changed_rows bigint NOT NULL"
+)
+
+
+def _record(settings: Settings, name: str, columns: list[str], rows: list[tuple[Any, ...]]) -> None:
+    if not rows:
+        return
+    with open_store(settings) as store:
+        statement = sql.SQL("COPY {} ({}) FROM STDIN").format(
+            ops_table(settings, name), sql.SQL(", ").join(map(sql.Identifier, columns))
+        )
+        with store.cursor().copy(statement) as copy:
+            for row in rows:
+                copy.write_row(row)
+
+
+def optimize_raw(settings: Settings, admin: Any, at: datetime) -> list[tuple[Any, ...]]:
+    """The platform's nightly maintenance: merge every raw table down to one version per key.
+
+    A ``ReplacingMergeTree`` keeps every version of a row until ClickHouse
+    merges it in the background, at a moment no one chooses, so reading raw
+    with ``FINAL`` costs a different amount from one run to the next.
+    ``OPTIMIZE ... FINAL`` after the day's load makes every later read, and so
+    every measured cost, repeat exactly (Phase 13). The merge runs in a
+    background thread the query log does not measure, so what it rewrote is
+    recorded from the merged part: its rows and uncompressed bytes.
+    """
+    raw = settings.company.name(settings.company.raw_database)
+    records: list[tuple[Any, ...]] = []
+    for table in raw_data.TABLES:
+        admin.command(f"OPTIMIZE TABLE `{raw}`.`{table}` FINAL")
+        rows, size = admin.query(
+            "SELECT sum(rows), sum(data_uncompressed_bytes) FROM system.parts "
+            "WHERE database = %(db)s AND table = %(t)s AND active",
+            parameters={"db": raw, "t": table},
+        ).result_rows[0]
+        records.append((at, table, int(rows or 0), int(size or 0)))
+    return records
+
+
+@dataclass(frozen=True)
+class Day:
+    """A simulated day after its build and workload, for whoever watches the run."""
+
+    index: int
+    run_at: datetime
+    last_of_month: bool
+    last: bool
 
 
 @dataclass(frozen=True)
@@ -165,26 +232,43 @@ def run_company(
     settings: Settings,
     days: int | None = None,
     nightly: Callable[[Night], None] | None = None,
+    daily: Callable[[Day], None] | None = None,
 ) -> CompanySummary:
     """Seed the history, then replay ``days`` simulated days (the whole window by default).
 
-    During the parallel run, dbt builds every night and ``nightly`` (the
-    reconciliation) is called after each build.
+    Every day: the day's data reaches Postgres, the ingestion loads it, the
+    platform merges raw, dbt builds on its cadence, and the dashboards and
+    people query the marts. During the parallel run dbt builds every night and
+    ``nightly`` (the reconciliation) is called after each build; ``daily`` is
+    called at the end of every day. Every query is tagged for the cost module.
     """
     window = settings.simulation
     total_days = window.weeks * 7 if days is None else days
     every = settings.company.build_every_days
-    workload = settings.workload
+    workload_settings = settings.workload
     scale = settings.scale_factor
     timeline = Timeline.of(settings, total_days)
     summary = CompanySummary()
+    run_id = start_run()
 
     legacy = LegacyCompany(settings)
     ingestion = Ingestion(settings, delivered=timeline.delivered(0))
     admin = clickhouse_client(settings)
+    workload = Workload(settings)
     planted: Planted | None = None
     try:
         summary.rows_seeded, summary.rows_ingested = start_over(settings, legacy, ingestion)
+        with open_store(settings) as store:
+            replace_ops_table(
+                store,
+                settings,
+                "company_run",
+                COMPANY_RUN_DDL,
+                ["run_id", "window_start", "days"],
+                [(run_id, window.start, total_days)],
+            )
+            replace_ops_table(store, settings, "raw_maintenance", MAINTENANCE_DDL, [], [])
+            replace_ops_table(store, settings, "source_changes", SOURCE_CHANGES_DDL, [], [])
         loaded_until = window.start
         for day_index in range(total_days):
             day = window.start + timedelta(days=day_index)
@@ -194,12 +278,22 @@ def run_company(
                 after=loaded_until,
                 until=run_at,
                 changes_at=run_at - timedelta(hours=1),
-                price_changes=max(1, round(workload.product_price_changes_per_day * scale)),
-                profile_changes=max(1, round(workload.customer_profile_changes_per_day * scale)),
+                price_changes=max(
+                    1, round(workload_settings.product_price_changes_per_day * scale)
+                ),
+                profile_changes=max(
+                    1, round(workload_settings.customer_profile_changes_per_day * scale)
+                ),
             )
             loaded_until = run_at
             summary.rows_loaded += sum(loaded.values())
             summary.rows_changed += sum(changed.values())
+            _record(
+                settings,
+                "source_changes",
+                ["sim_at", "table_name", "changed_rows"],
+                [(run_at - timedelta(hours=1), t, n) for t, n in sorted(changed.items()) if n],
+            )
             backfill = ingestion.delivered and not timeline.delivered(day_index)
             repaired = ""
             if planted is not None:
@@ -214,10 +308,17 @@ def run_company(
             fault = timeline.faults.get(day_index)
             if fault is not None:
                 planted = plant(settings, admin, fault)
+            _record(
+                settings,
+                "raw_maintenance",
+                ["sim_at", "table_name", "rows_rewritten", "bytes_rewritten"],
+                optimize_raw(settings, admin, run_at),
+            )
             parallel = timeline.parallel(day_index)
             if parallel or day_index % every == 0 or day_index == total_days - 1:
-                build(settings, full_refresh=not summary.builds or backfill)
+                build(settings, full_refresh=not summary.builds or backfill, at=run_at)
                 summary.builds.append(run_at)
+            workload.run_day(day_index, day)
             if parallel and nightly is not None:
                 truth: list[TruthCell] = []
                 if ingestion.delivered:
@@ -236,11 +337,23 @@ def run_company(
                         truth=tuple(truth),
                     )
                 )
+            if daily is not None:
+                tomorrow = day + timedelta(days=1)
+                daily(
+                    Day(
+                        index=day_index,
+                        run_at=run_at,
+                        last_of_month=tomorrow.month != day.month,
+                        last=day_index == total_days - 1,
+                    )
+                )
             summary.days += 1
+        summary.queries = dict(workload.summary.queries)
     finally:
         legacy.close()
         ingestion.close()
         admin.close()
+        workload.close()
     return summary
 
 

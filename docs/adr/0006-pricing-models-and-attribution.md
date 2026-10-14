@@ -25,3 +25,7 @@ The side-by-side comparison exposes a real trade-off. Over the full 13-week run 
 Charging readers for reads gives each team a lever it controls. A team that wants a smaller bill can narrow its dashboards' columns or refresh them less often, and a team that owns an expensive model can make it incremental. Neither can push its cost onto the other. The platform team's consumption line stays small because it rarely reads other teams' data; its production line is large because it builds the shared layers. That split is the honest picture of a central team, and the ownership registry is what makes it possible.
 
 A real vendor bill can replace either model. An adapter that returns `PricedQuery` rows from a billing export plugs in where the simulated pricing sits, and everything downstream is unchanged.
+
+## Later note (version 2.0, Phase 13)
+
+Both pricing models stay, priced on bytes ClickHouse measured. A third sits beside them: the self-managed cluster's stated monthly cost, shared out by bytes read and table size ([ADR 0018](0018-finops-on-a-self-managed-clickhouse.md)). Attribution keeps its rule and gains three kinds of work: the ingestion and the nightly merge of raw are production cost for the source's owner, and the parallel run's reconciliation is migration cost for the platform team. Money is still `Decimal`; the sums are now done in Python and checked against the stated cost.

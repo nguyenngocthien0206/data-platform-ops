@@ -57,6 +57,9 @@ pricing:
     # workload that caused it.
     warehouses:
       dbt: transform_wh
+      ingestion: transform_wh
+      maintenance: transform_wh
+      reconcile: transform_wh
       dashboard: bi_wh
       adhoc: adhoc_wh
 
@@ -66,6 +69,30 @@ cost:
   # measured wall-clock time changes on every run (see docs/adr/0005).
   throughput_bytes_per_second: 200000000
   per_query_overhead_ms: 150
+  # What the company pays a month (version 2.0), from public on-demand list
+  # prices in us-east-1, looked up in October 2026. The sizing is a declared
+  # assumption, printed in the report.
+  #
+  # The self-managed ClickHouse: one m6i.2xlarge (8 vCPU, 32 GiB), $0.384/h or
+  # about $280.32/month, with 500 GB of EBS gp3 at $0.08/GB-month.
+  #   https://calculator.holori.com/aws/ec2/m6i.2xlarge
+  #   https://cloudchipr.com/blog/aws-ebs-pricing
+  clickhouse:
+    nodes: 1
+    instance_usd_per_month: 280.32
+    storage_gb: 500
+    storage_usd_per_gb_month: 0.08
+  # What the migration replaces: the legacy Postgres stays as the company's
+  # operational database, but its reporting runs on a read replica, an RDS for
+  # PostgreSQL db.m6i.2xlarge ($520/month, compute only) with 500 GB of RDS gp3
+  # ($0.115/GB-month, a single source), decommissioned at cutover.
+  #   https://www.bytebase.com/dbcost/rds/instance/db.m6i.2xlarge.md
+  #   https://www.usage.ai/blogs/aws/reserved-instances/rds/storage-cost/
+  legacy_reporting:
+    nodes: 1
+    instance_usd_per_month: 520.00
+    storage_gb: 500
+    storage_usd_per_gb_month: 0.115
 
 recommendations:
   # Unused tables: written in the window but never read, directly or through

@@ -15,7 +15,15 @@ T0 = datetime(2026, 1, 5, 2, 0, 0)
 MB = 1024 * 1024
 
 SCAN = ScanRates(usd_per_tib=6.25, minimum_billed_bytes_per_table=10 * MB)
-WAREHOUSES = {"dbt": "transform_wh", "dashboard": "bi_wh", "adhoc": "adhoc_wh"}
+# Production work shares the transform warehouse, as in config/settings.yaml.
+WAREHOUSES = {
+    "dbt": "transform_wh",
+    "ingestion": "transform_wh",
+    "maintenance": "transform_wh",
+    "reconcile": "transform_wh",
+    "dashboard": "bi_wh",
+    "adhoc": "adhoc_wh",
+}
 
 
 def compute(idle: int = 300, minimum: int = 60) -> ComputePricing:

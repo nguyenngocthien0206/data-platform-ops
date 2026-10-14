@@ -23,6 +23,8 @@ Loading by window exposed a real defect. A payment could be stamped as loaded mi
 
 If the budget tightens further, the lever is `workload.real_build_every_days`, not the data volume, since dbt's time barely depends on volume.
 
-## Later note
+## Later notes
+
+Version 2.0, Phase 13: superseded. There is no replay any more. Every dbt build, ingestion, merge, dashboard refresh and ad hoc query runs for real on ClickHouse, and the cost module reads what each one read from the query log ([ADR 0018](0018-finops-on-a-self-managed-clickhouse.md)). The build cadence (`company.build_every_days`, every night during the parallel run) is the company's, set in Phase 11a.
 
 Before Phase 7 the owner lifted the 10-minute budget for `make demo`. After Phase 7 the 28-day interval was reviewed and kept: it is documented here, the reports match across the native run, the container and the Phase 6 baseline, and moving it would change every cost figure for realism alone (`docs/PROGRESS.md`, "After Phase 7").

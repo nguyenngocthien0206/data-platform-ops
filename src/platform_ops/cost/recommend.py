@@ -1,55 +1,42 @@
-"""Where the money goes that nobody needed to spend.
+"""What the bill says to change, from the measured workload (version 2.0, Phase 13).
 
-- **Unused tables**: built in the window, but neither the table nor anything
-  downstream of it was read by a dashboard or a person in the last N days.
-  dbt's own reads do not count: a table only read by other dbt models is used
-  exactly when those models are. That is how lineage keeps an intermediate
-  table that feeds a live dashboard off the list.
-- **Full-scan hotspots**: large tables that dashboards and people filter on the
-  same column again and again, each time paying to scan the whole column.
-  Partitioning or clustering on that column is the usual fix.
-- **Incremental candidates**: the most expensive models to build, checked
-  against their upstream sources. Rebuilding incrementally is only safe when
-  every source only ever gains rows, which ``cost.growth`` observed day by day.
+- **Unused tables.** A model is unused when neither it nor anything downstream
+  of it was read by a dashboard or a person in the lookback window. dbt reading
+  a table to build another does not count, so a staging model that feeds a
+  live dashboard is never flagged, and one that only feeds dead tables is.
+- **Full-scan hotspots.** ClickHouse measures the rows each query read. A
+  dashboard or ad hoc query that filters a large table but still reads nearly
+  all of it (``hotspot_scan_share``) is not using the table's sort key; when
+  the same table is filtered that way on the same column often enough, the
+  report suggests putting that column first in the sort key, or, on a
+  ``ReplacingMergeTree`` (whose sort key is what it deduplicates on), a
+  skip index.
+- **Incremental candidates.** The most expensive models still rebuilt in full,
+  checked against their sources: a model built on a source whose rows change
+  in place (observed in the legacy database, ``ops.source_changes``) cannot
+  simply append, so it is ruled out.
+- **Quotas.** For each person-facing user (the teams and Metabase), what it
+  read on its busiest days, and a quota and a per-query limit a little above
+  that, as statements the platform team can apply or not.
 """
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-import duckdb
 import networkx as nx
 
-from platform_ops.common.db import OPS_SCHEMA
+from platform_ops.cost.attribution import Owners
+from platform_ops.cost.collect import QueryRecord
 from platform_ops.metadata.lineage import downstream, upstream
-from platform_ops.metadata.manifest import Node
-from platform_ops.metadata.registry import Resolution
 
-CONSUMER_ACTORS = ("dashboard", "adhoc")
-PRICING_MODELS = ("scan", "compute")
-
-
-def production_costs(connection: duckdb.DuckDBPyConnection) -> dict[str, dict[str, Decimal]]:
-    """Build and test cost per model over the window, per pricing model."""
-    rows = connection.execute(
-        f"""SELECT a.subject, c.model, sum(c.usd)
-            FROM {OPS_SCHEMA}.query_costs c
-            JOIN {OPS_SCHEMA}.query_attribution a USING (query_id)
-            WHERE a.cost_kind = 'production' AND a.subject IS NOT NULL
-            GROUP BY 1, 2 ORDER BY 1, 2"""
-    ).fetchall()
-    costs: dict[str, dict[str, Decimal]] = defaultdict(dict)
-    for subject, model, usd in rows:
-        costs[str(subject)][str(model)] = Decimal(usd)
-    return dict(costs)
-
-
-def _monthly(total: Decimal, window_days: int) -> Decimal:
-    return total * Decimal(30) / Decimal(window_days)
+CONSUMERS = ("dashboard", "adhoc")
+HOTSPOT_SCAN_SHARE = 0.9
 
 
 @dataclass(frozen=True)
@@ -62,58 +49,54 @@ class UnusedTable:
     monthly_saving: dict[str, Decimal]
 
 
+def _monthly(total: Decimal, window_days: int) -> Decimal:
+    return (total * Decimal(30) / Decimal(window_days)).quantize(Decimal("0.0001"))
+
+
 def unused_tables(
-    connection: duckdb.DuckDBPyConnection,
-    nodes: Mapping[str, Node],
+    records: Sequence[QueryRecord],
+    owners: Owners,
     graph: nx.DiGraph[str],
-    resolutions: Mapping[str, Resolution],
+    production: Mapping[str, Mapping[str, Decimal]],
     window_end: datetime,
     window_days: int,
     lookbacks: Sequence[int],
 ) -> list[UnusedTable]:
-    by_relation = {n.relation: n.unique_id for n in nodes.values() if n.resource_type == "model"}
+    relations = owners.by_relation()
     written = {
-        str(r[0])
-        for r in connection.execute(
-            f"""SELECT DISTINCT writes FROM {OPS_SCHEMA}.query_log
-                WHERE actor_type = 'dbt' AND writes IS NOT NULL"""
-        ).fetchall()
+        owners.subject(r.node_id)
+        for r in records
+        if r.actor_type == "dbt" and r.query_kind == "Insert" and r.node_id
     }
-    costs = production_costs(connection)
+    models = sorted(
+        uid
+        for uid in written
+        if uid and owners.nodes.get(uid) and owners.nodes[uid].resource_type == "model"
+    )
     out: list[UnusedTable] = []
     for days in sorted(lookbacks):
         since = window_end - timedelta(days=days)
         read = {
-            str(r[0])
-            for r in connection.execute(
-                f"""SELECT DISTINCT qt.table_name
-                    FROM {OPS_SCHEMA}.query_tables qt
-                    JOIN {OPS_SCHEMA}.query_log ql USING (query_id)
-                    WHERE ql.actor_type IN {CONSUMER_ACTORS} AND ql.started_at >= ?""",
-                [since],
-            ).fetchall()
+            relations[t]
+            for r in records
+            if r.actor_type in CONSUMERS and r.started_at >= since
+            for t in r.tables
+            if t in relations
         }
-        read_ids = {by_relation[t] for t in read if t in by_relation}
-        for relation in sorted(written):
-            unique_id = by_relation.get(relation)
-            if unique_id is None:
+        for unique_id in models:
+            if unique_id in read or downstream(graph, unique_id) & read:
                 continue
-            used = unique_id in read_ids or bool(downstream(graph, unique_id) & read_ids)
-            if used:
-                continue
-            resolution = resolutions.get(unique_id)
-            rule = resolution.rule if resolution else None
-            model_costs = costs.get(unique_id, {})
+            team, owner = owners.of(unique_id)
             out.append(
                 UnusedTable(
                     lookback_days=days,
                     unique_id=unique_id,
-                    relation=relation,
-                    team=rule.team if rule else "unattributed",
-                    owner=rule.owner if rule else "unattributed",
+                    relation=owners.nodes[unique_id].relation,
+                    team=team,
+                    owner=owner,
                     monthly_saving={
-                        m: _monthly(model_costs.get(m, Decimal(0)), window_days)
-                        for m in PRICING_MODELS
+                        model: _monthly(usd, window_days)
+                        for model, usd in sorted(production.get(unique_id, {}).items())
                     },
                 )
             )
@@ -125,49 +108,65 @@ class Hotspot:
     table: str
     column: str
     reads: int
-    table_bytes: int
+    table_rows: int
+    rows_scanned: int
     bytes_scanned: int
-    scan_usd: Decimal
+    sorting_key: str
+    engine: str = ""
+
+    @property
+    def suggestion(self) -> str:
+        """Put the filtered column first in the sort key, unless the key is also
+        what the engine deduplicates on: then a skip index is the lever."""
+        if self.engine.startswith("Replacing"):
+            return f"a minmax skip index on `{self.column}`: the sort key is the deduplication key"
+        rest = [
+            part.strip()
+            for part in self.sorting_key.strip("()").split(",")
+            if part.strip() and part.strip() != self.column
+        ]
+        return "sort key `(" + ", ".join([self.column, *rest]) + ")`"
 
 
 def hotspots(
-    connection: duckdb.DuckDBPyConnection, min_table_bytes: int, min_reads: int
+    records: Sequence[QueryRecord],
+    filters: Iterable[tuple[str, str, tuple[str, ...]]],
+    table_rows: Mapping[str, int],
+    table_bytes: Mapping[str, int],
+    sorting_keys: Mapping[str, str],
+    min_table_bytes: int,
+    min_reads: int,
+    engines: Mapping[str, str] | None = None,
 ) -> list[Hotspot]:
-    rows = connection.execute(
-        f"""
-        WITH filtered AS (
-            SELECT qt.query_id, qt.table_name, unnest(qt.filter_columns) AS column_name
-            FROM {OPS_SCHEMA}.query_tables qt
-            JOIN {OPS_SCHEMA}.query_log ql USING (query_id)
-            WHERE ql.actor_type IN {CONSUMER_ACTORS}
-        ),
-        latest AS (
-            SELECT table_name, sum(logical_bytes)::BIGINT AS bytes
-            FROM {OPS_SCHEMA}.table_sizes s
-            WHERE snapshot_at = (SELECT max(snapshot_at) FROM {OPS_SCHEMA}.table_sizes t
-                                 WHERE t.table_name = s.table_name)
-            GROUP BY table_name
-        ),
-        scan_cost AS (
-            SELECT query_id, usd FROM {OPS_SCHEMA}.query_costs WHERE model = 'scan'
+    engines = engines or {}
+    by_id = {r.query_id: r for r in records}
+    found: dict[tuple[str, str], list[QueryRecord]] = defaultdict(list)
+    for query_id, table, columns in filters:
+        record = by_id.get(query_id)
+        if record is None or record.actor_type not in CONSUMERS or record.tables != (table,):
+            continue
+        rows = table_rows.get(table, 0)
+        if not rows or table_bytes.get(table, 0) < min_table_bytes:
+            continue
+        if (record.rows_scanned or 0) < HOTSPOT_SCAN_SHARE * rows:
+            continue
+        for column in columns:
+            found[(table, column)].append(record)
+    out = [
+        Hotspot(
+            table=table,
+            column=column,
+            reads=len(queries),
+            table_rows=table_rows[table],
+            rows_scanned=sum(q.rows_scanned or 0 for q in queries),
+            bytes_scanned=sum(q.bytes_scanned or 0 for q in queries),
+            sorting_key=sorting_keys.get(table, ""),
+            engine=engines.get(table, ""),
         )
-        SELECT f.table_name, f.column_name, count(*) AS reads, l.bytes,
-               sum(b.bytes)::BIGINT AS bytes_scanned,
-               sum(sc.usd) AS scan_usd
-        FROM filtered f
-        JOIN latest l USING (table_name)
-        JOIN {OPS_SCHEMA}.query_table_bytes b
-          ON b.query_id = f.query_id AND b.table_name = f.table_name
-        JOIN scan_cost sc ON sc.query_id = f.query_id
-        GROUP BY f.table_name, f.column_name, l.bytes
-        HAVING count(*) >= ? AND l.bytes >= ?
-        ORDER BY bytes_scanned DESC, f.table_name, f.column_name
-        """,
-        [min_reads, min_table_bytes],
-    ).fetchall()
-    return [
-        Hotspot(str(t), str(c), int(n), int(b), int(s), Decimal(u)) for t, c, n, b, s, u in rows
+        for (table, column), queries in found.items()
+        if len(queries) >= min_reads
     ]
+    return sorted(out, key=lambda h: (-h.bytes_scanned, h.table, h.column))
 
 
 @dataclass(frozen=True)
@@ -185,44 +184,121 @@ class IncrementalCandidate:
 
 
 def incremental_candidates(
-    connection: duckdb.DuckDBPyConnection,
-    nodes: Mapping[str, Node],
+    owners: Owners,
     graph: nx.DiGraph[str],
-    resolutions: Mapping[str, Resolution],
-    append_only: Mapping[str, bool],
+    production: Mapping[str, Mapping[str, Decimal]],
+    materialized: Mapping[str, str],
+    changed_in_place: set[str],
+    rank_by: str,
     top_n: int,
     exclude: set[str],
 ) -> list[IncrementalCandidate]:
-    """The ``top_n`` most expensive live models under scan pricing, with a verdict."""
-    costs = production_costs(connection)
+    """The ``top_n`` most expensive models still built in full, with a verdict."""
+    nodes = owners.nodes
     ranked = sorted(
         (
-            (c.get("scan", Decimal(0)), uid)
-            for uid, c in costs.items()
-            if uid in nodes and nodes[uid].resource_type == "model" and uid not in exclude
+            (costs.get(rank_by, Decimal(0)), uid)
+            for uid, costs in production.items()
+            if uid in nodes
+            and nodes[uid].resource_type == "model"
+            and materialized.get(uid) not in ("incremental", "view")
+            and uid not in exclude
         ),
         key=lambda item: (-item[0], item[1]),
     )[:top_n]
     out = []
     for _, unique_id in ranked:
-        node = nodes[unique_id]
         sources = tuple(
             sorted(
-                nodes[a].relation
+                nodes[a].name
                 for a in upstream(graph, unique_id)
                 if nodes[a].resource_type == "source"
             )
         )
-        blocked = tuple(s for s in sources if not append_only.get(s, False))
-        resolution = resolutions.get(unique_id)
+        team, _ = owners.of(unique_id)
         out.append(
             IncrementalCandidate(
                 unique_id=unique_id,
-                relation=node.relation,
-                team=resolution.rule.team if resolution and resolution.rule else "unattributed",
-                production=costs[unique_id],
+                relation=nodes[unique_id].relation,
+                team=team,
+                production=dict(production[unique_id]),
                 sources=sources,
-                blocked_by=blocked,
+                blocked_by=tuple(s for s in sources if s in changed_in_place),
+            )
+        )
+    return out
+
+
+@dataclass(frozen=True)
+class QuotaSuggestion:
+    user: str
+    team: str
+    active_days: int
+    p95_daily_bytes: int
+    max_query_bytes: int
+    daily_quota_bytes: int
+    query_limit_bytes: int
+    statements: tuple[str, ...] = field(default=())
+
+
+def _round_up(value: float) -> int:
+    """Up to two significant figures, so a suggested limit reads like one a person set."""
+    if value <= 0:
+        return 0
+    magnitude = 10 ** max(0, math.floor(math.log10(value)) - 1)
+    return int(math.ceil(value / magnitude) * magnitude)
+
+
+def _p95(values: Sequence[int]) -> int:
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)]
+
+
+def quotas(
+    records: Sequence[QueryRecord],
+    team_of_user: Mapping[str, str],
+    namespace: str,
+    exclude: Iterable[str] = (),
+    headroom: float = 2.0,
+) -> list[QuotaSuggestion]:
+    """A daily read quota at ``headroom`` times the 95th percentile day, and a
+    per-query limit at ``headroom`` times the largest query, per person-facing user.
+
+    Users in ``exclude`` also run the pipeline itself, so they get no suggestion."""
+    skip = set(exclude)
+    daily: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    largest: dict[str, int] = defaultdict(int)
+    for r in records:
+        if r.actor_type not in CONSUMERS or not r.billable:
+            continue
+        user = "metabase" if r.actor_type == "dashboard" else team_of_user.get(r.actor, "")
+        if not user or user in skip:
+            continue
+        daily[user][f"{r.started_at:%Y-%m-%d}"] += r.bytes_scanned or 0
+        largest[user] = max(largest[user], r.bytes_scanned or 0)
+    out = []
+    for user in sorted(daily):
+        p95 = _p95(list(daily[user].values()))
+        quota = _round_up(headroom * p95)
+        limit = _round_up(headroom * largest[user])
+        name = f"{namespace}{user}"
+        out.append(
+            QuotaSuggestion(
+                user=user,
+                team=user if user != "metabase" else "(all dashboards)",
+                active_days=len(daily[user]),
+                p95_daily_bytes=p95,
+                max_query_bytes=largest[user],
+                daily_quota_bytes=quota,
+                query_limit_bytes=limit,
+                statements=(
+                    f"CREATE QUOTA {name}_daily FOR INTERVAL 1 day "
+                    f"MAX read_bytes = {quota} TO {name}",
+                    # ALTER USER ... SETTINGS replaces the user's settings, so the
+                    # reader profile (simulation.access) is restated.
+                    f"ALTER USER {name} SETTINGS PROFILE '{namespace}reader', "
+                    f"max_bytes_to_read = {limit}",
+                ),
             )
         )
     return out
