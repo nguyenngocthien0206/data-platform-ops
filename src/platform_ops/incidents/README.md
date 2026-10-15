@@ -67,7 +67,7 @@ What the numbers say:
 - **34 failing checks became 8 pages, one per problem.** Without grouping, marco would have been paged 28 times in three weeks, mostly by tests on the models below two broken payment feeds; with it, twice.
 - **Paging whoever can fix it moves the load, and shows where it piles up.** The staging rule pages the right person 8 times out of 8, the root's owner only 3. But 6 of the 8 pages land on priya, who owns most of the feeds. Grouping does not spread that load; it makes it visible, which is the case for sharing source ownership before the pages do.
 - **The schedule, not the people, sets the floor of MTTR.** The simulated owners land most fixes within hours (the first SEV1 was fixed under 7 hours after detection), but nothing resolves until the next nightly run finds the root healthy, so no incident resolved in less than 24 hours. A rerun on demand after a fix is the cheapest way to cut MTTR here, cheaper than faster people.
-- **A stale feed is caught late by design.** Every fault was detected by the first night after it happened (16 hours), except the stopped web sessions feed: the freshness rule allows 48 hours, so it took 64.0. Tightening the rule would catch it a night earlier, and page someone on every quiet night.
+- **A stale feed is caught late by design.** Every fault was detected by the first night after it happened (16 hours), except the stopped web sessions feed: the freshness rule allows two days, so it took 64.0 hours. Tightening the rule would catch it a night earlier, and page someone on every quiet night.
 
 ## Adopting it
 
