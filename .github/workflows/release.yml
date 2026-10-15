@@ -1,9 +1,11 @@
 # Publish a release when a version tag is pushed (the owner pushes it).
 #
-# The full CI runs first, and so does the Metabase check, which pull requests
-# skip because it is slow: the demo builds the company, then every dashboard is
-# provisioned, every card run through Metabase, and every dashboard opened in a
-# browser. Then, only if the tag equals the version in
+# The full CI runs first, and so do two checks pull requests skip because they
+# are slow: the Metabase check (the demo builds the company, then every
+# dashboard is provisioned, every card run through Metabase, and every dashboard
+# opened in a browser) and the orchestrator check (a fault through Airflow and
+# through Dagster, each opening one incident and resolving it, Phase 14b).
+# Then, only if the tag equals the version in
 # pyproject.toml and CHANGELOG.md has notes for it, the image goes to GitHub
 # Container Registry (amd64, like the SQL Server image) and a GitHub Release is
 # created with that version's changelog section as its notes. Nothing is
@@ -20,6 +22,9 @@ permissions:
 jobs:
   checks:
     uses: ./.github/workflows/ci.yml
+
+  orchestrators:
+    uses: ./.github/workflows/orchestrators.yml
 
   metabase:
     runs-on: ubuntu-latest
@@ -63,7 +68,7 @@ jobs:
         run: make down
 
   publish:
-    needs: [checks, metabase]
+    needs: [checks, metabase, orchestrators]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

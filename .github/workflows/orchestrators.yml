@@ -1,22 +1,30 @@
-# The company's dbt project through a real orchestrator, end to end (Phase 14b).
+# The company's dbt project through real orchestrators, end to end (Phase 14b).
 #
-# Airflow 3 with Cosmos runs the project in its own container; the check plants
-# one fault, waits for the DAG run to open one incident and page it into the
-# chat double, applies the fix, and waits for the next run to resolve it. Slower
-# than pull requests should wait for, so it runs on demand; pull requests test
-# the hooks against a fake CLI instead (tests/test_integrations.py).
+# Airflow 3 with Cosmos and Dagster with dagster-dbt each run the project in
+# their own container, one runner each, in parallel. For each, the check plants
+# one fault, waits for the run to open one incident and page it into the chat
+# double, applies the fix, and waits for the next run to resolve it. Slower than
+# pull requests should wait for, so it runs on demand and before every release
+# (release.yml calls it); pull requests test the hooks against a fake CLI
+# instead (tests/test_integrations.py).
 name: orchestrators
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
-  airflow:
+  check:
+    name: ${{ matrix.orchestrator }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        orchestrator: [airflow, dagster]
     steps:
       - uses: actions/checkout@v7
 
@@ -37,11 +45,11 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: A fault, its incident and page, the fix, the resolution
-        run: make docker-test-orchestrators
+        run: make docker-test-orchestrators ORCHESTRATORS=${{ matrix.orchestrator }}
 
-      - name: Airflow's log
+      - name: The orchestrator's log
         if: failure()
-        run: docker logs dpo-airflow 2>&1 | tail -300
+        run: docker logs dpo-${{ matrix.orchestrator }} 2>&1 | tail -300
 
       - name: Stop the services
         if: always()
