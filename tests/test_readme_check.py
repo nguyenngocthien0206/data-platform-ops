@@ -58,6 +58,7 @@ def test_missing_numbers_are_reported_with_their_line(tmp_path: Path) -> None:
         "Priced 35,813 queries for $296.02.\n"
         "Saved 12.5% overall.\n"
         "The demo took 6 minutes 54 seconds. <!-- readme-check: runtime -->\n"
+        "It seeded 3,507,804 rows. <!-- readme-check: console -->\n"
     )
     missing, checked = check_readme.check(readme, ["cost.md"], reports)
     assert checked == 3
