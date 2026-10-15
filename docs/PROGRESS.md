@@ -32,6 +32,7 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 - **`readme-check` for 2.0**: a second marker, `<!-- readme-check: console -->`, for a line whose numbers a command printed or the database held, each recorded here; tested.
 - **Version 2.0.0**: `pyproject.toml` and `uv.lock` (only the project's version line changed), `CHANGELOG.md` 2.0.0 (added, changed, removed, upgrading from 1.x), the Actions example on the 2.0.0 image.
 - **Runtimes in the READMEs** from the release run; the Dagster build after the fix took 93 s, so "about a minute and a half", not "under".
+- **CI caught a diagram that differed between Windows and Linux**: `postgresql.svg` was downloaded with CRLF line ends, git stored it with LF (`* text=auto eol=lf`), but the working copy kept CRLF, so the diagram drawn on the development laptop embedded different bytes than CI's checkout. `make_architecture.py` now turns CRLF into LF before embedding an SVG logo, and the working copy matches git again; the test passes on Linux from a clean `git archive` of the branch, and the old files reproduce the failure.
 - Verification: `make lint` clean; `make docker-test`: 465 passed, nothing skipped, 10 min 39 s; `make readme-check` passes.
 
 ## In progress

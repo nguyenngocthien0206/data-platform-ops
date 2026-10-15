@@ -97,8 +97,16 @@ def wrap(text: str, width: float, size: float, max_lines: int) -> list[str]:
 
 def _data_uri(name: str) -> str:
     path = LOGOS / name
-    kind = "image/svg+xml" if path.suffix == ".svg" else "image/png"
-    return f"data:{kind};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
+    data = path.read_bytes()
+    if path.suffix == ".svg":
+        # An SVG is text: git stores it with LF, but a checkout may keep CRLF
+        # (a file downloaded with CRLF stays so until it is checked out again),
+        # and the diagram must be the same bytes on every machine.
+        data = data.replace(b"\r\n", b"\n")
+        kind = "image/svg+xml"
+    else:
+        kind = "image/png"
+    return f"data:{kind};base64,{base64.b64encode(data).decode('ascii')}"
 
 
 @dataclass
