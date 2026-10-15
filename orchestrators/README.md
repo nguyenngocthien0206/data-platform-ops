@@ -1,6 +1,6 @@
 # orchestrators
 
-How a scheduler that runs dbt hands each run to the incident desk ([ADR 0020](../docs/adr/0020-orchestrators-call-the-toolkit.md)). The company the toolkit is built for runs dbt with Airflow through Cosmos and with Dagster through dagster-dbt. Phase 14b brings both up for real, in Docker: 14b-1 built what they call, 14b-2 the Airflow stack ([below](#airflow-with-cosmos)); the Dagster stack (14b-3) follows.
+How a scheduler that runs dbt hands each run to the incident desk ([ADR 0020](../docs/adr/0020-orchestrators-call-the-toolkit.md)). The company the toolkit is built for runs dbt with Airflow through Cosmos and with Dagster through dagster-dbt. Phase 14b brings both up for real, in Docker, each on a company of its own: [Airflow with Cosmos](#airflow-with-cosmos) and [Dagster with dagster-dbt](#dagster-with-dagster-dbt), tested [end to end](#tested-end-to-end) before every release.
 
 ## The contract
 
@@ -89,15 +89,61 @@ PLATFORM_OPS_CLI=/opt/toolkit/bin/platform-ops   # the toolkit's own venv
 
 `should_detach_multiple_parents_tests` matters on a first run: without it, a relationships test between two models runs with one of them, possibly before the other was ever built, and fails for no reason the data has.
 
-### Tested end to end
+## Dagster with dagster-dbt
 
-`make docker-test-orchestrators` (and the `orchestrators` workflow, on demand) runs `scripts/check_orchestrators.py` in the toolkit container against the running stack, on the `af_` company seeded anew at scale 0.01:
+`dagster/` runs the same project in Dagster 1.13 through dagster-dbt 0.29, as its own company in the `dg_` namespace:
+
+```bash
+make dagster          # seeds dg_ (scale 0.1), starts Dagster and the chat double
+```
+
+The UI is at <http://localhost:3001>. Dagster's open source UI has no login, so the port is published on this machine only. The job `company_dbt` runs at 02:00 UTC every day once its schedule is started; it is stopped until then, and Dagster never runs the nights it missed.
+
+What is in it:
+
+- **Its own image** (`dagster/Dockerfile`, from the toolkit's `python:3.11.16-slim-bookworm`). Dagster's environment is installed from `dagster/requirements.txt`, pinned and hashed (compiled from `requirements.in`). dagster-dbt brings a dbt-core of its own, which reads manifests and never runs; the dbt it runs is the toolkit venv's (`dbt_executable`), as with Cosmos. The toolkit package goes into Dagster's environment without its dependencies, for the hook.
+- **The definitions** (`dagster/app/company_dbt.py`): `@dbt_assets` over a manifest parsed when the image is built. The asset function runs source freshness on the company's clock, then one `dbt build`, both with `raise_on_error=False` so the hook always gets the artifacts, hands each to `ingest_dbt_invocation`, and fails the run afterwards when dbt failed, so the UI shows it red.
+- **The instance** (`dagster/app/dagster.yaml`): runs, events and schedules in a `dagster` database on the company's Postgres, created at start (`dagster/start.py`); the driver is named (`postgresql+psycopg2`) because SQLAlchemy 2.1 defaults to psycopg 3. `dagster dev` runs the webserver and the daemon in one container, the way `airflow standalone` does: fine for one machine. A real deployment runs them as separate services.
+- **The same least privilege** as Airflow: the Postgres login and the company's `dbt` user (`dg_dbt`), no `.env`.
+
+Wiring your own `@dbt_assets` takes one call after each invocation:
+
+```python
+from platform_ops.integrations.dagster import ingest_dbt_invocation
+
+
+@dbt_assets(manifest=...)
+def project(context, dbt):
+    build = dbt.cli(["build"], context=context, raise_on_error=False)
+    yield from build.stream()
+    ingest_dbt_invocation(build, context)
+```
+
+Keep `from __future__ import annotations` out of that module: Dagster reads the `context` annotation as a type.
+
+## Tested end to end
+
+`make docker-test-orchestrators` runs `scripts/check_orchestrators.py` in the toolkit container against each running stack in turn (`ORCHESTRATORS=airflow` or `dagster` for one), on its company seeded anew at scale 0.01. The `orchestrators` workflow runs it on demand, one runner per orchestrator, and the release waits for it. The cycle is the same for both:
 
 1. plant F1, NULLs in `raw.orders.customer_id`;
-2. trigger `company_dbt` through Airflow's REST API (v2, a JWT from `/auth/token`) and wait: the run fails on `stg_orders`'s not_null test;
-3. check one incident at `model.company.stg_orders`, opened by that run, every task's invocation grouped into it, and one page in the chat double;
-4. resync `raw.orders` from Postgres, the team's fix, trigger again: the run succeeds, the incident is resolved by it, and the double holds the one resolution.
+2. start `company_dbt` through the orchestrator's API (Airflow's REST API v2 with a JWT from `/auth/token`; Dagster's GraphQL `launchRun`) and wait: the run fails on `stg_orders`'s not_null test;
+3. check one incident at `model.company.stg_orders`, opened by that run, every invocation of the run grouped into it, and one page in the chat double;
+4. resync `raw.orders` from Postgres, the team's fix, run again: the run succeeds, the incident is resolved by it, and the double holds the one resolution.
 
-Two runs from a clean stack (no containers, no `airflow` database) on the development laptop passed in 9 min 21 s and 9 min 40 s. The faulted run took 152 s and 162 s, and its 70 invocations (freshness and every task that ran; what is below `stg_orders` did not) became one incident with one page; the run after the fix, all 224 tasks, took 364 s and 374 s. The Airflow image is 5.51 GB unpacked.
+Two runs from a clean stack (no containers, no `airflow` or `dagster` database) on the development laptop:
 
-It seeds `af_` anew at scale 0.01, so run `make airflow` afterwards for the scale 0.1 company.
+| | Run 1 | Run 2 |
+|---|---|---|
+| Both checks, one after the other | 13 min 13 s | 12 min 55 s |
+| Airflow: the check | 531 s | 511 s |
+| Airflow: the faulted run (70 invocations: freshness and every task that ran) | 162 s | 153 s |
+| Airflow: the run after the fix (224 tasks) | 364 s | 353 s |
+| Dagster: the check | 161 s | 153 s |
+| Dagster: the faulted run (2 invocations) | 73 s | 63 s |
+| Dagster: the run after the fix | 83 s | 83 s |
+
+Each time F1 put 66 NULLs in `raw.orders`, and each run gave one incident (INC-001 at `stg_orders`, SEV1, paged to priya, who owns the feed), one page and, after the fix, one resolution.
+
+Airflow runs one dbt invocation per Cosmos task, so its runs take minutes and hand the desk dozens of invocations; Dagster runs one build, so it hands the desk two (freshness and the build). The desk gives the same answer from both: one incident, one page, one resolution. The Airflow image is 5.51 GB unpacked, the Dagster image 2.12 GB.
+
+It seeds `af_` and `dg_` anew at scale 0.01, so run `make airflow` or `make dagster` afterwards for the scale 0.1 companies.

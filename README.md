@@ -25,7 +25,7 @@ Version 1.x (up to [`v1.2.0`](https://github.com/nguyenngocthien0206/data-platfo
 | Cost and FinOps on ClickHouse's query log: the cluster's bill per team, the migration's business case, BigQuery and Snowflake on the same workload | running | 13a, done |
 | The Streamlit dashboards on the ops store, read as their own read-only role | running | 13b, done |
 | Incidents on the company's production runs: faults in operation, every night's invocations ingested, one incident per root, resolved by a later run | running | 14a, done |
-| Incidents from real Airflow (Cosmos) and Dagster runs: the hooks they call, a namespace each, a chat double ([orchestrators](orchestrators/README.md)) | Airflow 3 with Cosmos running, tested end to end on demand; Dagster follows | 14b |
+| Incidents from real Airflow (Cosmos) and Dagster runs: the hooks they call, a namespace each, a chat double ([orchestrators](orchestrators/README.md)) | running, each tested end to end before every release | 14b, done |
 | Documentation and release 2.0.0 | | 15 |
 
 Every 1.x module now runs on the new company; `make paused` confirms none is left. To run the complete 1.x toolkit, check out `v1.2.0` and follow its README. The full plan is in [docs/SPEC.md](docs/SPEC.md), and [docs/PROGRESS.md](docs/PROGRESS.md) records every decision and measurement along the way.
@@ -124,7 +124,8 @@ make docker-demo          # Postgres and ClickHouse up, then the demo from a cle
 make docker-test          # the full suite, skips listed with their reason
 make docker-metabase-check  # after docker-demo: every dashboard provisioned, run and opened in a browser
 make airflow              # Airflow 3 with Cosmos on its own company, UI on localhost:8080
-make docker-test-orchestrators  # a fault through Airflow: its incident, page, fix and resolution
+make dagster              # Dagster with dagster-dbt on its own company, UI on localhost:3001
+make docker-test-orchestrators  # a fault through each: its incident, page, fix and resolution
 ```
 
 `make docker-lint` and `make docker-metadata-check` run the same checks as CI ([ADR 0013](docs/adr/0013-ci-and-release-from-the-same-container.md)). The company's data lives in the Postgres and ClickHouse volumes, the toolkit's scratch state on its own volumes; `make docker-clean` removes the latter, and `make help` lists every target.
@@ -148,6 +149,8 @@ From the verification of each phase at the default scale, in the container on on
 **The results are on a page, read the way the BI is.** The Streamlit app shows the run, the bill and the parallel run night by night, reading the ops store as its own read-only role, the same rule the company's ClickHouse users follow: nobody reads as the admin. It recomputes nothing; everything the cost report states is stored for it. A headless browser opens all four pages in both themes after a demo, and its screenshots caught three things no assertion would have, from a caption that turned two dollar amounts into a formula to grid labels Vega silently dropped ([dashboards](dashboards/README.md)).
 
 **One page per problem, and the schedule sets how fast it closes.** In the three production weeks, eight faults in operation failed 34 checks, and the incident desk turned them into 8 incidents and 8 pages, each to the person who owns the broken feed: right 8 times out of 8, against 3 for paging whoever owns the failing model. Without grouping one engineer would have been paged 28 times for two problems. The numbers also show where the load piles up (6 of the 8 pages go to the one person who owns most feeds) and what sets MTTR: owners fixed within hours, but nothing resolves until the next nightly run finds the root healthy, so no incident closed in less than 24 hours. A rerun after a fix would cut that more cheaply than faster people ([incidents](src/platform_ops/incidents/README.md), [ADR 0019](docs/adr/0019-incidents-on-the-companys-production-runs.md)).
+
+**The same desk, whatever runs dbt.** Most teams run dbt from a scheduler, and Airflow and Dagster split the work very differently. Cosmos runs one dbt invocation per model, so a single faulted night reached the incident desk as 70 separate invocations; dagster-dbt runs one build, which reached it as two. Both gave the same answer: one incident at `stg_orders`, one page to the owner of the feed, and one resolution after the fix. The per-model layout is not free: the same healthy build took about 6 minutes in Airflow and under a minute and a half in Dagster, the price of a dbt process per model in exchange for retrying and watching each model on its own. Each stack runs from its own image and calls the toolkit's command line, never its library, so a platform team can upgrade Airflow, Dagster or the toolkit without negotiating one set of dependencies for all three. The release now waits for a fault to go through both: the check took under 9 minutes through Airflow and under 3 through Dagster on the development laptop ([orchestrators](orchestrators/README.md), [ADR 0020](docs/adr/0020-orchestrators-call-the-toolkit.md)).
 
 **Incremental pays only where the layout lets it.** At this size an incremental build takes about as long as a full refresh, because about 290 dbt nodes of fixed overhead dominate. Bytes read tell the real story: the two incremental marts read 63% less in their last build than in their first, while the two incremental intermediate models read more with every build, because they filter staging views over raw, and raw is sorted by its key, not by date. An `incremental` setting is a promise; the sort key decides whether ClickHouse keeps it.
 
@@ -205,11 +208,11 @@ scripts/           vendor fixtures, README check, browser checks of the dashboar
 tests/             unit, integration and contract tests
 examples/          a GitHub Actions ownership check for a company dbt repository
 orchestrators/     how Airflow (Cosmos) and Dagster hand their dbt runs to the incident desk,
-                   the Airflow stack (its image and DAG), and a chat double for their tests
+                   the Airflow and Dagster stacks, and a chat double for their tests
 docs/              SPEC, PROGRESS, the ADRs and the Phase 6 review record
-.github/workflows/ CI, the release, and the orchestrator check on demand
+.github/workflows/ CI, the orchestrator checks, and the release, which waits for both
 Dockerfile         the toolkit image; docker-compose.yml runs it next to Postgres, ClickHouse
-                   and, behind profiles, Metabase, Airflow and the chat double
+                   and, behind profiles, Metabase, Airflow, Dagster and the chat double
 ```
 
 The build plan is in [docs/SPEC.md](docs/SPEC.md), [docs/PROGRESS.md](docs/PROGRESS.md) records what was decided along the way and why, and [CHANGELOG.md](CHANGELOG.md) lists what each release contains.

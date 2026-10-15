@@ -172,6 +172,54 @@ services:
       retries: 30
       start_period: 30s
 
+  # The same project scheduled by Dagster through dagster-dbt (Phase 14b), as a
+  # company of its own in the dg_ namespace. Its own image, the same least
+  # privilege as Airflow: the Postgres login for its storage (`dagster`) and the
+  # incident store, and the company's dbt user. Dagster's open source UI has no
+  # login, so it is published on this machine only. `make dagster` starts it.
+  dagster:
+    build:
+      context: .
+      dockerfile: orchestrators/dagster/Dockerfile
+    image: data-platform-ops-dagster:local
+    pull_policy: build
+    container_name: dpo-dagster
+    profiles: ["dagster"]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-platform_ops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-legacy}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: dg_dbt
+      # Checked when the container starts (start.py).
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD_DBT:-}
+      PLATFORM_OPS_NAMESPACE: dg_
+      PLATFORM_OPS_SCALE_FACTOR: ${DAGSTER_SCALE:-0.1}
+      SLACK_BOT_TOKEN: chat-double
+      SLACK_API_URL: http://chat:8099
+    ports:
+      - "127.0.0.1:${DAGSTER_PORT:-3001}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:3000/server_info', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
   postgres:
     image: postgres:16
     container_name: dpo-postgres

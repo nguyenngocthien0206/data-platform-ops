@@ -1,0 +1,9 @@
+# Dagster's own environment (Phase 14b-3). Compile the pinned, hashed
+# requirements.txt from this file, for the image's Linux and Python:
+#   uv pip compile orchestrators/dagster/requirements.in --python-version 3.11 \
+#     --python-platform x86_64-manylinux_2_28 --generate-hashes \
+#     -o orchestrators/dagster/requirements.txt
+dagster==1.13.25
+dagster-webserver==1.13.25
+dagster-postgres==0.29.25
+dagster-dbt==0.29.25

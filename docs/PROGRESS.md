@@ -6,14 +6,23 @@ Last updated: 2026-10-15
 
 ## Current phase
 
-Phase 14b-2: Airflow 3 with Cosmos runs the company's dbt project on its own company (`af_`) and feeds the incident desk, tested end to end on demand (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a to 14b-1 are merged (PRs #15 to #21). Phase 14b is in three parts, one PR each: 14b-1 (merged), 14b-2 (this), 14b-3 (Dagster with dagster-dbt, the release gate).
-Branch: `phase-14b2-airflow` (off `main` at `a0ffc66`).
+Phase 14b-3: Dagster with dagster-dbt runs the company's dbt project on its own company (`dg_`), and the release waits for a fault to go through both orchestrators (version 2.0). This completes Phase 14. Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a to 14b-2 are merged (PRs #15 to #22).
+Branch: `phase-14b3-dagster` (off `main` at `a5a114c`).
 
 Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
 
-- Phase 14b-2 implemented (branch `phase-14b2-airflow`, uncommitted):
+- Phase 14b-3 implemented (branch `phase-14b3-dagster`, uncommitted):
+  - **The Dagster image** (`orchestrators/dagster/Dockerfile`, `python:3.11.16-slim-bookworm`, 2.12 GB unpacked): Dagster 1.13.25 and dagster-dbt 0.29.25 from a pinned, hashed `requirements.txt` (compiled from `requirements.in` with `uv pip compile`); the toolkit in its own venv at `/opt/toolkit`, whose dbt dagster-dbt runs (`dbt_executable`); the toolkit package without dependencies in Dagster's environment, for the hook; the manifest parsed at build time.
+  - **The definitions** (`orchestrators/dagster/app/company_dbt.py`): `@dbt_assets` over the manifest; source freshness on the company's clock, then one `dbt build`, both with `raise_on_error=False`, each ingested with `ingest_dbt_invocation` under `dagster:<run id>`; the run fails afterwards when dbt failed. Job `company_dbt`, schedule `company_dbt_nightly` at 02:00 UTC, stopped by default.
+  - **The stack** (Compose profile `dagster`, `start.py`, `dagster.yaml`): `dagster dev` (webserver and daemon), storage in a `dagster` database on the company's Postgres, created at start; UI on 127.0.0.1 only (`DAGSTER_PORT`, default 3001), since it has no login. Same least privilege as Airflow (`dg_dbt`).
+  - **`make dagster`** (seeds `dg_` at `DAGSTER_SCALE`, default 0.1); **`make docker-test-orchestrators`** runs each of `ORCHESTRATORS` (default `airflow dagster`) in turn; `scripts/check_orchestrators.py` runs one cycle for both, each orchestrator bringing its client (Airflow's REST API, Dagster's GraphQL `launchRun` and `runOrError`).
+  - **The release gate**: `orchestrators.yml` runs on `workflow_call` too, one runner per orchestrator (a matrix); `release.yml`'s `publish` needs `orchestrators`. `test_release` keeps it that way.
+  - Fixed from 14b-2: the Makefile's line continuations had been lost (commands joined with tabs, still working), and `.PHONY` never listed `airflow`.
+  - The orchestrators README (Dagster, wiring your own `@dbt_assets`, the results of both); the incidents README ("On a real dbt project": the hooks); README status (Phase 14 done), commands, layout and a results paragraph; SPEC; `.env.example`.
+- Phase 14b-3 verification: `make lint` clean; `make docker-test`: 423 passed, nothing skipped, 10 min 33 s. A manual run of `company_dbt` in Dagster on a healthy `dg_` company at scale 0.01 succeeded in 69 s, its two invocations (freshness, 6 checks; the build, 290 results) in one run. `make docker-test-orchestrators` (both) from a clean stack (no containers, no `airflow` or `dagster` database), twice: passed in 13 min 13 s and 12 min 55 s. Airflow: the check 531 s and 511 s, the faulted run 162 s and 153 s (70 invocations), the run after the fix 364 s and 353 s. Dagster: the check 161 s and 153 s, the faulted run 73 s and 63 s (2 invocations), the run after the fix 83 s both times. Every time: F1 planted 66 NULLs, one incident (INC-001 at `model.company.stg_orders`, SEV1, priya), one page, and after the resync one resolution, nothing else. `make demo` is unchanged, so the 14a runs stand.
+- Phase 14b-2 implemented and merged (PR #22):
   - **The Cosmos hook fixed**: Cosmos 1.15 calls `callback(tmp_project_dir, context=context, **callback_args)`, after dbt and before it raises, so it runs on a failed task too; `ingest_after_task` now reads the task context from that keyword (14b-1 read only the top level and fell back to `AIRFLOW_CTX_*`).
   - **`platform-ops company clock`** (`simulation.ingest.company_clock`): the company's simulated time, where its latest load reached. An orchestrator's freshness is measured against it (owner's choice A), because the company's data lives on simulated time.
   - **The Airflow image** (`orchestrators/airflow/Dockerfile`, `apache/airflow:3.3.2-python3.11`, 5.51 GB unpacked): Cosmos 1.15.1 against Airflow's constraint file; the toolkit in its own venv at `/opt/toolkit` from `uv.lock`, whose dbt Cosmos runs; the toolkit package without dependencies in Airflow's environment, for the hook; the manifest parsed at build time.
@@ -193,7 +202,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 
 ## In progress
 
-Phase 14b-2, waiting for the owner's review and commits. Nothing of 14b-3 is started: no Dagster image, definitions, Compose profile or test exists yet. `scripts/check_orchestrators.py` takes `airflow` only; 14b-3 adds `dagster`.
+Phase 14b-3, waiting for the owner's review and commits. Phase 14 is complete with it. The release gate has run locally only (the same make target); its first run on GitHub is the next tag's release, or the `orchestrators` workflow run by hand.
 
 ## Decisions made
 
@@ -203,6 +212,18 @@ Phase 14b-2, waiting for the owner's review and commits. Nothing of 14b-3 is sta
 2. **Each orchestrator runs its own company in its own namespace** (`af_`, `dg_`), with its own incident store; `make demo` is never touched.
 3. **A real 02:00 schedule, paused by default**; the tests trigger runs through the APIs.
 4. **Three parts, one PR each** (14b-1 the foundation, 14b-2 Airflow, 14b-3 Dagster and the release gate), so every session ends in a state that can be committed.
+
+### Phase 14b-3, made during implementation
+
+- **Dagster 1.13.25 and dagster-dbt 0.29.25**, not 1.13.26: the latest release was six days old; this one two weeks.
+- **A pinned, hashed `requirements.txt`** for Dagster's environment: Dagster publishes no constraint file, and the toolkit's `uv.lock` must not carry Dagster.
+- **One `dbt build` per run, not one invocation per model**: that is how dagster-dbt runs dbt, and the desk regroups a run either way. Freshness runs first in the same asset function and never holds the build back.
+- **The run fails after the ingest when dbt failed** (`raise_on_error=False`, then `Failure`): the hook always gets the artifacts, and the UI shows a faulted run red, as Airflow does.
+- **`dagster dev`** in one container, like `airflow standalone`: one machine, not a production deployment; the README says so.
+- **The driver named in `dagster.yaml`** (`postgresql+psycopg2`): SQLAlchemy 2.1 defaults `postgresql://` to psycopg 3, which dagster-postgres does not install.
+- **No `from __future__ import annotations`** in the definitions: Dagster checks the `context` annotation as a type.
+- **Dagster's UI on 127.0.0.1 only**: it has no login in open source. Airflow's has one, so it keeps its port.
+- **The release runs both checks on separate runners**, in parallel with the Metabase job, so it waits for the slower one (Airflow, under 9 minutes here).
 
 ### Phase 14b-2, made during implementation
 
@@ -568,6 +589,6 @@ None open.
 
 ## Next step
 
-1. The owner reviews Phase 14b-2, commits it in the proposed sequence, and merges.
-2. Phase 14b-3 (planned, in the plan file): Dagster with dagster-dbt in its own image (`dg_`, 02:00, stopped), `make dagster`, the Dagster half of `make docker-test-orchestrators` through its GraphQL API, and the release gate (`release.yml` waits for both orchestrators). Check dagster-dbt's invocation API against the installed version first.
+1. The owner reviews Phase 14b-3, commits it in the proposed sequence, and merges. Phase 14 is then complete.
+2. Phase 15 (SPEC): documentation and release 2.0.0. The root README around the migration story with results from a real 2.0 run, the ADRs and later notes on the 1.x ADRs the re-platform changed, the SPEC's layout and Makefile table, `readme-check` revived for 2.0, PROGRESS closed out, `CHANGELOG.md` 2.0.0; the owner pushes the tag, and the release runs the orchestrator checks for the first time on GitHub.
 3. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).

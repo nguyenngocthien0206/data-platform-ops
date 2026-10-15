@@ -1,0 +1,20 @@
+# Dagster's instance (DAGSTER_HOME): runs, events and schedules in a database of
+# its own, `dagster`, on the company's Postgres server, created by start.py.
+# The driver is named: SQLAlchemy 2.1 defaults postgresql:// to psycopg 3, while
+# dagster-postgres installs psycopg2. Offline, like the rest of the toolkit: no
+# telemetry.
+storage:
+  postgres:
+    postgres_db:
+      hostname:
+        env: POSTGRES_HOST
+      username:
+        env: POSTGRES_USER
+      password:
+        env: POSTGRES_PASSWORD
+      db_name: dagster
+      port: 5432
+      scheme: postgresql+psycopg2
+
+telemetry:
+  enabled: false

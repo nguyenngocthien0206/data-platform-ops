@@ -2,7 +2,8 @@
 
 The release workflow publishes only when the pushed tag equals the pyproject
 version and the changelog has notes for it; this keeps the three in step on
-every pull request, long before anyone tags.
+every pull request, long before anyone tags. It also keeps the release waiting
+for the orchestrator checks.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+import yaml
 
 from platform_ops import __version__
 
@@ -65,3 +67,19 @@ def test_sections_stop_at_the_next_heading() -> None:
     assert found["1.1.0"] == "### Added\n\n- b\n"
     assert found["1.0.0"] == "- a\n", "link definitions at the end are not notes"
     assert release_notes.newest(text) == "1.1.0"
+
+
+def test_the_release_waits_for_both_orchestrators() -> None:
+    """Nothing is published unless a fault went through Airflow and Dagster (Phase 14b)."""
+    workflows = REPO_ROOT / ".github" / "workflows"
+    release = yaml.safe_load((workflows / "release.yml").read_text(encoding="utf-8"))
+    orchestrators = yaml.safe_load((workflows / "orchestrators.yml").read_text(encoding="utf-8"))
+    jobs = release["jobs"]
+    assert jobs["orchestrators"]["uses"] == "./.github/workflows/orchestrators.yml"
+    assert "orchestrators" in jobs["publish"]["needs"]
+    # PyYAML reads the bare key `on` as True.
+    assert "workflow_call" in orchestrators[True]
+    assert orchestrators["jobs"]["check"]["strategy"]["matrix"]["orchestrator"] == [
+        "airflow",
+        "dagster",
+    ]
