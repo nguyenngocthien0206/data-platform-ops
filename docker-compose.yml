@@ -126,6 +126,52 @@ services:
       timeout: 5s
       retries: 12
 
+  # The company's dbt project scheduled by Airflow 3 through Cosmos (Phase 14b,
+  # ADR 0020), as its own company in the af_ namespace, so nothing it does
+  # touches `make demo`. Its own image: Airflow's environment and the toolkit's
+  # never share packages. The container gets only what it uses, not .env: the
+  # Postgres login for its metadata database (`airflow`) and the incident store,
+  # and the company's dbt user, not the ClickHouse admin. Pages go to the chat
+  # double. `make airflow` seeds the company and starts it.
+  airflow:
+    build:
+      context: .
+      dockerfile: orchestrators/airflow/Dockerfile
+    image: data-platform-ops-airflow:local
+    pull_policy: build
+    container_name: dpo-airflow
+    profiles: ["airflow"]
+    environment:
+      # Checked when the container starts (start.py), so the rest of this file
+      # still works for anyone who never runs Airflow.
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-platform_ops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-legacy}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: af_dbt
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD_DBT:-}
+      PLATFORM_OPS_NAMESPACE: af_
+      PLATFORM_OPS_SCALE_FACTOR: ${AIRFLOW_SCALE:-0.1}
+      SLACK_BOT_TOKEN: chat-double
+      SLACK_API_URL: http://chat:8099
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/api/v2/monitor/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   postgres:
     image: postgres:16
     container_name: dpo-postgres
