@@ -16,9 +16,10 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 - Phase 15b implemented (branch `phase-15-documentation`, uncommitted):
   - **The root README speaks of version 2 only.** It opens on the three questions a platform team is judged on, shows the architecture diagram and walks through it, then the screenshots, the results (the former "Version 2.0 so far", now the "Results" section `readme-check` reads), **How the problems were solved** (seven problems, each told as what we saw, how we framed it, what we decided and what it costs, what the numbers showed, and its ADRs), **Use it on your platform** (each need marked "runs as is", "engine to wire" or "pattern to copy", linking to the module's guide), the quickstart, Docker and the layout. Gone: the 1.x story and results, the phase table, the ADR table, `make paused`.
   - **"Adopting it" in every module README** (metadata, incidents, cost, reconcile, simulation, dashboards; the orchestrators README already was one), one shape: what runs as is, what belongs to the simulated company, what to replace, the order to do it in, the traps this project hit. The reconcile guide carries the code that runs a comparison outside the simulation; the cost guide says how to collect from an untagged ClickHouse with the users and dbt's query comment.
-  - **ADR 0010** gets its version 2.0 later note (the last of the five the SPEC names).
+  - **ADR 0007** gets its version 2.0 later note (the last of the five the SPEC names).
   - **SPEC**: the layout and the Makefile tables in their final 2.0 state.
   - **`tests/test_docs_links.py`**: every relative link in every Markdown file resolves, anchors included (matched the way GitHub builds them), code blocks and web links skipped.
+  - **ADRs retired and renumbered** (owner, 2026-10-15): the three 1.x records version 2.0 superseded are deleted (the legacy sources, estimated bytes, the replayed workload; they stay at tag `v1.2.0`), and the other 17 renumbered 0001 to 0017 in their old order, with every reference in the code, the config, the docs, the changelog and this file following. Sentences that cited a retired record were rewritten; the ADR index says what was retired and why.
 - Phase 15b verification: `make lint` clean; `make docker-test`: 468 passed, nothing skipped, 10 min 31 s (39 of them the link check). Every statement in the README checked against the code, the config and PROGRESS before writing; three corrected on review (dbt builds every four weeks before the parallel run, not every night; pages reach Slack or Telegram only with a token; the comparison found three legacy differences before any fault, not two).
 - Phase 15a implemented and committed (branch `phase-15-documentation`):
   - **Logos from each vendor's own files, in full colour** (`docs/images/logos/`, 13 files, 66 KB): PostgreSQL, ClickHouse, dbt, Airflow, Dagster, Metabase, Streamlit, Slack, Telegram, Docker, GitHub, BigQuery, Snowflake. `LICENSES.md` gives each one's source, the date and the guidelines; nothing is modified, the two PNGs only scaled to 256 px.
@@ -50,7 +51,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
   - **`platform_ops.integrations`**, standard library only: `ingest` runs `platform-ops incidents ingest` (`PLATFORM_OPS_CLI`, `PLATFORM_OPS_REGISTRY_DIR`), passes the run id and an optional detection time as naive UTC, and logs a failure or a hang, never raising it; `cosmos.ingest_after_task` (run id `airflow:<dag>:<run>` from the task context or `AIRFLOW_CTX_*`); `dagster.ingest_dbt_invocation` (run id `dagster:<run>`).
   - **The chat double** (`orchestrators/chat_double.py`, Compose profile `chat`): answers like Slack's `chat.postMessage` and Telegram's `sendMessage`, refuses a missing token or chat, keeps every message.
   - `test_architecture`: `integrations` imports nothing from the toolkit and nothing outside the standard library; no module imports Airflow, Cosmos or Dagster.
-  - ADR 0020; `orchestrators/README.md`; README status and layout; `.env.example`.
+  - ADR 0017; `orchestrators/README.md`; README status and layout; `.env.example`.
 - Phase 14b-1 verification: `make lint` clean; `make docker-test`: 419 passed, nothing skipped, 11 min 7 s. `make demo` is unchanged, so the 14a runs stand. The hooks were also run once against the real CLI and store with the shop project's artifacts: one incident opened, a second ingest found nothing new.
 - Phase 14a implemented (branch `phase-14a-incidents`, uncommitted):
   - **Three production weeks after the parallel run** (`company.production_weeks: 3`; `simulation.weeks` 13 to 16). Every production night runs `dbt source freshness`, `run`, `snapshot` and `test` as separate invocations, the project parsed once and the parse reused; a failing check is recorded, not fatal. Each invocation's target is cleared of older result files first.
@@ -64,7 +65,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
   - Removed: the 1.x scenario (`incidents/scenario.py`) and its DuckDB persistence, `grouping.assign`.
   - Row-count bounds widened for 16 weeks; `support_tickets` freshness switched off (bursty at small scale).
   - Fixture artifacts from a Snowflake build and a BigQuery night of a small shop project (`tests/fixtures/dbt_artifacts`, `scripts/make_artifact_fixtures.py`).
-  - ADR 0019, a later note on ADR 0008; SPEC 14a note; incidents, simulation, dashboards and root READMEs.
+  - ADR 0016, a later note on ADR 0005; SPEC 14a note; incidents, simulation, dashboards and root READMEs.
 - Phase 14a verification:
   - `make lint` clean. `make docker-test`: 404 passed, nothing skipped, 10 min 48 s (the shared test company is now three weeks).
   - `make docker-clean docker-demo` at scale 1.0: 56 min 11 s and 57 min 17 s (45 min in Phase 13). Two clean runs: 195 of 196 relations identical, the incident store included once dbt's invocation ids are left out; `ops.company_run` differs by its random run id. `incidents.md`, both postmortems, `cost.md` and `reconciliation.md` byte-identical.
@@ -79,7 +80,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
   - **The data layer reads Postgres** (`dashboard/queries.py`: `Store`, queries against `{ops}`, a missing table names its command, a missing password or server says what to do).
   - **Three pages**: Overview (the run, one headline per module, ownership), Cost (model switch, showback by team and month, by workload, the business case, the four recommendation tabs), Reconciliation (the verdict, the 42-night grid against the 21 pairs, one night in detail, rows moved segmented against naive). The Incidents page is removed until Phase 14.
   - `make dashboard` runs again; `scripts/check_dashboards.py` checks the three pages and waits for a page to stay rendered.
-  - dashboards README rewritten; later notes on ADR 0016; SPEC 13b note; root README.
+  - dashboards README rewritten; later notes on ADR 0013; SPEC 13b note; root README.
 - Phase 13b verification:
   - `make lint` clean. `make docker-test`: 387 passed, 6 skipped (incidents until Phase 14), 6 min 48 s; the dashboard tests render every page on the shared test company and check the role.
   - `make docker-clean docker-demo` at scale 1.0: 44 min 51 s and 44 min 35 s. Two clean runs: 184 of 185 relations identical, the seven new cost tables and the dashboard role's 24 grants included; `ops.company_run` differs by its random run id, as in 13a. `cost.md` and `reconciliation.md` byte-identical, and `cost.md` identical to 13a's.
@@ -90,7 +91,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
   - **The cost module rebuilt on ClickHouse**: `collect.py` reads the run's tagged queries from `system.query_log` (billable only, literals redacted, numbered in a stable order); `cluster.py` shares the stated monthly cost out exactly; `pricing.py` prices the same bytes on BigQuery and Snowflake; `attribution.py` adds ingestion, maintenance and the reconciliation (migration cost); `business.py` builds the replica-to-ClickHouse business case on the reconciliation's cutover; `recommend.py` finds unused tables, hotspots (with a suggested sort key, or a skip index on a `ReplacingMergeTree`), incremental candidates and quotas; `report.py` writes `reports/cost.md`. Results in `ops.query_log`, `query_filters`, `query_costs`, `query_attribution`, `cost_showback`.
   - Settings: `cost.clickhouse` and `cost.legacy_reporting` (public list prices with sources), warehouses for the new kinds of work.
   - `make cost` runs (no longer paused) and `make demo` ends with it; `platform-ops simulation run` and `make simulate` are gone. Removed: `cost/estimate.py`, `sizes.py`, `growth.py`, `schema.py`.
-  - ADR 0018, later notes on ADRs 0005 to 0007; SPEC Phase 13 updated; cost README rewritten; simulation and root READMEs updated.
+  - ADR 0015, later notes on the 1.x cost ADRs (two retired in Phase 15); SPEC Phase 13 updated; cost README rewritten; simulation and root READMEs updated.
 - Phase 13a verification:
   - `make lint` clean. `make docker-test`: 361 passed, 31 skipped (dashboard until 13b, incidents until 14).
   - Two runs at scale 0.01 in their own namespaces: every cost ops table and `cost.md` identical; every kind of work measured the same bytes and rows.
@@ -105,7 +106,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
   - Removed: Iceberg (`pyiceberg`, `migrate.py`, `legacy.py`, the `iceberg_warehouse` path), the DuckDB connector, the 1.x run and its faults.
   - Two marts now follow their legacy reports (found while building the comparison, before any defect was planted): `marketing_fct_campaign_performance.return_on_ad_spend` divided at the dividend's scale (ClickHouse truncated where Postgres rounded) and gave 0 where the legacy report gives NULL for a campaign with no attributed order.
   - `PLATFORM_OPS_SCALE_FACTOR` overrides the scale for one run; `make docker-demo SCALE=0.1`; the release workflow's Metabase job runs the demo at 0.1 with a 90-minute timeout.
-  - ADR 0017 (the parallel run and the cutover rule), a later note on ADR 0009; SPEC Phase 12 acceptance updated; reconcile and simulation READMEs and the root README updated.
+  - ADR 0014 (the parallel run and the cutover rule), a later note on ADR 0006; SPEC Phase 12 acceptance updated; reconcile and simulation READMEs and the root README updated.
 - Phase 12 verification:
   - `make lint` clean. `make docker-test`: 354 passed, 37 skipped, 5 min 28 s; every skip is a paused module (cost, dashboards, incidents).
   - `make docker-clean docker-demo` at scale 1.0: 37 min 56 s and 38 min 37 s (from 4 min 35 s in Phase 11b). 44 dbt builds, 10,142,605 rows ingested (the backfill reloads everything once), 141 datasets owned, 376 lineage edges.
@@ -119,7 +120,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
   - dbt runs as `dbt` (`common/dbt_invoke.py`) and the ingestion as `loader` (`simulation/ingest.py`). Passwords come from `CLICKHOUSE_PASSWORD_<USER>`, with no default; a missing one exits 2 naming every missing variable (`common/servers.py`).
   - **Dashboards** (`simulation/bi.py`): one per exposure in its owning team's collection, one native SQL card per model. Rules: a generated rollup is a line per period and dimension value, a daily one over its last 91 days; anything else a table sorted by its key; a `dashboard` entry in the model's `config.meta` overrides (daily sales, monthly revenue, acquisition funnel carry one).
   - **Metabase** (`simulation/metabase.py`, Compose profile `metabase`, `metabase/metabase:v0.63.19.6`, its state in a `metabase` database on Postgres, 1 GB heap): `platform-ops metabase prepare | provision | check`; provision is idempotent, updates by name and archives what no exposure asks for. `make metabase` natively; `make docker-metabase-check` adds `scripts/screenshot_metabase.py` in the Playwright image. The release workflow runs a demo and the Metabase check before publishing.
-  - ADR 0015 (ClickHouse modelling and watermark ingestion, the 11a record) and ADR 0016 (users and BI); README, simulation README and `.env.example` updated.
+  - ADR 0012 (ClickHouse modelling and watermark ingestion, the 11a record) and ADR 0013 (users and BI); README, simulation README and `.env.example` updated.
 - Phase 11b verification:
   - `make lint` clean. `make docker-test`: 340 passed, 38 skipped (all paused modules, with their phase), 2 min 48 s. Native full suite 4 min 14 s.
   - `make docker-clean docker-demo` at scale 1.0: 4 min 41 s and 4 min 32 s. The two runs are identical across 163 entries (the 155 relations of 11a plus every user's grants), and the data is identical to the 11a demo: running dbt and the ingestion as their own users changed nothing in the results.
@@ -137,7 +138,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
   - **Ownership** runs on the company project; the ClickHouse fixture project is deleted and its standalone tests run on the company project (`tests/test_ownership_standalone.py`).
   - **Paused until their phase**: reconcile (12), cost, simulation and dashboard (13), incidents (14). Their commands exit 2 naming the phase and `v1.2.0`; `platform-ops paused` and `make paused` list them; their end-to-end tests skip with the same reason; their unit tests still run.
   - **SQL Server removed**: Compose service, `pymssql`, `sqlserver.yml`, its tests, and its code in the reconciliation (connector, renderers, DDL, Windows zone names). `dbt-duckdb` removed; `dbt-clickhouse` is a main dependency. ClickHouse is no longer behind a profile; `make up` starts Postgres and ClickHouse.
-  - README banner (2.0 in progress, the numbers below are 1.x, `v1.2.0` has the 1.x demo); ADR 0001 marked superseded; ADR 0014, the metadata and reconcile READMEs updated.
+  - README banner (2.0 in progress, the numbers below are 1.x, `v1.2.0` has the 1.x demo); the 1.x legacy-source ADR marked superseded (retired in Phase 15); ADR 0011, the metadata and reconcile READMEs updated.
 - Phase 11a verification:
   - `make lint` clean. `make docker-test`: 323 passed, 38 skipped, 2 min 43 s; every skip is a paused module's end-to-end test, with its phase. Native full suite 3 min 54 s.
   - `make docker-clean docker-demo` at scale 1.0: 4 min 35 s and 4 min 27 s. 3,507,865 rows of history, 1,919,938 new and 3,497 changed in Postgres over 91 days, 5,511,656 rows ingested (the overlap re-reads about 80,000), 5 dbt builds, 141 datasets owned, 376 lineage edges.
@@ -146,13 +147,13 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
   - Tested at scale 0.01: every layer has its planned engine, key and partition; ClickHouse's `query_log` carries each model's node id; freshness on simulated time; each of the 12 legacy reports matches its mart in row count and every numeric total; the snapshot keeps earlier versions; an incremental build equals a full rebuild; an in-place change keeps only the latest version; the overlap catches a late commit and misses an older one.
 
 - Phase 2 merged (PR #4). Reference numbers at scale 1.0: `make simulate` 280 to 290 s, `make cost` 20 to 24 s, byte-identical `cost.md` across two runs, unused list exactly the 12 abandoned models.
-- Phase 3 implemented: fault injector with repair (`simulation/faults.py`), and `incidents/` with ingestion, grouping, severity, routing, notifier, lifecycle, the 21-day scenario, metrics and report. `platform-ops incidents run` is live; ADR 0008 and `src/platform_ops/incidents/README.md` written.
+- Phase 3 implemented: fault injector with repair (`simulation/faults.py`), and `incidents/` with ingestion, grouping, severity, routing, notifier, lifecycle, the 21-day scenario, metrics and report. `platform-ops incidents run` is live; ADR 0005 and `src/platform_ops/incidents/README.md` written.
 - Phase 3 reference numbers at scale 1.0: `make incidents` 2 min 22 s to 2 min 56 s over three runs, byte-identical `incidents.md` and postmortems across two runs. 8 faults, 18 failing checks, 8 incidents (exactly one per fault), 8 pages. Routing right person 8 of 8 (naive rule 3 of 8). dbt ran on 8 of 21 nights, 19 invocations.
 
 - Phase 3 merged (PR #5).
-- Phase 4 implemented: `reconcile/` (schema, canonical rules and renderers, connectors for Postgres, SQL Server and DuckDB, legacy generator, migration job with four defects, segmented diff, classification, metrics, sign-off report) and `simulation/migration_faults.py`. `platform-ops reconcile run` is live, so every Makefile target is implemented. ADR 0009 and `src/platform_ops/reconcile/README.md` written.
+- Phase 4 implemented: `reconcile/` (schema, canonical rules and renderers, connectors for Postgres, SQL Server and DuckDB, legacy generator, migration job with four defects, segmented diff, classification, metrics, sign-off report) and `simulation/migration_faults.py`. `platform-ops reconcile run` is live, so every Makefile target is implemented. ADR 0006 and `src/platform_ops/reconcile/README.md` written.
 - Phase 4 merged (PR #6).
-- Phase 5 implemented: Streamlit dashboards (`dashboards/`, data layer and charts in `src/platform_ops/dashboard/`), `platform-ops dashboard`, BigQuery and Snowflake collectors (`cost/collectors/`) with generated fixtures and contract tests, `make readme-check`, ADR 0010, the root README, a dashboards README and a collectors section in the cost README.
+- Phase 5 implemented: Streamlit dashboards (`dashboards/`, data layer and charts in `src/platform_ops/dashboard/`), `platform-ops dashboard`, BigQuery and Snowflake collectors (`cost/collectors/`) with generated fixtures and contract tests, `make readme-check`, ADR 0007, the root README, a dashboards README and a collectors section in the cost README.
 - Phase 5 merged (PR #7).
 - Phases 6 and 7 added to `docs/SPEC.md` by the owner's decision: Phase 6 is a whole-repo review and cleanup, Phase 7 is hardening and release (1.0.0).
 - Phase 6 merged (PR #8).
@@ -182,8 +183,8 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
   - `make docker-clean docker-demo` with `TOOLKIT_IMAGE`: 7 min 8 s.
 - Phase 8 merged (PR #10). CI passed on the pull request in about 6 min 20 s on `ubuntu-latest`: image build 97 s, lint 44 s, ownership check 7 s, tests against Postgres 3 min 31 s (faster than the 16-core laptop).
 - Phase 9 implemented:
-  - Root `README.md`: a "Run it in Docker" section (build or `TOOLKIT_IMAGE`, `make docker-demo`, the dashboards, `docker-readme-check`, `docker-test`, `docker-browser-check`, `docker-clean`), the runtime line updated to the latest runs, the ADR table extended to 0013 with a link to the index, and the repository layout updated. The sentence claiming CI runs without Docker is gone.
-  - ADRs 0011 (module boundaries pinned by a test, and the review before the release), 0012 (the toolkit in a container) and 0013 (CI and release from the same container), and `docs/adr/README.md`, the index of all 13. Later notes on ADR 0007 and 0008 (the lifted budget, the designs kept) and 0010 (the caps and mypy, the container, internal use). A follow-up in `docs/review/phase-6-review.md` closes the three findings deferred to Phase 7.
+  - Root `README.md`: a "Run it in Docker" section (build or `TOOLKIT_IMAGE`, `make docker-demo`, the dashboards, `docker-readme-check`, `docker-test`, `docker-browser-check`, `docker-clean`), the runtime line updated to the latest runs, the ADR table extended to 0010 with a link to the index, and the repository layout updated. The sentence claiming CI runs without Docker is gone.
+  - ADRs 0008 (module boundaries pinned by a test, and the review before the release), 0012 (the toolkit in a container) and 0013 (CI and release from the same container), and `docs/adr/README.md`, the index of all 13. Later notes on the replayed-workload ADR (retired in Phase 15) and ADR 0005 (the lifted budget, the designs kept) and 0010 (the caps and mypy, the container, internal use). A follow-up in `docs/review/phase-6-review.md` closes the three findings deferred to Phase 7.
   - `docs/SPEC.md`: a status line, the repository layout with the Dockerfile, CHANGELOG, workflows and review record, and the Makefile table with `pipeline`, `fmt`, `clean` and every `docker-*` target.
   - `dashboards/README.md`: the container command, the browser check, and the three presentation problems stated as known limits.
 - Phase 9 acceptance, from a fresh clone of the branch plus the uncommitted files, with the working copy's `.env`: following the README's Docker section, `make docker-clean`, `docker-build` (31 s with the dependency layer cached), `docker-demo` (7 min 20 s), `docker-readme-check` (178 of 178) and `docker-browser-check` (8 of 8 page loads) passed, and the reports were byte-identical to the Phase 7 baseline. `make docker-dashboard` answered on `localhost:8501` within 6 s. All 44 relative links in the 27 Markdown files resolve (a one-off local script, not committed). All 13 ADRs are in the index.
@@ -195,7 +196,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
   - Seeds and snapshots count as owned resources. `teams.yaml` takes an optional `telegram_chat`.
   - ClickHouse: a `clickhouse` Compose profile (`clickhouse/clickhouse-server:26.8.16.41`), a `dbt-clickhouse` extra (1.10.3) in the image, `DOCKER_ENGINES` defaulting to all three engines, CI running Postgres and ClickHouse.
   - `tests/fixtures/dbt_clickhouse` (`acme_analytics`): 15 models in a layout unlike the demo's, a local package, 4 seeds, a snapshot, 3 sources, 2 exposures and its own `ownership/` registry. `tests/test_ownership_external.py` parses it, checks every finding type, exit code and annotation, and builds it for real on ClickHouse.
-  - `examples/github-actions/ownership-check.yml` for a company dbt repository, a section on it in the metadata README, ADR 0014, version 1.1.0 and its CHANGELOG section.
+  - `examples/github-actions/ownership-check.yml` for a company dbt repository, a section on it in the metadata README, ADR 0011, version 1.1.0 and its CHANGELOG section.
 - Phase 10 verification, from a fresh clone of the branch plus the uncommitted files: `make docker-build` 104 s, `make docker-lint` 61 s, `make docker-metadata-check` 12 s (the demo still 9 sources, 118 models, 12 exposures, 139 rows), `make docker-test` with Postgres, ClickHouse and SQL Server 7 min 4 s, 327 passed and nothing skipped. `make docker-clean docker-demo` 6 min 58 s, reports byte-identical to the Phase 7 baseline. The example's `docker run` line, run from the built image as another user on a read-only mount of the parsed fixture: exit 0 on its registry, exit 1 with a repository-relative annotation when a rule is removed, exit 0 with `--report-only` (summary 24 of 25 owned, 0.96). actionlint found nothing in the example and the three workflows. Native `make lint` 3 s warm.
 - Phase 10 merged (PR #12).
 - Fix after Phase 10 (branch `fix-make-shell-on-windows`): `make` run from PowerShell or cmd failed with `! was unexpected at this time.`, because `SHELL := /usr/bin/env bash` only resolves inside Git Bash, so GNU make on Windows fell back to cmd.exe (the `bash.exe` on PATH was WSL's). On Windows the Makefile now runs recipes with Git for Windows' bash (`GIT_BASH`, default `C:/Program Files/Git/bin/bash.exe`, overridable). Verified from PowerShell (`check-env`, `help`, `make -n docker-demo`, a real `make docker-build`) and from Git Bash; Git's bash resolves Git's `find`, `grep` and `awk` and Docker Desktop's `docker`. The README states the Windows requirement.
@@ -236,6 +237,8 @@ Phase 15 on branch `phase-15-documentation`: 15a committed; 15b implemented, wai
 
 ### Phase 15b, made during implementation
 
+- **Old-to-new ADR numbers** (for reading older pull requests and commits): 0002 to 0001, 0003 to 0002, 0004 to 0003, 0006 to 0004, 0008 to 0005, 0009 to 0006, 0010 to 0007, 0011 to 0008, 0012 to 0009, 0013 to 0010, 0014 to 0011, 0015 to 0012, 0016 to 0013, 0017 to 0014, 0018 to 0015, 0019 to 0016, 0020 to 0017; 0001, 0005 and 0007 retired.
+
 - **"Results" keeps its name**: `readme-check` reads sections whose heading starts with "Results", and 15c revives it against the release run.
 - **Seven problems, not one per ADR**: each block names the ADRs it rests on; the ADR index stays complete, superseded records included, for history.
 - **The link check is a test**, not a one-off script: the SPEC's acceptance asks that every relative link resolves, and a renamed heading would otherwise break a README anchor silently.
@@ -275,7 +278,7 @@ Phase 15 on branch `phase-15-documentation`: 15a committed; 15b implemented, wai
 
 ### Phase 14b-1, made during implementation
 
-- **The hooks call the CLI, not the library** (ADR 0020): the toolkit's lock file never meets Airflow's or Dagster's constraints.
+- **The hooks call the CLI, not the library** (ADR 0017): the toolkit's lock file never meets Airflow's or Dagster's constraints.
 - **Run ids name their scheduler** (`airflow:<dag>:<run>`, `dagster:<run>`), so two schedulers feeding one store cannot collide.
 - **A missing run id calls nothing**: an ingest under an empty run id would group unrelated invocations.
 
@@ -393,7 +396,7 @@ The owner asked why the repository held two dbt projects (the simulated company 
 1. **One simulated company, one dbt project.** The company's reporting runs on a legacy Postgres database as hand-written SQL views and tables; it migrates to self-managed ClickHouse, where the analytics are rebuilt as one dbt project. The ClickHouse fixture project is retired once the company's project replaces it in the tests.
 2. **The toolkit is applied to that flow:** reconciliation signs off Postgres to ClickHouse; ownership and incidents run on the ClickHouse dbt project; cost and FinOps run on ClickHouse's query log.
 3. **BigQuery and Snowflake are priced as alternative targets only**, on the same measured workload; no module is built for them, and their collectors stay contract-tested.
-4. **Cost uses measured bytes and rows, modelled time.** `system.query_log` gives bytes and rows; compute time stays modelled from bytes (ADR 0005), so reports stay byte-identical. If measured bytes do not repeat exactly, ask before relaxing the rule.
+4. **Cost uses measured bytes and rows, modelled time.** `system.query_log` gives bytes and rows; compute time stays modelled from bytes, so reports stay byte-identical. If measured bytes do not repeat exactly, ask before relaxing the rule.
 5. **DuckDB stops being the warehouse; Iceberg and SQL Server are removed.** Version 1.x stays available at `v1.2.0`.
 6. **Order follows the migration:** Phase 11 the company on Postgres and ClickHouse, 12 reconciliation, 13 cost and FinOps, 14 incidents on real runs (the former Phase 11, with the live store, notifiers, integrations and dashboard decided before), 15 documentation and 2.0.0. The former Phases 11 and 12 are folded into 13 and 14.
 7. **Every number is regenerated** from 2.0's runs: READMEs, reports, ADR figures, and the numbers in the owner's CV.
@@ -471,7 +474,7 @@ Planned defaults: CI calls the same `docker-*` make targets as a laptop, with Po
 Smart App Control is off and the 10-minute budget is lifted, so what was built around them was reviewed once more.
 
 1. **mypy's cap and source build go in Phase 8** (added to the SPEC). They were the last Smart App Control workaround in the tooling, and they make `make docker-lint` take about 4 minutes, which CI would pay on every run. `python -m mypy` stays.
-2. **The budget-driven designs stay as they are.** The real dbt build every 28 days with daily replay (ADR 0007) and the incident scenario that runs dbt only on nights a fault is active (ADR 0008) are documented. Their reports match across the native run, the container and the Phase 6 baseline. Changing them would redo every reference number and README figure for realism alone. The pandas and pyarrow caps were already lifted in Phase 7.
+2. **The budget-driven designs stay as they are.** The real dbt build every 28 days with daily replay (a 1.x ADR, retired in Phase 15) and the incident scenario that runs dbt only on nights a fault is active (ADR 0005) are documented. Their reports match across the native run, the container and the Phase 6 baseline. Changing them would redo every reference number and README figure for realism alone. The pandas and pyarrow caps were already lifted in Phase 7.
 
 ### Phase 7 (owner, at planning)
 
@@ -562,7 +565,7 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 
 ### Phase 2 (owner)
 
-1. **Logical bytes, not stored bytes** (ADR 0005). Compressed size is not stable between identical runs.
+1. **Logical bytes, not stored bytes** (a 1.x ADR, retired in Phase 15). Compressed size is not stable between identical runs.
 2. **Modelled compute time**: 150 ms per query plus bytes at 200 MB/s, declared in settings and printed in the report. Wall-clock time is recorded, never priced.
 3. **Real simulated dollars**, no projection factor.
 4. **Products and customers change in place** during the window, so the incremental recommendation has sources to rule out.
@@ -602,11 +605,11 @@ For version 2.0:
 
 Kept on purpose (design limits, documented in the ADRs):
 
-- Replayed days price model reads on model sizes up to 4 weeks old, and dashboards read marts up to 4 weeks stale. Raw data is always current. Acceptable for quarterly cost attribution (ADR 0007).
+- Replayed days price model reads on model sizes up to 4 weeks old, and dashboards read marts up to 4 weeks stale. Raw data is always current. Acceptable for quarterly cost attribution (a 1.x ADR, retired in Phase 15).
 - The bytes estimate ignores row-group pruning, so filtered queries are overestimated; ad hoc queries by more than twice what DuckDB scanned, measured per run in `reports/cost_proxy_accuracy.md`. That file is not deterministic by design (profiler row counts depend on physical row order), so it is excluded when reports are compared byte for byte.
 - Filters written against a CTE or subquery column outside it are not traced to the base table for hotspot detection. The workload and dbt do not write filters that way.
 - The alert storm is modest: 18 failing checks for 8 faults. The volume drop is the one fault with a real cascade (5 checks).
-- Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0008).
+- Grouping is per run. Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0005).
 
 The Phase 7 browser check's limits are gone with the 1.x pages (Phase 13b): the monthly chart names each month with the days the window covers in it, and the Incidents page returns in Phase 14.
 
