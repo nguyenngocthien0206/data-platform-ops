@@ -105,6 +105,27 @@ services:
       metabase:
         condition: service_healthy
 
+  # Answers like Slack and Telegram and keeps every message, so the orchestrator
+  # tests (Phase 14b) can check a page without sending one. The toolkit image
+  # already holds the script; it needs neither server.
+  chat:
+    image: ${TOOLKIT_IMAGE:-data-platform-ops:local}
+    profiles: ["chat"]
+    command: ["python", "orchestrators/chat_double.py", "--host", "0.0.0.0", "--port", "8099"]
+    ports:
+      - "${CHAT_DOUBLE_PORT:-8099}:8099"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8099/health', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   postgres:
     image: postgres:16
     container_name: dpo-postgres
