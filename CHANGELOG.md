@@ -2,6 +2,40 @@
 
 All notable changes to data-platform-ops. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The GitHub Release for each version uses its section below as the notes.
 
+## [2.0.0] - 2026-10-15
+
+The simulated company now looks like the one the toolkit is meant for: its reporting runs on a legacy Postgres, it migrates to a self-managed ClickHouse with its analytics rebuilt as one dbt project, and every module works on that migration. The reconciliation signs it off over a six-week parallel run, the cost module shares the cluster's bill out by team, and the incident desk runs on the company's production nights and on real Airflow and Dagster runs.
+
+### Added
+
+- **The company on Postgres and ClickHouse.** A legacy Postgres with a year of history and 12 hand-written SQL reports; an incremental copy into ClickHouse by an `updated_at` watermark into `ReplacingMergeTree` raw tables; the dbt project rebuilt for ClickHouse (118 models, a seed, a snapshot, 12 exposures), modelled per layer. The window is 16 weeks: seven before the migration, a six-week parallel run, three weeks of production.
+- **A ClickHouse user per team and service**, with grants per layer and no admin reads, and **Metabase dashboards generated from the dbt exposures** (`make metabase`, `make docker-metabase-check`, which runs every card and opens every dashboard in a browser).
+- **The parallel run and the cutover sign-off** (`reconcile`): the 9 operational tables and the 12 reports compared with ClickHouse every night by a segmented checksum diff, report differences explained through dbt's lineage, equality rules and thresholds the data owner signs, and a cutover recommended after 14 clean nights in a row.
+- **FinOps on a self-managed cluster** (`cost`): every query tagged with what it was for, the stated monthly cost shared out exactly by bytes read and stored, production charged to the owner and reads to the reader, the migration's business case and payback, BigQuery and Snowflake priced on the same measured workload, unused tables, hotspots and suggested quotas.
+- **Incidents on the company's production runs** (`incidents`): faults in operation, every dbt invocation ingested into a Postgres store any run can feed (`platform-ops incidents ingest --target --run-id`), one incident per root regrouped across a run's invocations, routing to the feed's owner, resolution by a later healthy run, Slack and Telegram per team, and `incidents summary`.
+- **Real orchestrators**: Airflow 3 with Cosmos and Dagster with dagster-dbt, each in its own image and on its own company (`make airflow`, `make dagster`), calling the toolkit through standard-library hooks (`platform_ops.integrations`); `make docker-test-orchestrators` puts a fault through each, and the release waits for both.
+- **The Streamlit dashboards on the ops store**, read through a read-only role of their own.
+- **Documentation**: the README around the migration, with an architecture diagram generated from the project (`make docs-diagram`) and screenshots from the release run (`make docker-docs-images`); how each problem was solved; an "Adopting it" section in every module README; a test that every relative link in the docs resolves.
+
+### Changed
+
+- **Cost is measured, not estimated**: bytes and rows come from ClickHouse's query log; the dollar figures of 1.x do not carry over.
+- **dbt builds for real every night** of the parallel run and production, instead of a build every four weeks with replayed days in between.
+- **`readme-check`** checks the 2.0 results; a line whose numbers come from the console or the database is marked `<!-- readme-check: console -->`.
+- **The architecture decision records** were renumbered 0001 to 0017 after three 1.x records were retired (old-to-new numbers in `docs/PROGRESS.md`).
+
+### Removed
+
+- The DuckDB warehouse and `dbt-duckdb` (DuckDB only generates the company's data now), the Iceberg lakehouse and `pyiceberg`, and SQL Server as a legacy source (`MSSQL_*` in `.env`).
+- `platform-ops simulation run` and `make simulate`: `make demo` runs the company (`platform-ops company run`).
+- The Slack webhook notifier: Slack and Telegram now use their bots' tokens.
+
+### Upgrading from 1.x
+
+- Copy the new variables from `.env.example`: a password for each company ClickHouse user (`CLICKHOUSE_PASSWORD_<USER>`), the dashboards' role (`POSTGRES_PASSWORD_DASHBOARD`), Metabase's admin, and `AIRFLOW_ADMIN_PASSWORD` for the Airflow stack. None has a default; a missing one stops the run and names the variable.
+- `make docker-clean`, then `make docker-demo`: the 1.x volumes hold nothing 2.0 reads.
+- The ownership check is unchanged: a consuming repository moves to the 2.0.0 image by changing its tag.
+
 ## [1.2.0] - 2026-10-13
 
 A starter registry, so rolling the ownership check out on a large dbt project starts from a short to-do list instead of a blank file.
@@ -60,6 +94,7 @@ The first release: a local-first toolkit for operating a multi-team data platfor
 - The 10-minute budget for `make demo` was lifted; measured times are recorded instead.
 - The pandas and pyarrow caps added for Windows Smart App Control were lifted (pandas 3, pyarrow 25), and mypy moved to its compiled 2.x wheels. Reports stayed byte-identical.
 
+[2.0.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v2.0.0
 [1.2.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v1.2.0
 [1.1.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v1.1.0
 [1.0.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v1.0.0
