@@ -128,6 +128,20 @@ def test_cosmos_takes_the_run_from_the_task_context_or_airflows_environment(
     assert run == "airflow:company_dbt:scheduled__2026-04-09"
 
 
+def test_cosmos_hands_the_task_context_as_one_keyword(
+    fake_cli: Callable[[], list[list[str]]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # How Cosmos 1.15 calls it: callback(tmp_project_dir, context=context, **callback_args).
+    for name in ("AIRFLOW_CTX_DAG_ID", "AIRFLOW_CTX_DAG_RUN_ID"):
+        monkeypatch.delenv(name, raising=False)
+    context = {
+        "dag": SimpleNamespace(dag_id="company_dbt"),
+        "dag_run": SimpleNamespace(run_id="manual__2026-10-15"),
+    }
+    assert ingest_after_task(str(tmp_path / "tmp_proj"), context=context).ok
+    assert fake_cli()[0][5] == "airflow:company_dbt:manual__2026-10-15"
+
+
 def test_cosmos_without_a_run_id_does_not_call_the_cli(
     fake_cli: Callable[[], list[list[str]]], monkeypatch: pytest.MonkeyPatch
 ) -> None:

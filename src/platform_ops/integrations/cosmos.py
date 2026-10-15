@@ -1,9 +1,11 @@
 """A callback for Cosmos (astronomer-cosmos), which runs dbt one task per model in Airflow.
 
 Give it to Cosmos as the operators' ``callback``. Cosmos calls it after each
-task's dbt invocation with the project folder the task ran in; the invocation's
-artifacts are in its ``target/``. The run id is Airflow's DAG run, from the
-task context when Cosmos passes it, else from the ``AIRFLOW_CTX_*`` variables
+task's dbt invocation, failed or not, with the project folder the task ran in
+and the task context as the keyword ``context`` (Cosmos 1.15:
+``callback(tmp_project_dir, context=context, **callback_args)``); the
+invocation's artifacts are in the folder's ``target/``. The run id is Airflow's
+DAG run, from the task context, else from the ``AIRFLOW_CTX_*`` variables
 Airflow sets for every running task, so every task of one DAG run lands in one
 incident run and is regrouped like a single build::
 
@@ -17,13 +19,14 @@ No import of Airflow or Cosmos here: Airflow calls this and hands it what it nee
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from platform_ops.integrations import IngestOutcome, ingest
 
 
-def run_id_from(context: dict[str, Any], environ: dict[str, str] | None = None) -> str:
+def run_id_from(context: Mapping[str, Any], environ: Mapping[str, str] | None = None) -> str:
     """``airflow:<dag id>:<run id>``, from the task context or Airflow's task environment."""
     env = os.environ if environ is None else environ
     dag = context.get("dag")
@@ -40,9 +43,14 @@ def run_id_from(context: dict[str, Any], environ: dict[str, str] | None = None) 
 
 
 def ingest_after_task(project_dir: str | Path, **context: Any) -> IngestOutcome:
-    """Hand one task's dbt invocation to the incident desk. Never raises."""
+    """Hand one task's dbt invocation to the incident desk. Never raises.
+
+    The task context is the ``context`` keyword when Cosmos calls this, or the
+    keywords themselves when a task calls it with ``**context``.
+    """
+    task_context = context.get("context")
     try:
-        run_id = run_id_from(context)
+        run_id = run_id_from(task_context if task_context is not None else context)
     except ValueError as error:
         return IngestOutcome(False, (), str(error))
     return ingest(Path(project_dir) / "target", run_id)
