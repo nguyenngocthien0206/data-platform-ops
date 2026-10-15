@@ -6,14 +6,14 @@ Last updated: 2026-10-15
 
 ## Current phase
 
-Phase 15a: the architecture diagram and the screenshots for the docs (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a to 14 are merged (PRs #15 to #23). Phase 15 is in three parts, one PR each: 15a (this), 15b (the README around 2.0 and an adoption guide per module), 15c (the release run and 2.0.0).
-Branch: `phase-15a-visuals` (off `main` at `3b8b38d`).
+Phase 15: documentation and release 2.0.0. One branch and one pull request for the whole phase (owner, 2026-10-15); the work is done in three sessions, 15a, 15b and 15c, a convention between the owner and the assistant only. 15a (the architecture diagram and the screenshot tooling) is committed on the branch; 15b (the README around 2.0 and an adoption guide per module) and 15c (the release run and 2.0.0) follow. Phases 11a to 14 are merged (PRs #15 to #23).
+Branch: `phase-15` (off `main` at `3b8b38d`).
 
 Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
 
-- Phase 15a implemented (branch `phase-15a-visuals`, uncommitted):
+- Phase 15a implemented and committed (branch `phase-15`):
   - **Logos from each vendor's own files, in full colour** (`docs/images/logos/`, 13 files, 66 KB): PostgreSQL, ClickHouse, dbt, Airflow, Dagster, Metabase, Streamlit, Slack, Telegram, Docker, GitHub, BigQuery, Snowflake. `LICENSES.md` gives each one's source, the date and the guidelines; nothing is modified, the two PNGs only scaled to 256 px.
   - **The architecture diagram** (`docs/images/architecture.svg`, 119 KB) drawn by `scripts/make_architecture.py` (`make docs-diagram`) in the style of the owner's template: a title, a legend, the company's flow in six numbered steps (legacy Postgres, the incremental copy, ClickHouse, dbt run nightly by Airflow or Dagster, Metabase, the teams), the toolkit's lane (reconcile, cost, incidents on the shared metadata layer, the ops store, the dashboards, pages to Slack and Telegram), and three panels underneath (the sign-off, the bill, one page per problem). Its numbers are read from the dbt project and the config; logos are embedded as data URIs so the SVG stands alone; a text that does not fit its box fails the script.
   - **Screenshots**: `scripts/screenshot_orchestrators.py` (the `docs-screens` Compose service, in the Playwright image) opens Airflow with a JWT set as its `_token` cookie, expands the task groups and photographs the grid, then Dagster's runs and its latest failed run; `scripts/curate_screens.py` picks 11 screens (4 Streamlit pages, a Metabase dashboard per team, Airflow, two of Dagster) into `docs/images/screens/`, light theme, cut to a README height, optimised PNG, under a 3 MB budget. `make docker-docs-images` runs the three after `docker-demo`, `docker-metabase-check` and `docker-test-orchestrators`.
@@ -208,7 +208,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 
 ## In progress
 
-Phase 15a, waiting for the owner's review and commits. 15b (the README and the adoption guides) and 15c (the release run, the committed screenshots, 2.0.0) are planned, not started.
+Phase 15 on branch `phase-15`: 15a committed; 15b (the README and the adoption guides) and 15c (the release run, the committed screenshots, 2.0.0) are planned, not started. The pull request opens when 15c is done.
 
 ## Decisions made
 
@@ -611,6 +611,6 @@ None open.
 
 ## Next step
 
-1. The owner reviews Phase 15a, commits it in the proposed sequence, and merges.
+1. 15b on the same branch, `phase-15`.
 2. Phase 15b (planned, in the plan file): the root README around version 2.0 (the architecture diagram and its steps, the screenshots, how the problems were solved, use it on your platform), an "Adopting it" section in every module README, ADR 0010's later note, the SPEC's layout and Makefile table. Then 15c: the release run at scale 1.0, the committed screenshots, `readme-check` for 2.0, 2.0.0.
 3. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).
