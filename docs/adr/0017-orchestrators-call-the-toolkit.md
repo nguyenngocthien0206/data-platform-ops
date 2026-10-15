@@ -1,11 +1,11 @@
-# 0020: Orchestrators call the toolkit through its CLI, each in its own image and namespace
+# 0017: Orchestrators call the toolkit through its CLI, each in its own image and namespace
 
 Status: accepted
 Date: 2026-10-15
 
 ## Context
 
-Phase 14a gave the incident desk one entry point for any dbt run: `platform-ops incidents ingest --target <dir> --run-id <id>`, where invocations that share a run id are one run (ADR 0019). The company the toolkit is built for schedules dbt with Airflow, through Cosmos, which runs one dbt invocation per model, and with Dagster, through dagster-dbt. Phase 14b connects both for real, in Docker, and tests them end to end.
+Phase 14a gave the incident desk one entry point for any dbt run: `platform-ops incidents ingest --target <dir> --run-id <id>`, where invocations that share a run id are one run (ADR 0016). The company the toolkit is built for schedules dbt with Airflow, through Cosmos, which runs one dbt invocation per model, and with Dagster, through dagster-dbt. Phase 14b connects both for real, in Docker, and tests them end to end.
 
 The obvious way is a library: import the toolkit inside the DAG or the asset function and call the desk. That ties three dependency sets together. Airflow ships constraint files that pin hundreds of packages; Dagster pins its own; the toolkit pins dbt, pandas, Streamlit and the rest through `uv.lock`. Every upgrade of any of them would have to satisfy all three, and a conflict would surface in the company's scheduler, not in the toolkit's CI.
 

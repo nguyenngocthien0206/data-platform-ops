@@ -2,7 +2,7 @@
 
 The three modules (cost, incidents, reconcile) share the metadata layer and
 the simulated company, and never reach into each other: that is what lets one
-be replaced or run without the others (ADR 0010). Imports inside functions
+be replaced or run without the others (ADR 0007). Imports inside functions
 count too, since they are how boundaries usually get crossed quietly.
 """
 
@@ -25,7 +25,7 @@ ALLOWED: dict[str, set[str]] = {
     "incidents": {"common", "metadata", "simulation"},
     "reconcile": {"common", "metadata", "simulation"},
     "dashboard": {"common", "metadata"},
-    # The hooks orchestrators call (Phase 14b, ADR 0020): they run the CLI, so
+    # The hooks orchestrators call (Phase 14b, ADR 0017): they run the CLI, so
     # they need nothing of the toolkit, and nothing outside the standard library.
     "integrations": set(),
 }

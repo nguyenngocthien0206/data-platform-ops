@@ -8,7 +8,7 @@ transaction holding the store's lock:
 
 1. records the invocations it has not seen (by dbt's invocation id), with every
    node they reported on and every failing check;
-2. regroups the whole run from everything it holds so far (ADR 0008: one
+2. regroups the whole run from everything it holds so far (ADR 0005: one
    incident per root, by lineage), so the order the invocations arrive in does
    not change the answer;
 3. opens an incident for a new root, appends the run to the open incident of a

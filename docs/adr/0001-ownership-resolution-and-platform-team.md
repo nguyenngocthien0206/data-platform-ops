@@ -1,4 +1,4 @@
-# 0002: Ownership resolution, and a platform team that owns everything upstream
+# 0001: Ownership resolution, and a platform team that owns everything upstream
 
 Status: accepted
 Date: 2026-09-23

@@ -1,4 +1,4 @@
-# Airflow 3 with Cosmos, running the company's dbt project (Phase 14b-2, ADR 0020).
+# Airflow 3 with Cosmos, running the company's dbt project (Phase 14b-2, ADR 0017).
 #
 # Two Python environments that never meet:
 #   - Airflow's own, with Cosmos, installed against Airflow's constraint file. It

@@ -2,7 +2,7 @@
 
 Who spends what on the company's ClickHouse, what the migration costs on top of the legacy system, and which of it nobody needed to spend. `make demo` runs the company and leaves its traces in ClickHouse's own query log; `make cost` (`platform-ops cost report`) reads them back, shares the cluster's monthly bill out by team, prices the same workload on BigQuery and Snowflake, and writes `reports/cost.md`.
 
-A self-managed cluster sends no bill per query. The company pays for machines and disks by the month, so the job here is the one a platform team actually has: split a fixed invoice fairly, show each team its own share, and point at the habits worth changing ([ADR 0018](../../../docs/adr/0018-finops-on-a-self-managed-clickhouse.md)).
+A self-managed cluster sends no bill per query. The company pays for machines and disks by the month, so the job here is the one a platform team actually has: split a fixed invoice fairly, show each team its own share, and point at the habits worth changing ([ADR 0015](../../../docs/adr/0015-finops-on-a-self-managed-clickhouse.md)).
 
 ## How it fits together
 
@@ -20,13 +20,13 @@ A self-managed cluster sends no bill per query. The company pays for machines an
 
 ## The decisions that shape the numbers
 
-**Measured, not estimated.** Bytes and rows are what ClickHouse says each query read. In 1.x they were estimated from column sizes ([ADR 0005](../../../docs/adr/0005-scan-estimate-and-modelled-compute-time.md)), because DuckDB could not say it repeatably. ClickHouse can, with two conditions. The raw layer is merged every night (`OPTIMIZE TABLE ... FINAL`), because a `FINAL` read otherwise depends on how far the background merges have got. And workload queries run on one thread, so a `LIMIT` stops after the same rows every time. Bytes written are not used: how ClickHouse cuts blocks varies between runs.
+**Measured, not estimated.** Bytes and rows are what ClickHouse says each query read. An earlier version estimated them from column sizes, because DuckDB could not say it repeatably. ClickHouse can, with two conditions. The raw layer is merged every night (`OPTIMIZE TABLE ... FINAL`), because a `FINAL` read otherwise depends on how far the background merges have got. And workload queries run on one thread, so a `LIMIT` stops after the same rows every time. Bytes written are not used: how ClickHouse cuts blocks varies between runs.
 
 **Only what a warehouse would bill is kept.** Statements that only change the catalogue (`CREATE`, `DROP`, `RENAME`) or only read ClickHouse's system tables are counted and dropped. dbt sends one or two more or fewer of them from run to run, and keeping them would have shifted every query id after them.
 
 **The bill is stated, with its sources.** `cost.clickhouse` in `config/settings.yaml` is one `m6i.2xlarge` node with 500 GB of gp3 at public us-east-1 list prices, $320.32 a month; `cost.legacy_reporting` is the reporting replica it replaces, one `db.m6i.2xlarge` RDS instance with 500 GB, $577.50 a month. The sizing is an assumption and is printed first in the report. Compute is shared by bytes read, storage by uncompressed bytes at the month's end, both to 1e-12 dollars with the remainder on the largest share, so the shares add up to the stated cost exactly and can be handed to finance as they are.
 
-**Each query is charged once** ([ADR 0006](../../../docs/adr/0006-pricing-models-and-attribution.md)). Building, testing, loading and merging a table is production cost for its owner. Reading it, through a dashboard or by hand, is consumption cost for the reader: a dashboard refresh goes to the dashboard's owner, not to the `metabase` user that runs it. The parallel run's reconciliation is migration cost, carried by the platform team and shown on its own, because that is the cost the business case has to pay back.
+**Each query is charged once** ([ADR 0004](../../../docs/adr/0004-pricing-models-and-attribution.md)). Building, testing, loading and merging a table is production cost for its owner. Reading it, through a dashboard or by hand, is consumption cost for the reader: a dashboard refresh goes to the dashboard's owner, not to the `metabase` user that runs it. The parallel run's reconciliation is migration cost, carried by the platform team and shown on its own, because that is the cost the business case has to pay back.
 
 **Unused means unused all the way down.** A table is unused when neither it nor anything downstream of it was read by a dashboard or a person in the lookback window. dbt reading a table to build another does not count, so a staging model that feeds a live dashboard is never flagged, and one that only feeds dead tables is.
 
@@ -85,7 +85,7 @@ On a real platform the pricing, the bill split and the attribution are the parts
   - The ClickHouse collector (`collect.clickhouse_records`) keeps only queries carrying the simulation's tag, with its run id and simulated time.
   - The business case compares the company's stated legacy replica with its cluster.
 - **What you replace:**
-  - **Collection on ClickHouse:** read `system.query_log` (`type = 'QueryFinish'`) into `QueryRecord`s. The actor is the query's `user`, one per team and service ([ADR 0016](../../../docs/adr/0016-users-per-team-and-bi-from-exposures.md)). The dbt node is the `unique_id` in the comment dbt puts in front of every statement (`query-comment` in `dbt_project.yml`). The dashboard is the tag your BI sets in `log_comment`.
+  - **Collection on ClickHouse:** read `system.query_log` (`type = 'QueryFinish'`) into `QueryRecord`s. The actor is the query's `user`, one per team and service ([ADR 0013](../../../docs/adr/0013-users-per-team-and-bi-from-exposures.md)). The dbt node is the `unique_id` in the comment dbt puts in front of every statement (`query-comment` in `dbt_project.yml`). The dashboard is the tag your BI sets in `log_comment`.
   - **The stated cost** (`cost.clickhouse` in the settings) with your own invoice.
   - **The report:** yours, over the shares and the attribution.
   - **On BigQuery or Snowflake:** a `Principals` mapping that says which service account is dbt and which is the BI tool.

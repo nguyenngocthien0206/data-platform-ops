@@ -68,7 +68,7 @@ pricing:
 cost:
   # Declared modelling assumptions, not vendor figures, and printed in the cost
   # report. Compute time is modelled as overhead + bytes / throughput, because
-  # measured wall-clock time changes on every run (see docs/adr/0005).
+  # measured wall-clock time changes on every run (see docs/adr/0004).
   throughput_bytes_per_second: 200000000
   per_query_overhead_ms: 150
   # What the company pays a month (version 2.0), from public on-demand list
@@ -108,7 +108,7 @@ recommendations:
 
 workload:
   # dbt runs for real every N simulated days and is replayed from the latest
-  # real build on the days in between (see docs/adr/0007). A real build takes
+  # real build on the days in between. A real build takes
   # about 26 s at scale 1.0; every 28 days (4 builds in 13 weeks) was chosen to
   # fit the original 10-minute `make demo` budget, since lifted. Changing it
   # changes the cost report.
@@ -137,7 +137,7 @@ incidents:
   # chance to catch them.
   fault_hour: 10
   # Severity score = root_tier_multiplier x tier weight of the root dataset
-  # + tier-weighted count of downstream models and exposures (ADR 0008).
+  # + tier-weighted count of downstream models and exposures (ADR 0005).
   severity:
     root_tier_multiplier: 10
     sev1_min_score: 150
@@ -150,7 +150,7 @@ incidents:
     load_factor: 0.5
 
 reconcile:
-  # The parallel run's nightly reconciliation (Phase 12, ADR 0017): the
+  # The parallel run's nightly reconciliation (Phase 12, ADR 0014): the
   # company's operational tables in Postgres against ClickHouse's raw layer,
   # and its legacy reports against the dbt marts. What is compared is declared
   # in config/reconcile.yaml; the timeline is under `company`.
@@ -166,7 +166,7 @@ reconcile:
   clean_nights_for_cutover: 14
   # Differences kept per night, pair and class as examples in the ops store.
   examples_per_class: 20
-  # How values are rendered before hashing (ADR 0009): the legacy engine's
+  # How values are rendered before hashing (ADR 0006): the legacy engine's
   # policy, then per-column overrides as "name.column": {rtrim, casefold, scale}.
   canonical:
     engines:

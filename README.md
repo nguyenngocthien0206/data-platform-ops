@@ -14,7 +14,7 @@ The company is simulated so it can run on a laptop, offline, from one command, w
 
 **The migration window.** The company's 112 days end with its migration: six weeks of a **parallel run**, where both systems run and are compared every night, and the cutover once the comparison has been clean for 14 nights in a row; then three weeks of **production** on ClickHouse alone, where faults happen the way they do in real life.
 
-**The toolkit.** Three modules read what the company already produces and never call each other. They share one metadata layer, the ownership registry and the lineage graph, and write every result to one store, a separate Postgres database that the Streamlit dashboards read through a read-only role. **reconcile** compares Postgres and ClickHouse table by table and report by report. **cost** reads ClickHouse's own query log and storage tables. **incidents** reads each dbt invocation's results, from the nightly schedule, Airflow or Dagster alike, and pages the owner, in Slack or Telegram once their tokens are set. Every place a real deployment talks to an outside system sits behind a small interface with a local default ([ADR 0010](docs/adr/0010-local-first-design.md)).
+**The toolkit.** Three modules read what the company already produces and never call each other. They share one metadata layer, the ownership registry and the lineage graph, and write every result to one store, a separate Postgres database that the Streamlit dashboards read through a read-only role. **reconcile** compares Postgres and ClickHouse table by table and report by report. **cost** reads ClickHouse's own query log and storage tables. **incidents** reads each dbt invocation's results, from the nightly schedule, Airflow or Dagster alike, and pages the owner, in Slack or Telegram once their tokens are set. Every place a real deployment talks to an outside system sits behind a small interface with a local default ([ADR 0007](docs/adr/0007-local-first-design.md)).
 
 ## What it looks like
 
@@ -71,7 +71,7 @@ Each problem below is one a platform team meets in a migration like this one. Ea
 
 **What we decided, and what it costs.** A six-week parallel run, compared every night. Every value is rendered to one canonical string in both engines and hashed, rows are summed into segments by their key, and only segments that disagree are opened, down to a few hundred rows. A report difference counts as explained only when a table upstream of it in dbt's lineage differs the same night. Equality rules (do trailing spaces count?) are the data owner's, written in the config and printed in the report. The cutover is recommended after 14 clean nights in a row, a rule fixed before the run starts. The price: both systems run for six weeks, and the comparison's own reads were $79.77 of the cluster's bill.
 
-**What the numbers showed.** All four defects of the delivered job were found on the first night, all seven one-off faults the night each landed, and all 3,576,917 planted discrepancies were classified correctly. On matching nights the diff moved 11,200 rows instead of 378,892,260, which is what makes a nightly check affordable. Building the comparison also found three places where the new marts disagreed with the legacy SQL before any fault was planted: averages a few cents off (ClickHouse's `avg` rounds a half to even, the legacy Postgres away from zero), a ratio truncated instead of rounded, and 0 where the old report said "none". Each is the kind of thing a finance user would have found in the first week after cutover. ([ADR 0017](docs/adr/0017-the-parallel-run-and-the-cutover-rule.md), [ADR 0009](docs/adr/0009-cross-engine-hashing-and-canonicalization.md))
+**What the numbers showed.** All four defects of the delivered job were found on the first night, all seven one-off faults the night each landed, and all 3,576,917 planted discrepancies were classified correctly. On matching nights the diff moved 11,200 rows instead of 378,892,260, which is what makes a nightly check affordable. Building the comparison also found three places where the new marts disagreed with the legacy SQL before any fault was planted: averages a few cents off (ClickHouse's `avg` rounds a half to even, the legacy Postgres away from zero), a ratio truncated instead of rounded, and 0 where the old report said "none". Each is the kind of thing a finance user would have found in the first week after cutover. ([ADR 0014](docs/adr/0014-the-parallel-run-and-the-cutover-rule.md), [ADR 0006](docs/adr/0006-cross-engine-hashing-and-canonicalization.md))
 
 ### A self-managed cluster sends one bill, not one per query
 
@@ -81,7 +81,7 @@ Each problem below is one a platform team meets in a migration like this one. Ea
 
 **What we decided, and what it costs.** One ClickHouse user per team and per service, so the query log knows who; a tag on every query naming the model, dashboard or person it was for, carried by dbt's profile and the BI's connection; and the stated monthly cost shared by bytes read (compute) and bytes stored, exact to the cent. Building and testing a table is production cost for its owner; reading it is consumption cost for the reader, so a dashboard refresh lands on the dashboard's owner, not on the BI tool's user. The price: repeatable byte counts need the raw layer merged every night, and that merge is about a fifth of the compute, the first line to make cheaper.
 
-**What the numbers showed.** A few careless ad hoc queries cost the cluster more than all the dashboards together ($148.51 against $3.34), while on Snowflake the dashboards would be the expensive part ($206.64), so which habit to change first depends on how the warehouse is billed. The migration pays for itself in 3.5 months. At this data size BigQuery on demand would cost $4.08 for the whole window, the argument a platform lead should be ready to answer before the data grows into the cluster. ([ADR 0016](docs/adr/0016-users-per-team-and-bi-from-exposures.md), [ADR 0018](docs/adr/0018-finops-on-a-self-managed-clickhouse.md), [ADR 0006](docs/adr/0006-pricing-models-and-attribution.md))
+**What the numbers showed.** A few careless ad hoc queries cost the cluster more than all the dashboards together ($148.51 against $3.34), while on Snowflake the dashboards would be the expensive part ($206.64), so which habit to change first depends on how the warehouse is billed. The migration pays for itself in 3.5 months. At this data size BigQuery on demand would cost $4.08 for the whole window, the argument a platform lead should be ready to answer before the data grows into the cluster. ([ADR 0013](docs/adr/0013-users-per-team-and-bi-from-exposures.md), [ADR 0015](docs/adr/0015-finops-on-a-self-managed-clickhouse.md), [ADR 0004](docs/adr/0004-pricing-models-and-attribution.md))
 
 ### One broken feed pages the wrong person a dozen times
 
@@ -91,7 +91,7 @@ Each problem below is one a platform team meets in a migration like this one. Ea
 
 **What we decided, and what it costs.** One incident per root, regrouped across every invocation of a run, so a run split into one invocation per model gives the same incidents as one build. Severity comes from the dashboards downstream; the page goes to the owner of the source when a staging model fails. An incident resolves only when a later run covered its root and found it healthy. Everything lives in a store any dbt run can feed, through one command. The price: the store is a small Postgres schema to run, and a fix is only confirmed by the next run.
 
-**What the numbers showed.** 34 failing checks became 8 incidents and 8 pages, routed right 8 times out of 8 against 3 for the naive rule, and one engineer was spared 28 pages for two problems. The routing also showed where the load piles up: 6 of the 8 pages went to the one person who owns most feeds, which is a staffing conversation, not a tooling one. And since owners fixed within hours but nothing resolved before the next nightly run, a rerun after a fix would cut time to resolve more cheaply than faster people. ([ADR 0008](docs/adr/0008-incident-grouping-severity-and-routing.md), [ADR 0019](docs/adr/0019-incidents-on-the-companys-production-runs.md))
+**What the numbers showed.** 34 failing checks became 8 incidents and 8 pages, routed right 8 times out of 8 against 3 for the naive rule, and one engineer was spared 28 pages for two problems. The routing also showed where the load piles up: 6 of the 8 pages went to the one person who owns most feeds, which is a staffing conversation, not a tooling one. And since owners fixed within hours but nothing resolved before the next nightly run, a rerun after a fix would cut time to resolve more cheaply than faster people. ([ADR 0005](docs/adr/0005-incident-grouping-severity-and-routing.md), [ADR 0016](docs/adr/0016-incidents-on-the-companys-production-runs.md))
 
 ### Ownership has to survive the migration
 
@@ -101,7 +101,7 @@ Each problem below is one a platform team meets in a migration like this one. Ea
 
 **What we decided, and what it costs.** A registry of teams and rules (the most specific rule wins, and the platform team owns the shared layers), checked against dbt's manifest on every pull request in the company's own repository, from the toolkit's published image, without a warehouse connection. A starter registry is generated from the manifest, so a large project starts from a short to-do list rather than a blank file. The price: someone has to close those to-dos, and the check can only be required once they are closed.
 
-**What the numbers showed.** All 141 datasets of the ClickHouse project kept exactly one owner through the move, and the cost split and the incident routing above both read from that same registry. ([ADR 0002](docs/adr/0002-ownership-resolution-and-platform-team.md), [ADR 0014](docs/adr/0014-the-ownership-gate-in-the-consuming-repository.md))
+**What the numbers showed.** All 141 datasets of the ClickHouse project kept exactly one owner through the move, and the cost split and the incident routing above both read from that same registry. ([ADR 0001](docs/adr/0001-ownership-resolution-and-platform-team.md), [ADR 0011](docs/adr/0011-the-ownership-gate-in-the-consuming-repository.md))
 
 ### No change data capture
 
@@ -111,7 +111,7 @@ Each problem below is one a platform team meets in a migration like this one. Ea
 
 **What we decided, and what it costs.** Pull by watermark, re-reading a margin before it (an hour), into `ReplacingMergeTree` raw tables keyed like the source, so a row read twice or changed in place keeps only its latest version. Every later layer is modelled for how it is read: staging as views, the rest as tables sorted by their own key, the large event tables incremental by month. The price: readers need `FINAL` or a nightly merge to see one row per key, and a sort key chosen by the platform team is paid for by whoever reads the table.
 
-**What the numbers showed.** The overlap catches late commits by design, at the cost of re-reading a margin every load. And the incremental models showed that layout matters as much as the setting: the two incremental marts read 63% less in their last build than their first, while two incremental models over raw read more every time, because raw is sorted by key, not by date. ([ADR 0015](docs/adr/0015-clickhouse-modelling-and-watermark-ingestion.md))
+**What the numbers showed.** The overlap catches late commits by design, at the cost of re-reading a margin every load. And the incremental models showed that layout matters as much as the setting: the two incremental marts read 63% less in their last build than their first, while two incremental models over raw read more every time, because raw is sorted by key, not by date. ([ADR 0012](docs/adr/0012-clickhouse-modelling-and-watermark-ingestion.md))
 
 ### Every scheduler is different
 
@@ -121,7 +121,7 @@ Each problem below is one a platform team meets in a migration like this one. Ea
 
 **What we decided, and what it costs.** The schedulers call the toolkit's command line, not its library, through two small hooks written in the standard library only. Each scheduler runs in its own image, with the toolkit in a separate environment, so Airflow's, Dagster's and the toolkit's dependencies never have to agree. A failed hand-over is logged and never fails the pipeline. The price: a process start per invocation, and a second Python environment in each image.
 
-**What the numbers showed.** One fault, 70 invocations from Airflow and 2 from Dagster, and the same single incident, page and resolution from both. The release now waits for that check to pass through both schedulers. ([ADR 0020](docs/adr/0020-orchestrators-call-the-toolkit.md))
+**What the numbers showed.** One fault, 70 invocations from Airflow and 2 from Dagster, and the same single incident, page and resolution from both. The release now waits for that check to pass through both schedulers. ([ADR 0017](docs/adr/0017-orchestrators-call-the-toolkit.md))
 
 ### Numbers nobody can reproduce are not evidence
 
@@ -131,7 +131,7 @@ Each problem below is one a platform team meets in a migration like this one. Ea
 
 **What we decided, and what it costs.** All data from one seed and a simulated clock, including source freshness; the raw layer merged every night so reads repeat; inserts written in one part per partition; and every report checked byte for byte across two clean runs. The price: a full run takes about an hour, and some realism (background merges, parallel inserts) is traded for repeatability, which the ADRs say where.
 
-**What the numbers showed.** Two clean runs left 195 of 196 relations identical, the one exception being the run's own random id, and every report byte for byte. ([ADR 0004](docs/adr/0004-deterministic-data-generation.md), [ADR 0003](docs/adr/0003-source-freshness-on-simulated-time.md))
+**What the numbers showed.** Two clean runs left 195 of 196 relations identical, the one exception being the run's own random id, and every report byte for byte. ([ADR 0003](docs/adr/0003-deterministic-data-generation.md), [ADR 0002](docs/adr/0002-source-freshness-on-simulated-time.md))
 
 ## Use it on your platform
 
@@ -168,7 +168,7 @@ make test                 # unit and integration tests
 
 ## Run it in Docker
 
-The same demo with nothing on the host but Docker and GNU make (plus Git for Windows on Windows, see above): no Python, no uv, and no dependence on the host's security policies ([ADR 0012](docs/adr/0012-the-toolkit-in-a-container.md)).
+The same demo with nothing on the host but Docker and GNU make (plus Git for Windows on Windows, see above): no Python, no uv, and no dependence on the host's security policies ([ADR 0009](docs/adr/0009-the-toolkit-in-a-container.md)).
 
 ```bash
 cp .env.example .env
@@ -181,7 +181,7 @@ make dagster              # Dagster with dagster-dbt on its own company, UI on l
 make docker-test-orchestrators  # a fault through each: its incident, page, fix and resolution
 ```
 
-`make docker-lint` and `make docker-metadata-check` run the same checks as CI ([ADR 0013](docs/adr/0013-ci-and-release-from-the-same-container.md)). The company's data lives in the Postgres and ClickHouse volumes, the toolkit's scratch state on its own volumes; `make docker-clean` removes the latter, and `make help` lists every target. `make docs-diagram` redraws the architecture diagram from the project, and `make docker-docs-images` retakes the screenshots after a demo.
+`make docker-lint` and `make docker-metadata-check` run the same checks as CI ([ADR 0010](docs/adr/0010-ci-and-release-from-the-same-container.md)). The company's data lives in the Postgres and ClickHouse volumes, the toolkit's scratch state on its own volumes; `make docker-clean` removes the latter, and `make help` lists every target. `make docs-diagram` redraws the architecture diagram from the project, and `make docker-docs-images` retakes the screenshots after a demo.
 
 ## Repository layout
 

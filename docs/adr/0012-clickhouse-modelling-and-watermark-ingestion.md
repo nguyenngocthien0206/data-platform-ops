@@ -1,4 +1,4 @@
-# 0015: ClickHouse modelling per layer, and ingestion by watermark
+# 0012: ClickHouse modelling per layer, and ingestion by watermark
 
 Status: accepted
 Date: 2026-10-13
@@ -11,7 +11,7 @@ Two facts about the company shaped the choices. It has no change data capture, l
 
 ## Decision
 
-- **Ingestion by an `updated_at` watermark**, through ClickHouse's `postgresql()` table function, which runs on the ClickHouse server and reads Postgres directly. Each load reads `(watermark - 60 minutes, now]`: the overlap re-reads a margin so a row committed late with an older `updated_at` is not lost. Every load is recorded in `ops.ingestion_loads` in the Postgres ops store, and the latest `loaded_until` per table is the watermark. The loads run as their own ClickHouse user, `loader` (ADR 0016).
+- **Ingestion by an `updated_at` watermark**, through ClickHouse's `postgresql()` table function, which runs on the ClickHouse server and reads Postgres directly. Each load reads `(watermark - 60 minutes, now]`: the overlap re-reads a margin so a row committed late with an older `updated_at` is not lost. Every load is recorded in `ops.ingestion_loads` in the Postgres ops store, and the latest `loaded_until` per table is the watermark. The loads run as their own ClickHouse user, `loader` (ADR 0013).
 - **Raw tables are `ReplacingMergeTree(updated_at)`, ordered by the primary key and not partitioned.** A row read twice by the overlap, or changed in place, keeps only its latest version. They are not partitioned because `ReplacingMergeTree` deduplicates only within a partition, and a changed row moves in `updated_at`, so a partition by time would keep both versions forever.
 - **Staging is views reading raw with `FINAL`.** One row per key, the latest version, without storing the data a second time. The cost is paid on every read instead of once on write, which is acceptable while staging is read only by dbt.
 - **Every other model is a `MergeTree` table sorted by its own key**, the key its `unique` test already declares. Keys may be nullable on the table folders (`allow_nullable_key`), because the legacy columns are and the keys derive from them. The abandoned models keep the unsorted default, the way untuned tables look in a real warehouse.

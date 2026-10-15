@@ -3,7 +3,7 @@
 ``score = root_tier_multiplier x tier_weight(root) + sum of tier weights of the
 models and exposures downstream of the root``. The first term says how much the
 broken dataset matters in itself; the second says how much of the business is
-built on it. Thresholds turn the score into SEV1 to SEV3. ADR 0008 explains how
+built on it. Thresholds turn the score into SEV1 to SEV3. ADR 0005 explains how
 they were calibrated against this project's lineage.
 
 The thresholds and the tier weights default to ``settings.yaml``; a team can

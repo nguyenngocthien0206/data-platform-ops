@@ -1,4 +1,4 @@
-# 0012: The toolkit in a container, with its state on volumes
+# 0009: The toolkit in a container, with its state on volumes
 
 Status: accepted
 Date: 2026-09-29
@@ -22,4 +22,4 @@ The toolkit runs in a container, next to the legacy databases in Docker Compose,
 
 Two clean container runs wrote byte-identical reports, identical to the native Windows run and to the Phase 6 baseline, and the full test suite ran in the container with Postgres and SQL Server up and nothing skipped (308 tests). On the same laptop the container demo took 7 minutes 16 seconds and the native one 7 minutes 49 seconds. The image is 1.58 GB.
 
-For a team, the gain is that "it works on my machine" stops being a question: onboarding is Docker plus `make docker-demo`, and a failure a colleague reports can be reproduced from the same image. The cost is one more thing to keep current (base image, uv, the Playwright image), and the SQL Server image stays x86_64 only (ADR 0001), so Apple Silicon still runs it under emulation. The browser check found three presentation problems AppTest never could (repeated month labels, a timeline axis without dates, truncated table columns); they are recorded as known issues, not hidden.
+For a team, the gain is that "it works on my machine" stops being a question: onboarding is Docker plus `make docker-demo`, and a failure a colleague reports can be reproduced from the same image. The cost is one more thing to keep current (base image, uv, the Playwright image), and the SQL Server image stays x86_64 only, so Apple Silicon still runs it under emulation. The browser check found three presentation problems AppTest never could (repeated month labels, a timeline axis without dates, truncated table columns); they are recorded as known issues, not hidden.

@@ -9,7 +9,7 @@ What a company running dbt in Dagster typically has, wired to the incident desk:
 
 Both invocations are handed to the desk through the toolkit's hook,
 ``ingest_dbt_invocation``, under the run's id, ``dagster:<run id>``, so the desk
-groups them as one run (ADR 0019, 0020). dbt runs with ``raise_on_error=False``
+groups them as one run (ADR 0016, 0017). dbt runs with ``raise_on_error=False``
 so the hook always gets the artifacts; the run is failed afterwards when dbt
 failed, so it shows as failed in the UI.
 

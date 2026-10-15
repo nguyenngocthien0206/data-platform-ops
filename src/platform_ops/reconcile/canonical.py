@@ -1,4 +1,4 @@
-"""Canonical row rendering and the cross-engine row hash (ADR 0009).
+"""Canonical row rendering and the cross-engine row hash (ADR 0006).
 
 Two engines never agree on how to print a value: ``2.3`` against ``2.30``,
 ``2025-07-01 10:00:00`` against ``2025-07-01 10:00:00.000000``, ``t`` against

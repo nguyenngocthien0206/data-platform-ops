@@ -1,11 +1,11 @@
-# 0014: The ownership gate runs in the consuming repository, on its manifest
+# 0011: The ownership gate runs in the consuming repository, on its manifest
 
 Status: accepted
 Date: 2026-10-04
 
 ## Context
 
-Phase 10 takes the ownership check (ADR 0002) to the company's own dbt projects, starting with the data platform team's project on self-managed ClickHouse, whose CI is GitHub Actions. Until then the check only knew the bundled project: it loaded the toolkit's settings, found the manifest through the demo's dbt project, read the registry from the toolkit's `config/`, and wrote its result into the demo's DuckDB.
+Phase 10 takes the ownership check (ADR 0001) to the company's own dbt projects, starting with the data platform team's project on self-managed ClickHouse, whose CI is GitHub Actions. Until then the check only knew the bundled project: it loaded the toolkit's settings, found the manifest through the demo's dbt project, read the registry from the toolkit's `config/`, and wrote its result into the demo's DuckDB.
 
 Three things had to be settled. Where the company's registry lives, given that this toolkit's repository is public. How the check gets a manifest for a project on an adapter the toolkit does not ship. And how a required check gets switched on in a repository where most models have no owner yet, without the team switching it off again the same week.
 

@@ -1,4 +1,4 @@
-# 0003: Source freshness is measured on simulated time
+# 0002: Source freshness is measured on simulated time
 
 Status: accepted
 Date: 2026-09-23

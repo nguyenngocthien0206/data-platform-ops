@@ -11,7 +11,7 @@ Rules match unique ids, which carry no folder, so a folder becomes the longest
 name prefix its models share that matches no model outside it. When there is
 no such prefix the folder's models get one exact rule each. Every dataset ends
 up with exactly one matching rule and no two rules tie, so the check can only
-ever report the TODOs, never ambiguity (ADR 0002).
+ever report the TODOs, never ambiguity (ADR 0001).
 """
 
 from __future__ import annotations
@@ -127,7 +127,7 @@ def render_ownership(rules: list[StarterRule], root_project: str) -> str:
         f"# Starter ownership registry for {root_project}, written by",
         "# `platform-ops metadata init-registry`. Replace every TODO with an owner and",
         "# the id of a team in teams.yaml, and split a rule when a group has more than",
-        "# one owner: the most specific matching rule wins (ADR 0002). Run",
+        "# one owner: the most specific matching rule wins (ADR 0001). Run",
         "# `platform-ops metadata check --report-only` to see what is left.",
         "datasets:",
     ]

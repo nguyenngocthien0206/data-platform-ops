@@ -1,4 +1,4 @@
-# 0006: Pluggable pricing, and charging each query exactly once
+# 0004: Pluggable pricing, and charging each query exactly once
 
 Status: accepted
 Date: 2026-09-23
@@ -28,4 +28,4 @@ A real vendor bill can replace either model. An adapter that returns `PricedQuer
 
 ## Later note (version 2.0, Phase 13)
 
-Both pricing models stay, priced on bytes ClickHouse measured. A third sits beside them: the self-managed cluster's stated monthly cost, shared out by bytes read and table size ([ADR 0018](0018-finops-on-a-self-managed-clickhouse.md)). Attribution keeps its rule and gains three kinds of work: the ingestion and the nightly merge of raw are production cost for the source's owner, and the parallel run's reconciliation is migration cost for the platform team. Money is still `Decimal`; the sums are now done in Python and checked against the stated cost.
+Both pricing models stay, priced on bytes ClickHouse measured. A third sits beside them: the self-managed cluster's stated monthly cost, shared out by bytes read and table size ([ADR 0015](0015-finops-on-a-self-managed-clickhouse.md)). Attribution keeps its rule and gains three kinds of work: the ingestion and the nightly merge of raw are production cost for the source's owner, and the parallel run's reconciliation is migration cost for the platform team. Money is still `Decimal`; the sums are now done in Python and checked against the stated cost.

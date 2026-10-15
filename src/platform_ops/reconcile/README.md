@@ -1,6 +1,6 @@
 # reconcile
 
-Before a legacy system is switched off, someone who owns the data has to sign that the new one holds what the old one held, and keeps holding it. In version 2.0 the company migrates its reporting from a legacy Postgres to ClickHouse, and the last six weeks of its window are the **parallel run**: both systems run, dbt builds every night, and every night this module compares them. The result is `reports/reconciliation.md`, a sign-off that states its acceptance criteria before any number, then the night the cutover can be recommended, and why ([ADR 0017](../../../docs/adr/0017-the-parallel-run-and-the-cutover-rule.md)).
+Before a legacy system is switched off, someone who owns the data has to sign that the new one holds what the old one held, and keeps holding it. In version 2.0 the company migrates its reporting from a legacy Postgres to ClickHouse, and the last six weeks of its window are the **parallel run**: both systems run, dbt builds every night, and every night this module compares them. The result is `reports/reconciliation.md`, a sign-off that states its acceptance criteria before any number, then the night the cutover can be recommended, and why ([ADR 0014](../../../docs/adr/0014-the-parallel-run-and-the-cutover-rule.md)).
 
 ## How it fits together
 
@@ -23,7 +23,7 @@ Nothing in the diff reads the ground truth. Only the grading does, the same spli
 
 **Two levels, and the second one is the one the business signs.** The operational tables say whether the copy is right. The reports say whether the new dashboards show what the old reports showed. A report difference is explained when a table its mart is built from differs the same night (dbt lineage); a difference with no upstream cause is a logic difference between the legacy SQL and the dbt model, and blocks a clean night. Two were found before any defect was planted, while the comparison was being built: a ratio that ClickHouse truncated where Postgres rounded, and a return on ad spend of 0 where the legacy report said "none". The marts now follow the legacy reports, because changing a definition is a decision for after cutover, not a side effect of the migration.
 
-**One canonical string per value, in every engine.** A checksum diff only works if two engines hash the same data the same way, and they disagree on almost everything: decimal padding, boolean spelling, time formats, `NULL` in a condition. Every value is rendered first (decimals at fixed scale, timestamps as UTC with microseconds, a NULL sentinel that never equals an empty string) and each row is hashed as MD5 of its UTF-8 bytes, summed per segment as two 32-bit halves. A golden-row test holds Python, Postgres and ClickHouse to byte-identical output (ADR 0009).
+**One canonical string per value, in every engine.** A checksum diff only works if two engines hash the same data the same way, and they disagree on almost everything: decimal padding, boolean spelling, time formats, `NULL` in a condition. Every value is rendered first (decimals at fixed scale, timestamps as UTC with microseconds, a NULL sentinel that never equals an empty string) and each row is hashed as MD5 of its UTF-8 bytes, summed per segment as two 32-bit halves. A golden-row test holds Python, Postgres and ClickHouse to byte-identical output (ADR 0006).
 
 **Equality is a policy the data owner signs.** Whether trailing spaces or letter case count as differences is not a technical question. The rules live in `settings.yaml` per column, both sides use them, and the report prints them.
 
@@ -111,7 +111,7 @@ for spec in specs:
   3. The equality policy, agreed with the data owner before the first night.
   4. The cutover rule, written down before the run starts, so nobody negotiates it on the night.
 - **Traps we hit:**
-  - **Two engines rarely agree on a value's text:** decimal padding, boolean spelling, time zones, `NULL` in a condition. Everything is rendered to one canonical string first, and a golden-row test holds Python, Postgres and ClickHouse to byte-identical output (ADR 0009).
+  - **Two engines rarely agree on a value's text:** decimal padding, boolean spelling, time zones, `NULL` in a condition. Everything is rendered to one canonical string first, and a golden-row test holds Python, Postgres and ClickHouse to byte-identical output (ADR 0006).
   - **ClickHouse's `avg` rounds a half to even** where Postgres rounds away from zero, and a ratio cast to a smaller scale truncates. Both showed up as report differences before any fault was planted, so compare the reports early, not only the tables.
   - **Raw in ClickHouse is read with `FINAL`,** or a row changed in place is counted twice.
   - **A report difference with no upstream cause is a logic difference** between the old SQL and the new model. It should block a clean night: it is the one a finance user finds after cutover.

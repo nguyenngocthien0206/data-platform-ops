@@ -1,4 +1,4 @@
-# 0016: One ClickHouse user per team, and the BI built from the dbt exposures
+# 0013: One ClickHouse user per team, and the BI built from the dbt exposures
 
 Status: accepted
 Date: 2026-10-13
@@ -11,7 +11,7 @@ The owner chose Metabase as the company's BI, a self-hosted tool a team of this 
 
 ## Decision
 
-- **Eight users, all namespaced like the databases:** one per team in `config/teams.yaml` (`platform`, `sales`, `marketing`, `finance`, `product`), plus `metabase`, `dbt` and `loader` (`simulation/access.py`). The business teams and Metabase read the marts and the reference data; the platform team reads every layer, because it owns them and debugs them; `dbt` reads raw and owns the databases it builds; `loader` may only insert into raw and read Postgres. People and BI use a `reader` settings profile (`readonly = 2`), the pipelines a `writer` profile, both with the session settings of ADR 0015.
+- **Eight users, all namespaced like the databases:** one per team in `config/teams.yaml` (`platform`, `sales`, `marketing`, `finance`, `product`), plus `metabase`, `dbt` and `loader` (`simulation/access.py`). The business teams and Metabase read the marts and the reference data; the platform team reads every layer, because it owns them and debugs them; `dbt` reads raw and owns the databases it builds; `loader` may only insert into raw and read Postgres. People and BI use a `reader` settings profile (`readonly = 2`), the pipelines a `writer` profile, both with the session settings of ADR 0012.
 - **Least privilege, found by running, not guessed.** dbt also needs `SELECT ON system.parts`, because dbt-clickhouse's `insert_overwrite` finds the partitions to replace there. Metabase's ClickHouse driver looks each of its queries up in `system.processes`; it gets that grant with a row policy limiting it to its own queries, since otherwise the BI tool could read the text of every user's running query.
 - **One password variable per user** (`CLICKHOUSE_PASSWORD_<USER>`), with no default. A missing one stops `seed`, `build` and `company run` with exit code 2 before anything is written, naming every missing variable. The admin account creates the users and reads what the toolkit measures, and runs nothing for the company.
 - **Metabase behind a Compose profile**, pinned to `metabase/metabase:v0.63.19.6` (its ClickHouse driver is bundled since version 54), with its own state in a `metabase` database on the Postgres server and a 1 GB heap.
@@ -29,6 +29,6 @@ Metabase stays out of `make demo`, `make test` and pull request CI. Its image is
 
 ## Later notes
 
-Version 2.0, Phase 13: the cost report suggests per-user quotas from the measured load (`reports/cost.md`, ADR 0018); none are applied. The `writer` profile also writes one part per partition, as dbt does, so measured reads repeat.
+Version 2.0, Phase 13: the cost report suggests per-user quotas from the measured load (`reports/cost.md`, ADR 0015); none are applied. The `writer` profile also writes one part per partition, as dbt does, so measured reads repeat.
 
 Version 2.0, Phase 13b: the same rule reaches the toolkit's own store. The Streamlit dashboards read the Postgres ops store as `dashboard`, a role with `SELECT` on the ops schema and nothing else, read-only by default, its password from `POSTGRES_PASSWORD_DASHBOARD` with no default. `make demo` creates it before it writes anything, next to the ClickHouse users.

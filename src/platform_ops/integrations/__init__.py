@@ -1,6 +1,6 @@
 """Hooks for the orchestrators that run dbt: hand each invocation to the incident desk.
 
-Standard library only, and no import of Airflow or Dagster (Phase 14b, ADR 0020).
+Standard library only, and no import of Airflow or Dagster (Phase 14b, ADR 0017).
 An orchestrator calls these with what it already has: where dbt wrote its
 artifacts, and the id of the scheduled run they belong to. They run
 ``platform-ops incidents ingest`` from the toolkit's own environment, so the

@@ -1,7 +1,7 @@
 """End to end through a real orchestrator: one fault, one incident, one page, resolved.
 
 Run by ``make docker-test-orchestrators`` in the toolkit container, next to the
-orchestrator's stack and the chat double (Phase 14b, ADR 0020). On the
+orchestrator's stack and the chat double (Phase 14b, ADR 0017). On the
 orchestrator's own company (namespace ``af_`` for Airflow, ``dg_`` for
 Dagster), from scratch:
 

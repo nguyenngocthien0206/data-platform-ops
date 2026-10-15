@@ -8,7 +8,7 @@
   simulated clock, passed in by platform-ops as the `simulated_now` var.
 
   There is no fallback to the wall clock on purpose. A missing var fails loudly
-  rather than producing alerts nobody should trust. See ADR 0003.
+  rather than producing alerts nobody should trust. See ADR 0002.
 #}
 {% macro clickhouse__collect_freshness(source, loaded_at_field, filter) %}
   {%- set simulated_now = var('simulated_now', none) -%}

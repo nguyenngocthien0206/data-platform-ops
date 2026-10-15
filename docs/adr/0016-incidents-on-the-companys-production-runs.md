@@ -1,17 +1,17 @@
-# 0019: Incidents on the company's own production runs, from a store any run can feed
+# 0016: Incidents on the company's own production runs, from a store any run can feed
 
 Status: accepted
 Date: 2026-10-14
 
 ## Context
 
-In 1.x the incident module ran its own 21-day scenario on DuckDB: a fresh seed, faults injected into raw data, dbt run only on the nights a fault was active and only on the part of the graph it reached, and incidents kept in memory and written at the end. That proved the grouping, severity and routing rules (ADR 0008), but it was not how a team meets incidents. A real team does not know which nights will fail, runs its whole schedule every night, receives dbt's results one invocation at a time from an orchestrator, and needs the incidents to survive between runs.
+In 1.x the incident module ran its own 21-day scenario on DuckDB: a fresh seed, faults injected into raw data, dbt run only on the nights a fault was active and only on the part of the graph it reached, and incidents kept in memory and written at the end. That proved the grouping, severity and routing rules (ADR 0005), but it was not how a team meets incidents. A real team does not know which nights will fail, runs its whole schedule every night, receives dbt's results one invocation at a time from an orchestrator, and needs the incidents to survive between runs.
 
 Version 2.0 has a company with a history: seven weeks before the migration, a six-week parallel run, and a cutover. Phase 14 had to decide where incidents happen in it, and how the toolkit receives dbt's results. The owner chose to put them after the cutover, inside the company's own timeline, accepting a longer demo and a longer cost window, rather than a separate scenario with a second history of the same company. The owner also split the phase: the core here (14a), and the real orchestrators in Docker next (14b).
 
 ## Decision
 
-- **Three weeks of production after the parallel run** (`company.production_weeks`). The window grows to 16 weeks. Every production night runs `dbt source freshness`, `dbt run`, `dbt snapshot` and `dbt test`, as separate invocations so bad data flows downstream and the alert storm is real (ADR 0008). A failing check is recorded, not fatal. The project is parsed once for the production weeks and the parse is reused, since freshness reads the simulated time when it runs.
+- **Three weeks of production after the parallel run** (`company.production_weeks`). The window grows to 16 weeks. Every production night runs `dbt source freshness`, `dbt run`, `dbt snapshot` and `dbt test`, as separate invocations so bad data flows downstream and the alert storm is real (ADR 0005). A failing check is recorded, not fatal. The project is parsed once for the production weeks and the parse is reused, since freshness reads the simulated time when it runs.
 - **Faults happen in operation.** Eight faults on four days, two a day on different tables, planted in ClickHouse's raw layer after the day's work and before the next night's load. Each aims at a check the project already has. `ReplacingMergeTree` deduplicates raw by key, so 1.x's duplicate keys cannot happen; orphan payments, which point at no order, take their place, a failure an engine without enforced foreign keys makes common. A stale feed and a changed raw table stop the loader for that table, so its watermark waits and the first load after the fix catches up.
 - **The fix is a resync.** Postgres is the source of truth, so an owner's fix replaces the faulted raw table with a full reload from it. The fix lands at a time the lifecycle models (acknowledgement and fix delays per severity, slower when the owner is busy). It covers every faulted source upstream of the incident's root.
 - **Resolution is observed, not scheduled.** An incident resolves when a later run covers its root and finds it healthy: the model ran and every test on it that ran passed (at least one must have run, if it has tests), or the source is fresh again. A run that did not cover the root resolves nothing. MTTR is therefore the owner's fix plus the wait for the next run, as it is in production.

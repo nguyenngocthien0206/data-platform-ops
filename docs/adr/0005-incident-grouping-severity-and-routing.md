@@ -1,4 +1,4 @@
-# 0008: Incident grouping, severity and routing
+# 0005: Incident grouping, severity and routing
 
 Status: accepted
 Date: 2026-09-24
@@ -34,7 +34,7 @@ Two more choices keep the scenario inside its share of the 10-minute demo. The p
 
 ## Consequences
 
-Every injected fault maps to exactly one incident, and the report shows how many raw alerts that replaced. Because the platform team owns every source, staging and intermediate model, every incident in the scenario pages a platform engineer. That is the concentration ADR 0002 predicted, and the lifecycle model turns it into a number: an owner with open incidents is slower on the next one.
+Every injected fault maps to exactly one incident, and the report shows how many raw alerts that replaced. Because the platform team owns every source, staging and intermediate model, every incident in the scenario pages a platform engineer. That is the concentration ADR 0001 predicted, and the lifecycle model turns it into a number: an owner with open incidents is slower on the next one.
 
 The grouping is per run. Two unrelated faults that happen to fail the same downstream model in the same run attach that model to one of them by the tie-break, not to both. The root-cause answer is still right for each fault; only the impact list of one incident is shorter than it could be.
 
@@ -44,6 +44,6 @@ Running only on fault nights means a check that would fail on a green night is n
 
 ## Later notes
 
-Version 2.0, Phase 14: the rules stand (one incident per root by lineage, staging roots page the source owner, severity from tier and reach, separate run and test), and the scenario around them is replaced ([ADR 0019](0019-incidents-on-the-companys-production-runs.md)). Incidents now happen in the company's production weeks, where dbt runs the whole schedule every night, so the targeted runs and the fault-night-only schedule are gone. Resolution is observed by a later run instead of scheduled, the incidents live in a versioned Postgres store, and a run is regrouped across its invocations on every ingest.
+Version 2.0, Phase 14: the rules stand (one incident per root by lineage, staging roots page the source owner, severity from tier and reach, separate run and test), and the scenario around them is replaced ([ADR 0016](0016-incidents-on-the-companys-production-runs.md)). Incidents now happen in the company's production weeks, where dbt runs the whole schedule every night, so the targeted runs and the fault-night-only schedule are gone. Resolution is observed by a later run instead of scheduled, the incidents live in a versioned Postgres store, and a run is regrouped across its invocations on every ingest.
 
 The 10-minute budget mentioned above was lifted before Phase 7. The parse reuse and the fault pairing were reviewed after Phase 7 and kept: reusing the parse costs nothing in what the scenario shows, and spreading the faults out would move every incident figure for no gain in what the grouping proves.

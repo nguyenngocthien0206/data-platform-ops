@@ -36,7 +36,7 @@ The rule for the phase was no behaviour change: `make demo` had to write the sam
 | 19 | repository | tooling | `core.autocrlf=true` turns LF-generated files into CRLF on checkout, so regenerated fixtures show phantom diffs. | Deferred to Phase 7: a `.gitattributes` with `eol=lf`. |
 | 20 | environment | tooling | Windows Smart App Control, now enforcing on the development laptop, started blocking DuckDB 1.5.5 and uv's `pytest.exe` launcher. Blocking varied by file and over time (DuckDB 1.5.0 and 1.4.1 loaded, 1.5.5 and 1.4.4 did not). | Resolved by the owner, who switched Smart App Control off. The pandas and pyarrow caps added for it are revisited in Phase 7. |
 | 21 | `make demo` | performance | The baseline `make demo` took 10 min 34 s on the development laptop, over the 10-minute budget; the verification run after the changes took 7 min 57 s. Phase 5 measured 6 min 54 s and 9 min 1 s. The spread comes from machine state, not from the code. | Deferred to Phase 7, whose scope includes restoring and measuring the margin. |
-| 22 | tests | coverage | The SQL Server paths (about a third of `reconcile/connectors.py`) run only where the optional driver and the Compose profile are available. | Accepted: SQL Server is optional by design (ADR 0001); the golden-row and end-to-end tests cover it where it runs. |
+| 22 | tests | coverage | The SQL Server paths (about a third of `reconcile/connectors.py`) run only where the optional driver and the Compose profile are available. | Accepted: SQL Server is optional by design (a 1.x ADR, retired in 2.0); the golden-row and end-to-end tests cover it where it runs. |
 
 ## Before and after
 
@@ -55,4 +55,4 @@ The 5-minute target for `make test` was not reached. The remaining time is domin
 
 ## Follow-up
 
-The findings deferred to Phase 7 were closed there. Finding 19: `.gitattributes` with `eol=lf` stores and checks out every text file with LF. Finding 20: the pandas and pyarrow caps were lifted once Smart App Control was off and the reports stayed byte-identical, and mypy's source build followed in Phase 8. Finding 21: the time budget was lifted by the owner; measured times are recorded in `docs/PROGRESS.md` instead (ADR 0012).
+The findings deferred to Phase 7 were closed there. Finding 19: `.gitattributes` with `eol=lf` stores and checks out every text file with LF. Finding 20: the pandas and pyarrow caps were lifted once Smart App Control was off and the reports stayed byte-identical, and mypy's source build followed in Phase 8. Finding 21: the time budget was lifted by the owner; measured times are recorded in `docs/PROGRESS.md` instead (ADR 0009).

@@ -1,11 +1,11 @@
-# 0011: Module boundaries pinned by a test, and a review before the release
+# 0008: Module boundaries pinned by a test, and a review before the release
 
 Status: accepted
 Date: 2026-09-28
 
 ## Context
 
-Phases 0 to 5 were built one after another, each under the time budget of its day. That left the usual residue: the incidents and reconcile reports borrowed the cost module's Markdown table helper, `simulation` and `reconcile` imported each other, a determinism primitive lived inside the workload generator, and the same "replace an `ops` table" and "write a throwaway config" code existed in several places. None of it was wrong on its own. Together it meant the three modules, which the design says are independent (ADR 0010), were quietly coupled, so a team taking over one module would inherit parts of the other two.
+Phases 0 to 5 were built one after another, each under the time budget of its day. That left the usual residue: the incidents and reconcile reports borrowed the cost module's Markdown table helper, `simulation` and `reconcile` imported each other, a determinism primitive lived inside the workload generator, and the same "replace an `ops` table" and "write a throwaway config" code existed in several places. None of it was wrong on its own. Together it meant the three modules, which the design says are independent (ADR 0007), were quietly coupled, so a team taking over one module would inherit parts of the other two.
 
 A release is the moment that matters, because after it the code has readers who did not write it.
 

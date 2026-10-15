@@ -15,7 +15,7 @@ Outside the parallel run the build cadence is a setting (`company.build_every_da
 
 ## Raw data and the legacy Postgres (`raw_data.py`, `legacy_db.py`)
 
-The generator writes nine operational tables: customers, products, orders, order items, payments, web sessions, marketing campaigns, marketing spend and support tickets. Every value comes from a hash of the seed, table, row id and column, generated with SQL inside a scratch DuckDB and inserted in primary-key order, so two runs produce the same rows ([ADR 0004](../../../docs/adr/0004-deterministic-data-generation.md)). DuckDB is only the generator's engine; `legacy_db.py` copies each table into the `app` schema of the legacy Postgres with `COPY`, with a primary key per table and an `updated_at` column that the ingestion reads.
+The generator writes nine operational tables: customers, products, orders, order items, payments, web sessions, marketing campaigns, marketing spend and support tickets. Every value comes from a hash of the seed, table, row id and column, generated with SQL inside a scratch DuckDB and inserted in primary-key order, so two runs produce the same rows ([ADR 0003](../../../docs/adr/0003-deterministic-data-generation.md)). DuckDB is only the generator's engine; `legacy_db.py` copies each table into the `app` schema of the legacy Postgres with `COPY`, with a primary key per table and an `updated_at` column that the ingestion reads.
 
 The data is deliberately messy, because the metadata, cost and incident tooling is only worth building if it has real problems to find. Some customers register twice with the same email in a different case or with stray whitespace, so staging has to fold them before any per-customer number is right. About 5% of payments are written one to five days after they happened, which is why finance reconciliation distinguishes a missing payment from a late one. Phones, referral sources and most session user ids are nullable.
 
@@ -60,7 +60,7 @@ In the demo at scale 1.0, the ingestion moved 15,521,421 rows into ClickHouse fo
 
 ## Users (`access.py`)
 
-Nobody queries ClickHouse as an admin. There is one user per team in `config/teams.yaml`, plus `metabase`, `dbt` and `loader`, all created again at the start of every run with their grants ([ADR 0016](../../../docs/adr/0016-users-per-team-and-bi-from-exposures.md)):
+Nobody queries ClickHouse as an admin. There is one user per team in `config/teams.yaml`, plus `metabase`, `dbt` and `loader`, all created again at the start of every run with their grants ([ADR 0013](../../../docs/adr/0013-users-per-team-and-bi-from-exposures.md)):
 
 | User | May | Profile |
 |---|---|---|
@@ -99,7 +99,7 @@ Every simulated day, after the build, the company reads its data the way people 
 - **Metabase refreshes every dashboard** on its own schedule, every 12 hours for a `high` maturity exposure and every 24 otherwise, staggered after the 02:00 run. Each refresh runs exactly the cards `bi.py` generates for that dashboard, as the `metabase` user.
 - **A few people run ad hoc SQL** during office hours, as their team's user, from a careful aggregate to `SELECT *` on the largest fact. The business teams read the marts; the platform team reads every layer, raw included.
 
-Every query carries a tag through ClickHouse's `log_comment` setting: the run, the simulated time, the kind of work, what it was about and, for ad hoc SQL, who typed it. dbt, the ingestion, the nightly merge and the reconciliation carry the same tag (`common/tagging.py`), so the cost module reads who ran what from ClickHouse's own query log ([ADR 0018](../../../docs/adr/0018-finops-on-a-self-managed-clickhouse.md)). Rows are discarded on the server (`FORMAT Null`): what a query costs is what it reads, not what a client fetches.
+Every query carries a tag through ClickHouse's `log_comment` setting: the run, the simulated time, the kind of work, what it was about and, for ad hoc SQL, who typed it. dbt, the ingestion, the nightly merge and the reconciliation carry the same tag (`common/tagging.py`), so the cost module reads who ran what from ClickHouse's own query log ([ADR 0015](../../../docs/adr/0015-finops-on-a-self-managed-clickhouse.md)). Rows are discarded on the server (`FORMAT Null`): what a query costs is what it reads, not what a client fetches.
 
 Two runs send the same queries and ClickHouse measures the same reads, which took two things. Everything that looks random comes from the seed through a stable hash. And the raw layer is merged every night: a `FINAL` read of a `ReplacingMergeTree` reads whatever parts the background merges have reached, so before the nightly merge the same query read a different number of bytes on each run. Workload queries also run on one thread, so a `LIMIT` stops after the same rows every time.
 

@@ -6,7 +6,7 @@ The shared layer every other module reasons about: who owns each dataset, and ho
 
 `config/teams.yaml` lists five teams and their members: the four business teams (sales, marketing, finance, product) and a data platform team. `config/ownership.yaml` maps glob patterns on dbt unique ids to an owner, a team and a tier (`critical`, `important` or `best_effort`). It is CODEOWNERS for data.
 
-When several rules match, the most specific one wins: the most literal characters, then the fewest wildcards. Two rules that tie are an error, never a coin toss decided by line order, because a reorder in a pull request should not be able to hand a critical dataset to a different on-call rotation. The full rule and the reasoning behind the platform team are in [ADR 0002](../../../docs/adr/0002-ownership-resolution-and-platform-team.md).
+When several rules match, the most specific one wins: the most literal characters, then the fewest wildcards. Two rules that tie are an error, never a coin toss decided by line order, because a reorder in a pull request should not be able to hand a critical dataset to a different on-call rotation. The full rule and the reasoning behind the platform team are in [ADR 0001](../../../docs/adr/0001-ownership-resolution-and-platform-team.md).
 
 `platform-ops metadata check` fails when any source, seed, snapshot, model or exposure has no owner, when ownership is ambiguous, when a rule names an unknown team or an owner who is not on that team, or when a dashboard's owner in dbt disagrees with the registry. It warns about rules that match nothing. Every finding says which file to change and how, for example a ready-to-paste rule for an unowned model. On success it writes the resolved owner of every dataset to `ops.node_ownership`, so later modules join on ownership in SQL. With `--parse` it builds the dbt manifest first, which needs no data, so the check runs in CI.
 
@@ -23,7 +23,7 @@ The steps below take a repository from nothing to a required check.
 
 ### On your dbt repository
 
-The same check guards any dbt project, on any adapter, without touching a warehouse ([ADR 0014](../../../docs/adr/0014-the-ownership-gate-in-the-consuming-repository.md)). The repository keeps its own registry next to the project, conventionally in an `ownership/` folder with `teams.yaml` and `ownership.yaml`; names, channels and chats of the company never enter this toolkit's repository. Its CI runs `dbt parse`, which needs the adapter but no connection, and hands the manifest to the toolkit's image:
+The same check guards any dbt project, on any adapter, without touching a warehouse ([ADR 0011](../../../docs/adr/0011-the-ownership-gate-in-the-consuming-repository.md)). The repository keeps its own registry next to the project, conventionally in an `ownership/` folder with `teams.yaml` and `ownership.yaml`; names, channels and chats of the company never enter this toolkit's repository. Its CI runs `dbt parse`, which needs the adapter but no connection, and hands the manifest to the toolkit's image:
 
 ```bash
 platform-ops metadata check \

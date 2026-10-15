@@ -1,6 +1,6 @@
 # orchestrators
 
-How a scheduler that runs dbt hands each run to the incident desk ([ADR 0020](../docs/adr/0020-orchestrators-call-the-toolkit.md)). The company the toolkit is built for runs dbt with Airflow through Cosmos and with Dagster through dagster-dbt. Phase 14b brings both up for real, in Docker, each on a company of its own: [Airflow with Cosmos](#airflow-with-cosmos) and [Dagster with dagster-dbt](#dagster-with-dagster-dbt), tested [end to end](#tested-end-to-end) before every release.
+How a scheduler that runs dbt hands each run to the incident desk ([ADR 0017](../docs/adr/0017-orchestrators-call-the-toolkit.md)). The company the toolkit is built for runs dbt with Airflow through Cosmos and with Dagster through dagster-dbt. Phase 14b brings both up for real, in Docker, each on a company of its own: [Airflow with Cosmos](#airflow-with-cosmos) and [Dagster with dagster-dbt](#dagster-with-dagster-dbt), tested [end to end](#tested-end-to-end) before every release.
 
 ## The contract
 

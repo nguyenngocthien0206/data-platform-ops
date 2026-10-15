@@ -1,11 +1,11 @@
-# 0013: CI and release from the same container, the tag pushed by a person
+# 0010: CI and release from the same container, the tag pushed by a person
 
 Status: accepted
 Date: 2026-09-29
 
 ## Context
 
-Before Phase 8, CI ran natively with uv and without Docker, so every Postgres test skipped there and CI checked a different environment from the one people now ran (ADR 0012). There was no release: no version anyone could name, no image anyone could pull. For a toolkit that other teams are meant to adopt, both matter. A team deciding whether to depend on it needs to know that what passed CI is what they will run, and which version they are on when they report a problem.
+Before Phase 8, CI ran natively with uv and without Docker, so every Postgres test skipped there and CI checked a different environment from the one people now ran (ADR 0009). There was no release: no version anyone could name, no image anyone could pull. For a toolkit that other teams are meant to adopt, both matter. A team deciding whether to depend on it needs to know that what passed CI is what they will run, and which version they are on when they report a problem.
 
 ## Decision
 

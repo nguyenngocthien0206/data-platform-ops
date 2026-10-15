@@ -1,4 +1,4 @@
-# 0009: Cross-engine hashing and canonicalization
+# 0006: Cross-engine hashing and canonicalization
 
 Status: accepted
 Date: 2026-09-24
@@ -39,4 +39,4 @@ MD5 over row strings is not collision-free in principle, but a collision would h
 
 ## Later note (version 2.0, Phase 12)
 
-The engines are now Postgres and ClickHouse; SQL Server and DuckDB left with 1.x. ClickHouse renders every value byte-identically to Python and Postgres, proven by the golden-row test, which on its first run caught one trap: ClickHouse's `if()` reads a NULL condition as false, so a NULL boolean rendered as `false` until the renderer checked for NULL first. Decimals use `toDecimalString`, because `toString` drops trailing zeros, and a `FixedString` loses its zero-byte padding before rendering. The `local_ts` kind is gone: the company stores its timestamps as UTC instants, and the time zone defect now lives in the migration job, where real ones do. Segments are no longer key ranges but buckets of the MD5 of the canonical key, so dates and composite keys segment like integers (ADR 0017).
+The engines are now Postgres and ClickHouse; SQL Server and DuckDB left with 1.x. ClickHouse renders every value byte-identically to Python and Postgres, proven by the golden-row test, which on its first run caught one trap: ClickHouse's `if()` reads a NULL condition as false, so a NULL boolean rendered as `false` until the renderer checked for NULL first. Decimals use `toDecimalString`, because `toString` drops trailing zeros, and a `FixedString` loses its zero-byte padding before rendering. The `local_ts` kind is gone: the company stores its timestamps as UTC instants, and the time zone defect now lives in the migration job, where real ones do. Segments are no longer key ranges but buckets of the MD5 of the canonical key, so dates and composite keys segment like integers (ADR 0014).

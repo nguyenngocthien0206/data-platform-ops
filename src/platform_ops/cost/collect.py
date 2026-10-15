@@ -2,7 +2,7 @@
 
 Collection is kept apart from pricing. A collector only produces
 :class:`QueryRecord` rows; pricing and attribution never care where a record
-came from (ADR 0006). The company's own collector reads ClickHouse's query log
+came from (ADR 0004). The company's own collector reads ClickHouse's query log
 (:func:`clickhouse_records`): every query its run tagged (``common.tagging``),
 with the rows and bytes ClickHouse measured. The BigQuery and Snowflake
 collectors in :mod:`platform_ops.cost.collectors` implement the same

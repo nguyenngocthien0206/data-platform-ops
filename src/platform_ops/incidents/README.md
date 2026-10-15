@@ -1,6 +1,6 @@
 # incidents
 
-When one bad raw table fails a dozen checks, who gets woken up, and how many times? The company's last three weeks are production on ClickHouse, after the migration's parallel run. Every night runs dbt's source freshness, run, snapshot and test, and things go wrong the way they do in production: eight faults in operation, from a loader writing NULLs to a feed that stops. The incident desk ingests every invocation as it finishes and turns the failing checks into incidents: one per real problem, scored by how much of the business it reaches, paged to the person who can fix it, and resolved on its own once a later run finds the root healthy ([ADR 0019](../../../docs/adr/0019-incidents-on-the-companys-production-runs.md)).
+When one bad raw table fails a dozen checks, who gets woken up, and how many times? The company's last three weeks are production on ClickHouse, after the migration's parallel run. Every night runs dbt's source freshness, run, snapshot and test, and things go wrong the way they do in production: eight faults in operation, from a loader writing NULLs to a feed that stops. The incident desk ingests every invocation as it finishes and turns the failing checks into incidents: one per real problem, scored by how much of the business it reaches, paged to the person who can fix it, and resolved on its own once a later run finds the root healthy ([ADR 0016](../../../docs/adr/0016-incidents-on-the-companys-production-runs.md)).
 
 ```bash
 make demo                 # the company's 16 weeks, the production weeks included
@@ -29,7 +29,7 @@ The incident tables live in the Postgres ops store, versioned (`store.py`), and 
 
 ## The decisions that shape the numbers
 
-**`dbt run` then `dbt test`, not `dbt build`.** `dbt build` skips everything below a failed test, so the downstream checks that make up an alert storm would never run. Separate invocations let bad data flow downstream as it does in production, and the grouping has something real to group ([ADR 0008](../../../docs/adr/0008-incident-grouping-severity-and-routing.md)).
+**`dbt run` then `dbt test`, not `dbt build`.** `dbt build` skips everything below a failed test, so the downstream checks that make up an alert storm would never run. Separate invocations let bad data flow downstream as it does in production, and the grouping has something real to group ([ADR 0005](../../../docs/adr/0005-incident-grouping-severity-and-routing.md)).
 
 **One incident per root, across invocations.** A failed node whose ancestors are all healthy is a root, and every other failure belongs to the root above it. A run is every invocation that shares its run id, regrouped on every ingest, so a run split one invocation per model (as Cosmos runs it) gives the same incidents as one build, whatever order the pieces arrive in. When a later invocation shows an earlier root was not the real one, its incident is merged into the real root's.
 

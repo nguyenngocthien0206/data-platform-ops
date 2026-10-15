@@ -29,7 +29,7 @@ The ownership check leaves the demo: it now guards any company dbt project from 
 - **A GitHub Actions example** for a company dbt repository (`examples/github-actions/ownership-check.yml`): `dbt parse` with a parse-only profile, then the check from the public image.
 - **ClickHouse.** A `clickhouse` Compose profile, a `dbt-clickhouse` extra, and a fixture dbt project on ClickHouse (`tests/fixtures/dbt_clickhouse`) that the tests parse and build for real. CI runs the tests with Postgres and ClickHouse.
 - **`telegram_chat` per team** in `teams.yaml`, optional, next to the Slack `channel`.
-- ADR 0014: the ownership gate runs in the consuming repository, on its manifest.
+- ADR 0011: the ownership gate runs in the consuming repository, on its manifest.
 
 ### Changed
 
@@ -52,7 +52,7 @@ The first release: a local-first toolkit for operating a multi-team data platfor
 - **Container.** A `Dockerfile` and Compose services for the toolkit, the dashboards and a headless Chromium check of every dashboard page, with `docker-*` make targets that run the demo, the tests, lint and the README check inside the container. `TOOLKIT_IMAGE` runs a published image instead of the local build.
 - **CI and release.** Lint, type check, tests and the ownership check on every pull request and push to `main`, in the container with Postgres; an on-demand job that runs the tests against SQL Server too; and, on a version tag, the image published to GitHub Container Registry and a GitHub Release with these notes.
 - **Checks on the documentation.** `make readme-check` confirms that every number in the READMEs' results sections appears in the generated reports.
-- **Architecture decision records** 0001 to 0010.
+- **Architecture decision records**, ten of them (three were retired in 2.0 and the rest renumbered).
 
 ### Changed
 

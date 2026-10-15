@@ -142,7 +142,7 @@ services:
       retries: 12
 
   # The company's dbt project scheduled by Airflow 3 through Cosmos (Phase 14b,
-  # ADR 0020), as its own company in the af_ namespace, so nothing it does
+  # ADR 0017), as its own company in the af_ namespace, so nothing it does
   # touches `make demo`. Its own image: Airflow's environment and the toolkit's
   # never share packages. The container gets only what it uses, not .env: the
   # Postgres login for its metadata database (`airflow`) and the incident store,

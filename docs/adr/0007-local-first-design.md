@@ -1,4 +1,4 @@
-# 0010: Local first, with every external system behind a small interface
+# 0007: Local first, with every external system behind a small interface
 
 Status: accepted
 Date: 2026-09-25
@@ -14,10 +14,10 @@ There is an operational side too. A platform team that can reproduce an incident
 Everything runs on one laptop, offline after `make setup`, from one command:
 
 - **The warehouse is a DuckDB file**, transformed by dbt through `dbt-duckdb`, around 120 models of a simulated company.
-- **Legacy sources are Docker containers**: Postgres by default, SQL Server behind a Compose profile (ADR 0001).
+- **Legacy sources are Docker containers**: Postgres by default, SQL Server behind a Compose profile.
 - **The lakehouse is Iceberg** through PyIceberg, with a SQLite catalog and a local directory as the warehouse.
 - **Time is simulated** (`common.clock`), so thirteen weeks of workload or three weeks of incidents take minutes.
-- **Anything random comes from a fixed seed** through a stable hash (ADR 0004), so two runs of `make demo` write the same reports.
+- **Anything random comes from a fixed seed** through a stable hash (ADR 0003), so two runs of `make demo` write the same reports.
 - **Nothing phones home.** dbt's anonymous usage stats and Streamlit's usage stats are both switched off in the repo's config.
 
 Each place where a real deployment would talk to an outside system sits behind a small interface with a local default:
@@ -25,9 +25,9 @@ Each place where a real deployment would talk to an outside system sits behind a
 | Interface | Local default | What a real deployment plugs in |
 |---|---|---|
 | `QueryCollector` (`cost/collect.py`) | `LoggedConnection` and the dbt run reader | `BigQueryJobsCollector`, `SnowflakeQueryHistoryCollector` over the vendor's query history |
-| `PricingModel` (`cost/pricing.py`) | `ScanPricing`, `ComputePricing` on logical bytes and modelled time (ADR 0005, 0006) | the vendor's measured bytes (`QueryRecord.bytes_scanned`) or a billing export |
+| `PricingModel` (`cost/pricing.py`) | `ScanPricing`, `ComputePricing` on logical bytes and modelled time (ADR 0004) | the vendor's measured bytes (`QueryRecord.bytes_scanned`) or a billing export |
 | `Notifier` (`incidents/notify.py`) | `LocalNotifier`: `ops.notifications` and the log | `SlackNotifier` when a webhook is configured; a paging service the same way |
-| `SourceConnector` (`reconcile/connectors.py`) | Postgres, SQL Server and DuckDB | any engine that can render the canonical row string and compute MD5 (ADR 0009) |
+| `SourceConnector` (`reconcile/connectors.py`) | Postgres, SQL Server and DuckDB | any engine that can render the canonical row string and compute MD5 (ADR 0006) |
 
 The two cloud collectors are real code, but they are verified only by contract tests against recorded rows in the vendors' documented schemas (`tests/fixtures/`, written by `scripts/make_vendor_fixtures.py` from the simulated workload). They never touch the network, and no test needs an account.
 
@@ -43,13 +43,13 @@ Adding a real system is additive. A cloud collector, a vendor billing adapter or
 
 ## Later notes
 
-- **Phase 7:** the toolkit also runs in a container (ADR 0012), which removed the dependence on the host's security policy. With Smart App Control switched off on the development laptop, the pandas and pyarrow caps were lifted (pandas 3, pyarrow 25) after the reports stayed byte-identical; mypy's source build followed in Phase 8 (ADR 0013).
+- **Phase 7:** the toolkit also runs in a container (ADR 0009), which removed the dependence on the host's security policy. With Smart App Control switched off on the development laptop, the pandas and pyarrow caps were lifted (pandas 3, pyarrow 25) after the reports stayed byte-identical; mypy's source build followed in Phase 8 (ADR 0010).
 - **After Phase 8:** the toolkit is adopted inside the company, against its own Snowflake, BigQuery or ClickHouse warehouses (Phases 10 to 12 of the SPEC). The local-first design holds for the demo and the tests, which stay offline; the interfaces in the table above are where the company adapters plug in.
 - **Version 2.0 (Phases 11 to 15):** the laptop now runs what the company runs: a legacy Postgres and a self-managed ClickHouse in Docker, dbt on ClickHouse, Metabase, and Airflow and Dagster behind Compose profiles. Iceberg and SQL Server are gone, and DuckDB only generates the company's data before it is copied into Postgres. The decision holds: one command, offline after the images are pulled, every random choice seeded, time simulated. The interfaces moved with the platform:
-  - **Cost** collects what ClickHouse measured (`system.query_log`, `system.parts`) instead of estimating bytes; the BigQuery and Snowflake collectors stay, still verified only against recorded rows (ADR 0018).
+  - **Cost** collects what ClickHouse measured (`system.query_log`, `system.parts`) instead of estimating bytes; the BigQuery and Snowflake collectors stay, still verified only against recorded rows (ADR 0015).
   - **Pricing** prices measured bytes, and a stated monthly cost is shared out exactly.
   - **Notifications** are `SlackChannel` and `TelegramChannel` (`incidents/notify.py`), each switched on by its token; without one, a notification is a row in the store and a line in the log. The orchestrator tests page a local double that answers like both APIs.
   - **Reconciliation** connects to Postgres and ClickHouse.
-  - **Schedulers** reach the toolkit through its CLI, with standard-library hooks for Cosmos and dagster-dbt (ADR 0020).
+  - **Schedulers** reach the toolkit through its CLI, with standard-library hooks for Cosmos and dagster-dbt (ADR 0017).
 
   Each module's README now has an "Adopting it" section saying which parts run on a real platform as they are, which are an engine to wire, and which belong to the simulated company.
