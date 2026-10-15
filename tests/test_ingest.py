@@ -16,12 +16,14 @@ from typing import Any
 
 import pytest
 from psycopg import sql
+from typer.testing import CliRunner
 
-from platform_ops.common.config import Settings, load_settings
+from platform_ops.cli import app
+from platform_ops.common.config import CONFIG_PATH_ENV_VAR, Settings, load_settings
 from platform_ops.common.servers import clickhouse_client, connect_postgres
 from platform_ops.simulation import raw_data
 from platform_ops.simulation.company import remove_company, start_over
-from platform_ops.simulation.ingest import Ingestion
+from platform_ops.simulation.ingest import Ingestion, company_clock
 from platform_ops.simulation.legacy_db import LegacyCompany
 
 pytestmark = pytest.mark.integration
@@ -182,3 +184,35 @@ def test_the_overlap_catches_a_late_commit_but_not_an_older_one(
 
     assert _raw_emails(settings, late) == ["late@example.test"]
     assert _raw_emails(settings, too_late) == old_email
+
+
+# -- the company's clock -------------------------------------------------------------------
+
+
+def test_the_clock_is_where_the_latest_load_reached(
+    company: tuple[Settings, Ingestion], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What an orchestrator's freshness check is measured against (Phase 14b)."""
+    settings, ingestion = company
+    now = company_clock(settings)
+    assert now == max(ingestion.watermarks().values())
+    monkeypatch.setenv(CONFIG_PATH_ENV_VAR, str(settings.root / "config" / "settings.yaml"))
+    result = CliRunner().invoke(app, ["company", "clock"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == now.isoformat(sep=" ")
+
+
+def test_a_company_with_no_load_has_no_clock(
+    tmp_path: Path,
+    isolated_config: Callable[..., Path],
+    servers_or_skip: Callable[[Settings], None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_path = isolated_config(tmp_path, 0.01, namespace="t_noclock_")
+    settings = load_settings(settings_path)
+    servers_or_skip(settings)
+    assert company_clock(settings) is None
+    monkeypatch.setenv(CONFIG_PATH_ENV_VAR, str(settings_path))
+    result = CliRunner().invoke(app, ["company", "clock"])
+    assert result.exit_code == 2
+    assert "no load yet" in result.output

@@ -251,6 +251,23 @@ def company_run(days: int | None = DAYS_OPTION) -> None:
     )
 
 
+@company_app.command("clock")
+def company_clock() -> None:
+    """Print the company's simulated time, where its latest load reached.
+
+    For a dbt run outside `company run`, such as an orchestrator's: pass it as
+    dbt's `simulated_now` var, so source freshness is measured on the company's
+    clock (Phase 14b).
+    """
+    from platform_ops.simulation.ingest import company_clock as clock
+
+    settings = load_settings()
+    now = clock(settings)
+    if now is None:
+        _fail("the company has made no load yet; run `platform-ops seed` first", EXIT_UNUSABLE)
+    typer.echo(now.isoformat(sep=" "))
+
+
 @metabase_app.command("prepare")
 def metabase_prepare() -> None:
     """Create the Postgres database Metabase keeps its own state in (before it starts)."""
