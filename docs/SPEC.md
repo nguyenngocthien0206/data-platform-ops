@@ -6,40 +6,47 @@ Status: Phases 0 to 9 make up release 1.0.0, the reference toolkit on the simula
 
 ## Target repository layout
 
+The final state, version 2.0. The phases below record how it got here, so earlier ones name what was later replaced (DuckDB, Iceberg, SQL Server).
+
 ```
 data-platform-ops/
 ├── Makefile
 ├── pyproject.toml
 ├── Dockerfile                 # the toolkit image (Phase 7)
-├── docker-compose.yml         # legacy databases, the toolkit, dashboards, browser check
+├── docker-compose.yml         # Postgres, ClickHouse, the toolkit; behind profiles: dashboards,
+│                              # browser checks, Metabase, Airflow, Dagster, the chat double
 ├── .env.example
 ├── CHANGELOG.md               # release notes, one section per version (Phase 8)
-├── .github/workflows/         # CI, the on-demand SQL Server job, the release (Phase 8)
+├── .github/workflows/         # CI, the orchestrator checks, the release (Phases 8 and 14)
 ├── config/
-│   ├── settings.yaml          # scale factor, paths, simulated time window, pricing rates
-│   ├── teams.yaml             # teams and their notification channels
-│   └── ownership.yaml         # dataset ownership registry
-├── dbt/                       # simulated company dbt project (dbt-duckdb)
+│   ├── settings.yaml          # scale, simulated window, the company, pricing, the stated costs
+│   ├── teams.yaml             # teams, members and their Slack and Telegram addresses
+│   ├── ownership.yaml         # dataset ownership registry
+│   └── reconcile.yaml         # the tables and reports the parallel run compares
+├── dbt/                       # the company's dbt project on ClickHouse (dbt-clickhouse)
 ├── src/platform_ops/
-│   ├── common/                # config loading, DuckDB connection, simulated clock, logging
-│   ├── metadata/              # registry loader and validation, lineage graph
-│   ├── simulation/            # raw data generator, workload generator, fault injectors
+│   ├── common/                # settings, servers, the ops store, dbt invocation, clock, tags
+│   ├── metadata/              # registry loader and check, lineage graph
+│   ├── simulation/            # the company: legacy Postgres, ingestion, users, BI, faults
 │   ├── cost/
 │   ├── incidents/
 │   ├── reconcile/
+│   ├── integrations/          # the hooks Airflow and Dagster call (Phase 14)
 │   └── dashboard/             # read-only data layer and charts for the dashboards
 ├── dashboards/                # streamlit app, one page per module
+├── orchestrators/             # Airflow (Cosmos) and Dagster (dagster-dbt) stacks, chat double
 ├── .streamlit/                # streamlit config (usage stats off)
-├── scripts/                   # vendor fixtures, README check, dashboard browser check, release notes
-├── data/                      # generated DuckDB warehouse file, gitignored
-├── warehouse/                 # local Iceberg warehouse, gitignored
-├── reports/                   # generated markdown reports, gitignored
+├── scripts/                   # architecture diagram, screenshots, browser checks, the
+│                              # orchestrator check, vendor fixtures, README check, release notes
+├── data/                      # scratch space of the data generator, gitignored
+├── reports/                   # generated markdown reports and screenshots, gitignored
 ├── tests/
 ├── examples/                  # CI examples for company dbt repositories (Phase 10)
 └── docs/
     ├── CLAUDE.md
     ├── PROGRESS.md
     ├── SPEC.md
+    ├── images/                # the architecture diagram, vendor logos, screenshots (Phase 15)
     ├── review/                # the Phase 6 review record
     └── adr/                   # decision records, indexed in adr/README.md
 ```
@@ -49,32 +56,39 @@ data-platform-ops/
 | Target | Purpose |
 |---|---|
 | `setup` | `uv sync`, install dbt packages |
-| `up` / `down` | start and stop Docker services |
-| `seed` | generate raw data for the simulated company |
-| `build` | run dbt build |
-| `simulate` | run the workload generator over the simulated time window |
-| `cost` | collect, price, attribute, and write the cost report |
-| `incidents` | inject faults, run dbt, detect and group incidents, write metrics |
-| `reconcile` | run the migration scenario and the diff, write the sign-off report |
+| `up` / `down` | start Postgres and ClickHouse; stop every service, profiles included |
+| `seed` | seed the legacy Postgres, empty ClickHouse, backfill its raw layer |
+| `build` | dbt build on ClickHouse as the company's `dbt` user, then refresh the lineage |
+| `company` | replay the company's window: daily data, ingestion, builds, the parallel run, production |
+| `reconcile` | the cutover sign-off from the parallel run's recorded nights |
+| `incidents` | the incident report and postmortems from the store, graded |
+| `cost` | share the cluster's bill by team, price it on BigQuery and Snowflake, write the report |
+| `metabase` | start Metabase and build one dashboard per exposure |
 | `dashboard` | launch streamlit |
+| `paused` | confirm no 1.x module is left paused |
 | `readme-check` | check every README results number against `reports/` (after `demo`) |
 | `test` / `lint` / `fmt` | pytest (extra flags in `PYTEST_ARGS`), ruff, mypy; `fmt` formats and applies safe fixes |
 | `clean` | remove generated data, reports and build artifacts |
-| `pipeline` | `simulate`, `cost`, `incidents` and `reconcile` in order, on the current state |
+| `pipeline` | `company`, the ownership check and lineage, `reconcile`, `incidents` and `cost`, in order |
 | `demo` | `clean`, `setup`, `up`, then `pipeline`: everything end to end on a clean state |
+| `docs-diagram` | redraw `docs/images/architecture.svg` from the project |
 
 In the container (Phase 7 onwards), with only Docker and GNU make on the host:
 
 | Target | Purpose |
 |---|---|
 | `docker-build` | build the toolkit image |
-| `docker-up` | start the legacy engines named in `DOCKER_ENGINES` (default Postgres and SQL Server) |
-| `docker-demo` | `clean` and `pipeline` inside the container |
+| `docker-up` | start the engines named in `DOCKER_ENGINES` (default Postgres and ClickHouse) |
+| `docker-demo` | `clean` and `pipeline` inside the container (`SCALE=` for a smaller run) |
 | `docker-test` / `docker-lint` | the tests (skips listed with their reason) and lint, as CI runs them |
 | `docker-metadata-check` | the ownership check |
+| `docker-metabase-check` | provision Metabase, run every card, open every dashboard in a browser |
 | `docker-readme-check` | `readme-check` inside the container |
 | `docker-dashboard` | serve the dashboards on `localhost:8501` |
 | `docker-browser-check` | load every dashboard page in headless Chromium, screenshots to `reports/screenshots/` |
+| `airflow` / `dagster` | seed the orchestrator's own company and start its stack (Phase 14) |
+| `docker-test-orchestrators` | a fault through each orchestrator: its incident, page, fix and resolution |
+| `docker-docs-images` | the docs' screenshots from the last run, into `docs/images/screens/` (Phase 15) |
 | `docker-shell` / `docker-clean` | a shell in the toolkit container; remove its volumes and the reports |
 
 `TOOLKIT_IMAGE` runs a published image instead of the local build.

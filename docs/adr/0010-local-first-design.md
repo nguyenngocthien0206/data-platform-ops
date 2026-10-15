@@ -45,3 +45,11 @@ Adding a real system is additive. A cloud collector, a vendor billing adapter or
 
 - **Phase 7:** the toolkit also runs in a container (ADR 0012), which removed the dependence on the host's security policy. With Smart App Control switched off on the development laptop, the pandas and pyarrow caps were lifted (pandas 3, pyarrow 25) after the reports stayed byte-identical; mypy's source build followed in Phase 8 (ADR 0013).
 - **After Phase 8:** the toolkit is adopted inside the company, against its own Snowflake, BigQuery or ClickHouse warehouses (Phases 10 to 12 of the SPEC). The local-first design holds for the demo and the tests, which stay offline; the interfaces in the table above are where the company adapters plug in.
+- **Version 2.0 (Phases 11 to 15):** the laptop now runs what the company runs: a legacy Postgres and a self-managed ClickHouse in Docker, dbt on ClickHouse, Metabase, and Airflow and Dagster behind Compose profiles. Iceberg and SQL Server are gone, and DuckDB only generates the company's data before it is copied into Postgres. The decision holds: one command, offline after the images are pulled, every random choice seeded, time simulated. The interfaces moved with the platform:
+  - **Cost** collects what ClickHouse measured (`system.query_log`, `system.parts`) instead of estimating bytes; the BigQuery and Snowflake collectors stay, still verified only against recorded rows (ADR 0018).
+  - **Pricing** prices measured bytes, and a stated monthly cost is shared out exactly.
+  - **Notifications** are `SlackChannel` and `TelegramChannel` (`incidents/notify.py`), each switched on by its token; without one, a notification is a row in the store and a line in the log. The orchestrator tests page a local double that answers like both APIs.
+  - **Reconciliation** connects to Postgres and ClickHouse.
+  - **Schedulers** reach the toolkit through its CLI, with standard-library hooks for Cosmos and dagster-dbt (ADR 0020).
+
+  Each module's README now has an "Adopting it" section saying which parts run on a real platform as they are, which are an engine to wire, and which belong to the simulated company.
