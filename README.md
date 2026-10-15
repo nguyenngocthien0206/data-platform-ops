@@ -25,7 +25,7 @@ Version 1.x (up to [`v1.2.0`](https://github.com/nguyenngocthien0206/data-platfo
 | Cost and FinOps on ClickHouse's query log: the cluster's bill per team, the migration's business case, BigQuery and Snowflake on the same workload | running | 13a, done |
 | The Streamlit dashboards on the ops store, read as their own read-only role | running | 13b, done |
 | Incidents on the company's production runs: faults in operation, every night's invocations ingested, one incident per root, resolved by a later run | running | 14a, done |
-| Incidents from real Airflow (Cosmos) and Dagster runs in Docker | | 14b |
+| Incidents from real Airflow (Cosmos) and Dagster runs: the hooks they call, a namespace each, a chat double ([orchestrators](orchestrators/README.md)) | hooks ready; the stacks follow | 14b |
 | Documentation and release 2.0.0 | | 15 |
 
 Every 1.x module now runs on the new company; `make paused` confirms none is left. To run the complete 1.x toolkit, check out `v1.2.0` and follow its README. The full plan is in [docs/SPEC.md](docs/SPEC.md), and [docs/PROGRESS.md](docs/PROGRESS.md) records every decision and measurement along the way.
@@ -188,6 +188,7 @@ Each choice that shapes a number is recorded, with what it costs ([index](docs/a
 | [0017](docs/adr/0017-the-parallel-run-and-the-cutover-rule.md) | The migration is signed off by a parallel run, inside the company's own history |
 | [0018](docs/adr/0018-finops-on-a-self-managed-clickhouse.md) | FinOps on a self-managed ClickHouse: the stated bill shared out by measured reads |
 | [0019](docs/adr/0019-incidents-on-the-companys-production-runs.md) | Incidents on the company's own production runs, from a store any run can feed |
+| [0020](docs/adr/0020-orchestrators-call-the-toolkit.md) | Orchestrators call the toolkit through its CLI, each in its own image and namespace |
 
 ## Repository layout
 
@@ -201,6 +202,8 @@ scripts/           vendor fixtures, README check, browser checks of the dashboar
                    Metabase, release notes
 tests/             unit, integration and contract tests
 examples/          a GitHub Actions ownership check for a company dbt repository
+orchestrators/     how Airflow (Cosmos) and Dagster hand their dbt runs to the incident desk,
+                   and a chat double for their tests
 docs/              SPEC, PROGRESS, the ADRs and the Phase 6 review record
 .github/workflows/ CI and the release
 Dockerfile         the toolkit image; docker-compose.yml runs it next to Postgres, ClickHouse
