@@ -137,9 +137,15 @@ demo: clean setup up pipeline ## Full end to end run on a clean state
 # ClickHouse in Compose. No Python, uv or make on the host beyond this Makefile.
 # Code changes need `make docker-build`; generated state lives on volumes.
 
+# The toolkit's container runs as user 1000 and writes to two folders of this
+# checkout, bind-mounted: reports/ and docs/images/screens/. Where the checkout
+# belongs to another user, as on a GitHub runner (1001), the container may not
+# write there, so their owner opens them to it first. Docker Desktop does not
+# check, which is why only Linux hosts need it.
 check-env:
 	@if [ ! -f .env ]; then \
 		echo "error: .env is missing. Run: cp .env.example .env"; exit 1; fi
+	@mkdir -p reports docs/images/screens && chmod a+w reports docs/images/screens
 
 docker-build: check-env ## Build the toolkit image
 	$(COMPOSE) build app
@@ -248,6 +254,5 @@ docker-docs-images: docker-up ## The docs' screenshots from the last run (see th
 	$(COMPOSE) --profile browser run --rm browser-check; \
 	status=$$?; $(COMPOSE) --profile browser stop dashboard; exit $$status
 	$(COMPOSE) --profile docs run --rm docs-screens
-	mkdir -p docs/images/screens
 	$(COMPOSE) run --rm -v "$(CURDIR)/docs/images/screens:/app/docs/images/screens" \
 		app python scripts/curate_screens.py
