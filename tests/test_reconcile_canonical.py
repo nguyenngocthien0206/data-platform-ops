@@ -1,4 +1,4 @@
-"""Canonical rendering and the row hash, byte-identical across engines (ADR 0009).
+"""Canonical rendering and the row hash, byte-identical across engines (ADR 0006).
 
 The golden rows hold every value that has bitten a migration somewhere: NULL
 next to an empty string, trailing spaces, mixed case, non-ASCII names, the

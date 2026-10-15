@@ -1,4 +1,4 @@
-# Dagster with dagster-dbt, running the company's dbt project (Phase 14b-3, ADR 0020).
+# Dagster with dagster-dbt, running the company's dbt project (Phase 14b-3, ADR 0017).
 #
 # Two Python environments that never meet, as in the Airflow image:
 #   - Dagster's own, at /opt/dagster, from the pinned and hashed

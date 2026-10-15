@@ -192,7 +192,7 @@ def build(settings: Settings, *, full_refresh: bool = False, at: datetime | None
 
 # A production night's schedule: separate invocations, not `dbt build`, so a
 # failing test does not stop the models below it and the alert storm a real
-# night produces is what the incident desk sees (ADR 0008).
+# night produces is what the incident desk sees (ADR 0005).
 NIGHTLY = (["source", "freshness"], ["run"], ["snapshot"], ["test"])
 # Failing checks are expected here, so dbt's console would only be a wall of
 # red; its log file under the target's logs/ keeps the detail.
@@ -204,7 +204,7 @@ def production_night(settings: Settings, at: datetime, desk: Desk | None, manife
 
     ``manifest`` is the project parsed once for the production weeks: freshness
     reads ``simulated_now`` when it runs, not when dbt parses, so the saved
-    parse still applies and no night pays for a full re-parse (ADR 0008).
+    parse still applies and no night pays for a full re-parse (ADR 0005).
     """
     run_id = f"night-{at:%Y-%m-%d}"
     comment = Tag(at, "dbt").comment() if current_run() else ""

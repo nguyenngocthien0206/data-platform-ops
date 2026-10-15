@@ -1,6 +1,6 @@
 """Group one run's failing checks into root-cause incidents.
 
-The rules, in order (ADR 0008):
+The rules, in order (ADR 0005):
 
 1. A node has failed in a run if any check about it failed.
 2. A failed node is a root if none of its ancestors failed. Every other failed

@@ -11,10 +11,16 @@ Numbers are compared as written, ignoring thousands separators, currency and
 percent signs: ``$296.02``, ``35,813`` and ``94.968%`` must appear as
 ``296.02``, ``35813`` and ``94.968`` somewhere in the reports.
 
-Some true numbers are not in any report: how long a command took is printed on
-the console, not written to a file. A line that states one ends with
-``<!-- readme-check: runtime -->`` and is skipped, so the exception is visible
-in the README source rather than hidden in this script.
+Some true numbers are not in any report, and a line that states them carries a
+marker at its end and is skipped, so the exception is visible in the README
+source rather than hidden in this script:
+
+- ``<!-- readme-check: runtime -->``: how long a command took, printed on the
+  console, not written to a file;
+- ``<!-- readme-check: console -->``: what a command printed or the database
+  held after the run (rows seeded, relations identical across two runs, cards
+  in Metabase, invocations an orchestrator handed over). Each such number is
+  recorded in ``docs/PROGRESS.md`` with the run it came from.
 
 Exit status 1 lists every number that could not be found, with file and line.
 """
@@ -29,7 +35,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 REPORTS = REPO / "reports"
-SKIP_MARKER = "<!-- readme-check: runtime -->"
+SKIP_MARKERS = ("<!-- readme-check: runtime -->", "<!-- readme-check: console -->")
 
 # README -> the report files (globs under reports/) its numbers must come from.
 SOURCES: dict[str, tuple[str, ...]] = {
@@ -99,7 +105,7 @@ def check(readme: Path, patterns: Iterable[str], reports: Path) -> tuple[list[Mi
     missing: list[Missing] = []
     checked = 0
     for line_number, line in results_lines(readme.read_text(encoding="utf-8")):
-        if SKIP_MARKER in line:
+        if any(marker in line for marker in SKIP_MARKERS):
             continue
         for token in numbers(line):
             checked += 1

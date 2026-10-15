@@ -1,4 +1,4 @@
-"""The parallel run's nightly reconciliation, and the cutover rule (Phase 12, ADR 0017).
+"""The parallel run's nightly reconciliation, and the cutover rule (Phase 12, ADR 0014).
 
 Every night of the parallel run, after the company's ingestion and dbt build,
 ``ParallelRun`` compares both levels the migration has to sign off:

@@ -15,7 +15,7 @@ Outside the parallel run the build cadence is a setting (`company.build_every_da
 
 ## Raw data and the legacy Postgres (`raw_data.py`, `legacy_db.py`)
 
-The generator writes nine operational tables: customers, products, orders, order items, payments, web sessions, marketing campaigns, marketing spend and support tickets. Every value comes from a hash of the seed, table, row id and column, generated with SQL inside a scratch DuckDB and inserted in primary-key order, so two runs produce the same rows ([ADR 0004](../../../docs/adr/0004-deterministic-data-generation.md)). DuckDB is only the generator's engine; `legacy_db.py` copies each table into the `app` schema of the legacy Postgres with `COPY`, with a primary key per table and an `updated_at` column that the ingestion reads.
+The generator writes nine operational tables: customers, products, orders, order items, payments, web sessions, marketing campaigns, marketing spend and support tickets. Every value comes from a hash of the seed, table, row id and column, generated with SQL inside a scratch DuckDB and inserted in primary-key order, so two runs produce the same rows ([ADR 0003](../../../docs/adr/0003-deterministic-data-generation.md)). DuckDB is only the generator's engine; `legacy_db.py` copies each table into the `app` schema of the legacy Postgres with `COPY`, with a primary key per table and an `updated_at` column that the ingestion reads.
 
 The data is deliberately messy, because the metadata, cost and incident tooling is only worth building if it has real problems to find. Some customers register twice with the same email in a different case or with stray whitespace, so staging has to fold them before any per-customer number is right. About 5% of payments are written one to five days after they happened, which is why finance reconciliation distinguishes a missing payment from a late one. Phones, referral sources and most session user ids are nullable.
 
@@ -60,7 +60,7 @@ In the demo at scale 1.0, the ingestion moved 15,521,421 rows into ClickHouse fo
 
 ## Users (`access.py`)
 
-Nobody queries ClickHouse as an admin. There is one user per team in `config/teams.yaml`, plus `metabase`, `dbt` and `loader`, all created again at the start of every run with their grants ([ADR 0016](../../../docs/adr/0016-users-per-team-and-bi-from-exposures.md)):
+Nobody queries ClickHouse as an admin. There is one user per team in `config/teams.yaml`, plus `metabase`, `dbt` and `loader`, all created again at the start of every run with their grants ([ADR 0013](../../../docs/adr/0013-users-per-team-and-bi-from-exposures.md)):
 
 | User | May | Profile |
 |---|---|---|
@@ -99,7 +99,7 @@ Every simulated day, after the build, the company reads its data the way people 
 - **Metabase refreshes every dashboard** on its own schedule, every 12 hours for a `high` maturity exposure and every 24 otherwise, staggered after the 02:00 run. Each refresh runs exactly the cards `bi.py` generates for that dashboard, as the `metabase` user.
 - **A few people run ad hoc SQL** during office hours, as their team's user, from a careful aggregate to `SELECT *` on the largest fact. The business teams read the marts; the platform team reads every layer, raw included.
 
-Every query carries a tag through ClickHouse's `log_comment` setting: the run, the simulated time, the kind of work, what it was about and, for ad hoc SQL, who typed it. dbt, the ingestion, the nightly merge and the reconciliation carry the same tag (`common/tagging.py`), so the cost module reads who ran what from ClickHouse's own query log ([ADR 0018](../../../docs/adr/0018-finops-on-a-self-managed-clickhouse.md)). Rows are discarded on the server (`FORMAT Null`): what a query costs is what it reads, not what a client fetches.
+Every query carries a tag through ClickHouse's `log_comment` setting: the run, the simulated time, the kind of work, what it was about and, for ad hoc SQL, who typed it. dbt, the ingestion, the nightly merge and the reconciliation carry the same tag (`common/tagging.py`), so the cost module reads who ran what from ClickHouse's own query log ([ADR 0015](../../../docs/adr/0015-finops-on-a-self-managed-clickhouse.md)). Rows are discarded on the server (`FORMAT Null`): what a query costs is what it reads, not what a client fetches.
 
 Two runs send the same queries and ClickHouse measures the same reads, which took two things. Everything that looks random comes from the seed through a stable hash. And the raw layer is merged every night: a `FINAL` read of a `ReplacingMergeTree` reads whatever parts the background merges have reached, so before the nightly merge the same query read a different number of bytes on each run. Workload queries also run on one thread, so a `LIMIT` stops after the same rows every time.
 
@@ -130,3 +130,19 @@ During the production weeks things go wrong the way they do in production. Eight
 Each is planted in ClickHouse's raw layer, the copy, never in Postgres, the source of truth: during the working day after a night's run, rows picked by a stable hash of the seed from the history before the window, which no load re-reads. 1.x had duplicate keys instead of orphans, but a `ReplacingMergeTree` deduplicates raw by key, so they cannot happen here. A stopped loader leaves its table's watermark where it was, so the first load after the fix catches up on everything it missed.
 
 The fix is what a team does once the owner has found the cause: the raw table is resynced from Postgres in full (`Ingestion.resync`), at the time the owner's simulated response puts it (`incidents/lifecycle.py`). The next night's run then finds the root healthy and the incident resolves. Every fault, when it happened, how many rows it touched and when it was repaired is recorded in `ops.incident_faults`, the ground truth only the grading reads.
+
+## Adopting it
+
+This module is the simulated company itself, so none of it runs on yours. What carries over are four patterns, each a small file to read and copy:
+
+- **Watermark ingestion without change data capture** (`ingest.py`): ClickHouse pulls from Postgres through `postgresql()`, so the copy runs on the warehouse with no extra service; the overlap re-reads a margin for late commits; `ReplacingMergeTree` makes a double read harmless; every load records its range, and the latest one is the watermark. To copy it, replace the table list (`raw_data.TABLES` and their keys) with yours and size the overlap from your longest transaction.
+- **A ClickHouse user per team and per service** (`access.py`): reader and writer profiles, grants per layer, and the two extra grants the tools turned out to need (dbt-clickhouse reads `system.parts`, Metabase's driver reads `system.processes`). It is what makes the query log say who ran what, and the cost module depends on it.
+- **The BI generated from dbt exposures** (`bi.py`, `metabase.py`): one dashboard per exposure in its owning team's collection, created or updated by name, so adding a dashboard goes through the same review as the model it reads. The rule for a card's SQL and the 91-day window for daily charts are the parts to keep.
+- **Legacy reports as the migration's reference** (`legacy_reporting/`): keep the old SQL as views and test each dbt mart against the report it replaces, row count and every total, long before any parallel run.
+
+Traps we hit while building the company:
+
+- **ClickHouse's `avg` rounds a half to even**, Postgres's away from zero, so the marts average through an `avg_half_up` macro to match the legacy reports.
+- **Metabase draws only the first 2,000 rows of a chart**, without a warning, so daily charts cover their last 91 days and the check fails any chart that reaches the limit.
+- **A password with a shared default** is how test accounts reach production: every company user's password comes from `.env` with no default, and a missing one stops the run naming the variable.
+- **`ReplacingMergeTree` deduplicates only within a partition**, so raw is not partitioned by a column that changes, such as `updated_at`.

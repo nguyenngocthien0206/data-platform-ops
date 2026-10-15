@@ -121,7 +121,7 @@ class StatedCost(_Strict):
 
 
 class CostModel(_Strict):
-    """Declared assumptions behind modelled compute time (ADR 0005), and the stated
+    """Declared assumptions behind modelled compute time (ADR 0004), and the stated
     monthly cost of the company's ClickHouse and of the legacy reporting it replaces."""
 
     throughput_bytes_per_second: Annotated[int, Field(gt=0)]
@@ -204,7 +204,7 @@ class IncidentSettings(_Strict):
     lifecycle: LifecycleSettings
 
 
-# The legacy engine whose policy decides what counts as equal (ADR 0009).
+# The legacy engine whose policy decides what counts as equal (ADR 0006).
 Engine = Literal["postgres"]
 DiscrepancyClass = Literal[
     "missing_in_target",

@@ -1,7 +1,7 @@
 """The one source of anything that looks random.
 
 Two runs of ``make demo`` must write identical reports, so nothing may depend
-on Python's per-process ``hash()`` salt or on the wall clock (ADR 0004). Every
+on Python's per-process ``hash()`` salt or on the wall clock (ADR 0003). Every
 module that needs a repeatable pseudo-random choice asks this function.
 """
 

@@ -11,7 +11,7 @@ What a company running dbt in Airflow typically has, wired to the incident desk:
   the run red without holding the build back. It ingests into the same run.
 
 All of one DAG run's invocations share its run id, ``airflow:company_dbt:<run
-id>``, so the desk regroups them like a single ``dbt build`` (ADR 0019, 0020).
+id>``, so the desk regroups them like a single ``dbt build`` (ADR 0016, 0017).
 
 The DAG runs at 02:00 UTC every day and is paused when Airflow first sees it.
 

@@ -17,7 +17,7 @@ make docker-dashboard     # served from the container on http://localhost:8501
 
 ## How it is built
 
-- **Its own role.** The pages connect as `dashboard`, a Postgres role that `make demo` creates with nothing but `CONNECT` on the ops database, `USAGE` on the ops schema and `SELECT` on its tables, including the tables every run drops and recreates (default privileges for the toolkit's user, which creates them). Its sessions are read-only by default, and it has no privilege to write even when a session turns that off. Its password comes from `POSTGRES_PASSWORD_DASHBOARD` in `.env`, with no default; without it `make demo` stops before writing anything and `make dashboard` exits with code 2 and names the variable. It is the same rule as the company's ClickHouse users: nobody reads as the admin ([ADR 0016](../docs/adr/0016-users-per-team-and-bi-from-exposures.md)).
+- **Its own role.** The pages connect as `dashboard`, a Postgres role that `make demo` creates with nothing but `CONNECT` on the ops database, `USAGE` on the ops schema and `SELECT` on its tables, including the tables every run drops and recreates (default privileges for the toolkit's user, which creates them). Its sessions are read-only by default, and it has no privilege to write even when a session turns that off. Its password comes from `POSTGRES_PASSWORD_DASHBOARD` in `.env`, with no default; without it `make demo` stops before writing anything and `make dashboard` exits with code 2 and names the variable. It is the same rule as the company's ClickHouse users: nobody reads as the admin ([ADR 0013](../docs/adr/0013-users-per-team-and-bi-from-exposures.md)).
 - **One data layer.** `src/platform_ops/dashboard/queries.py` holds every query the pages run, each with the tables it needs, written against `{ops}` and filled in with the (namespaced) ops schema. A test parses each one and fails on any table outside `ops`. A missing table shows which command to run instead of an error. Each read opens and closes its own connection, and results are cached for 30 seconds, so the pages can be left open while a run writes the store.
 - **Nothing recomputed.** The pages show what the modules stored. Everything `reports/cost.md` states beyond the per-query facts (the month pools, the business case, unused tables, hotspots, incremental candidates, quotas) is stored by `make cost` in its own ops table for this reason.
 - **One set of colour rules.** `src/platform_ops/dashboard/charts.py` builds every chart. A team keeps the same colour on every chart whatever a filter hides; a single measure uses one hue; the series that matters is the accent and its baseline grey. Pass and fail on the reconciliation grid use fixed status colours, never a team's, and a failing cell also carries a glyph (✕ for a failure, ↑ for a report whose difference comes from a table upstream), so the grid reads without colour. Every chart has hover tooltips and its data table in an expander under it.
@@ -37,3 +37,15 @@ Looking at those screenshots found what no assertion would have:
 - dark dots where the rounded corners of four grid cells met.
 
 All three are fixed. The check itself found one more thing: Streamlit reports a page as done for a moment between running `app.py` and running the page, which a cold first load could land on, so the check now waits until the page stays done. The 1.x limits it found earlier (repeated month labels and an unexplained drop at the end of the window, a timeline without dates, narrow tables cutting off a column) are gone: the monthly chart names each month with the days the window covers in it, and the incident timeline's axis shows dates.
+
+## Adopting it
+
+The pages read the tables the simulated company's run writes (`company_run`, the cost, incident and reconciliation tables), so they do not run against your platform as they are. What carries over is how they are built:
+
+- **A read-only role of their own** on the results store, with default privileges so tables recreated by every run stay readable.
+- **One data layer** (`queries.py`) holding every query with the tables it needs, tested to read nothing outside the store, so a page can never touch production data.
+- **Nothing recomputed in a page:** whatever a report states is stored by the module that computed it, and the page only reads it.
+- **One set of colour rules** for every chart (`charts.py`), and a status shown by a glyph as well as a colour.
+- **A browser check with screenshots** after every run, which found what no assertion did.
+
+To reuse them, point `queries.py` at your own results tables and keep the pages thin.

@@ -10,7 +10,7 @@ Postgres hashes each row once into a temporary table and groups that small
 table at every level, because rendering a row canonically is the expensive part
 (1.x measured 53 against 20 seconds). ClickHouse renders and groups on the fly:
 it is columnar and parallel, and the reconciliation reads it as the platform
-team's user, which is read-only (ADR 0016).
+team's user, which is read-only (ADR 0013).
 """
 
 from __future__ import annotations

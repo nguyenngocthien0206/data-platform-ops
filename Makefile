@@ -33,7 +33,7 @@ DOCKER_ENGINES ?= postgres clickhouse
         docker-build docker-up docker-demo docker-test docker-lint \
         docker-metadata-check docker-metabase-check docker-readme-check docker-dashboard \
         docker-browser-check docker-shell docker-clean \
-        airflow dagster docker-test-orchestrators
+        airflow dagster docker-test-orchestrators docs-diagram docker-docs-images
 
 help: ## Show the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -87,7 +87,7 @@ paused: ## List any 1.x module still paused in version 2.0 (none since Phase 14)
 
 # Not part of `demo`: the README numbers come from the reference run, and a
 # first `make demo` on another machine should not fail on a documentation check.
-# Paused with the modules whose reports it reads: the README numbers are 1.x's.
+# The README's results are the 2.0.0 release run's, at scale 1.0.
 readme-check: ## Check every README results number against reports/ (after make demo)
 	$(RUN) python scripts/check_readme.py
 
@@ -231,3 +231,23 @@ docker-test-orchestrators: docker-up ## A fault, its incident and page, the fix 
 		$(COMPOSE) run --rm -e PLATFORM_OPS_NAMESPACE=$$ns -e PLATFORM_OPS_SCALE_FACTOR=0.01 \
 			app python scripts/check_orchestrators.py $$orchestrator; \
 	done
+
+# -- the docs' images (Phase 15) -------------------------------------------------
+#
+# The architecture diagram is drawn from the project (scripts/make_architecture.py)
+# and checked by the tests. The screenshots come from a real run: after
+# docker-demo, docker-metabase-check (Metabase's screenshots) and
+# docker-test-orchestrators (a faulted run and its fix in each stack), this
+# loads the dashboards in a browser, photographs Airflow and Dagster, and picks
+# the set the docs show into docs/images/screens.
+
+docs-diagram: ## Redraw docs/images/architecture.svg from the project
+	$(RUN) python scripts/make_architecture.py
+
+docker-docs-images: docker-up ## The docs' screenshots from the last run (see the comment above)
+	$(COMPOSE) --profile browser run --rm browser-check; \
+	status=$$?; $(COMPOSE) --profile browser stop dashboard; exit $$status
+	$(COMPOSE) --profile docs run --rm docs-screens
+	mkdir -p docs/images/screens
+	$(COMPOSE) run --rm -v "$(CURDIR)/docs/images/screens:/app/docs/images/screens" \
+		app python scripts/curate_screens.py

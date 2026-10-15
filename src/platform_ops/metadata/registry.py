@@ -3,7 +3,7 @@
 ``config/teams.yaml`` says who is on which team. ``config/ownership.yaml`` maps
 glob patterns on dbt unique ids to an owner, a team and a tier.
 
-Resolution rule (ADR 0002): every pattern that matches a unique id is a
+Resolution rule (ADR 0001): every pattern that matches a unique id is a
 candidate. The most specific candidate wins, where specificity is
 
 1. more literal (non-wildcard) characters, then

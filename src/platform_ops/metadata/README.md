@@ -6,15 +6,24 @@ The shared layer every other module reasons about: who owns each dataset, and ho
 
 `config/teams.yaml` lists five teams and their members: the four business teams (sales, marketing, finance, product) and a data platform team. `config/ownership.yaml` maps glob patterns on dbt unique ids to an owner, a team and a tier (`critical`, `important` or `best_effort`). It is CODEOWNERS for data.
 
-When several rules match, the most specific one wins: the most literal characters, then the fewest wildcards. Two rules that tie are an error, never a coin toss decided by line order, because a reorder in a pull request should not be able to hand a critical dataset to a different on-call rotation. The full rule and the reasoning behind the platform team are in [ADR 0002](../../../docs/adr/0002-ownership-resolution-and-platform-team.md).
+When several rules match, the most specific one wins: the most literal characters, then the fewest wildcards. Two rules that tie are an error, never a coin toss decided by line order, because a reorder in a pull request should not be able to hand a critical dataset to a different on-call rotation. The full rule and the reasoning behind the platform team are in [ADR 0001](../../../docs/adr/0001-ownership-resolution-and-platform-team.md).
 
 `platform-ops metadata check` fails when any source, seed, snapshot, model or exposure has no owner, when ownership is ambiguous, when a rule names an unknown team or an owner who is not on that team, or when a dashboard's owner in dbt disagrees with the registry. It warns about rules that match nothing. Every finding says which file to change and how, for example a ready-to-paste rule for an unowned model. On success it writes the resolved owner of every dataset to `ops.node_ownership`, so later modules join on ownership in SQL. With `--parse` it builds the dbt manifest first, which needs no data, so the check runs in CI.
 
 A team in `teams.yaml` names its Slack `channel` and, optionally, a `telegram_chat`, for teams that take their alerts on Telegram.
 
-## On a company dbt repository
+## Adopting it
 
-The same check guards any dbt project, on any adapter, without touching a warehouse ([ADR 0014](../../../docs/adr/0014-the-ownership-gate-in-the-consuming-repository.md)). The repository keeps its own registry next to the project, conventionally in an `ownership/` folder with `teams.yaml` and `ownership.yaml`; names, channels and chats of the company never enter this toolkit's repository. Its CI runs `dbt parse`, which needs the adapter but no connection, and hands the manifest to the toolkit's image:
+- **Runs as is:** the ownership check on any dbt project and adapter (`metadata check --manifest --registry-dir`), the starter registry (`metadata init-registry`), and the workflow in `examples/`. Nothing of the simulated company is involved: no settings, no database, no warehouse connection.
+- **Belongs to the simulated company:** `config/teams.yaml` and `config/ownership.yaml` (its people and rules), and the copies the toolkit keeps in its own store (`ops.node_ownership`, `ops.lineage_edges`), written by `metadata check` without `--manifest` and by `platform-ops build`. The lineage functions in `lineage.py` work on any manifest; only that storing step needs the toolkit's settings and Postgres.
+- **What you replace:** the registry, kept in your dbt repository next to the project; the image tag in the workflow when you upgrade.
+- **Traps we hit:** a rule whose owner is `TODO` counts as unowned, so coverage starts at 0% on purpose; two rules that tie are an error, not a coin toss, so split a group instead of overlapping it; `dbt parse` needs the adapter installed but no connection, so CI uses a parse-only profile.
+
+The steps below take a repository from nothing to a required check.
+
+### On your dbt repository
+
+The same check guards any dbt project, on any adapter, without touching a warehouse ([ADR 0011](../../../docs/adr/0011-the-ownership-gate-in-the-consuming-repository.md)). The repository keeps its own registry next to the project, conventionally in an `ownership/` folder with `teams.yaml` and `ownership.yaml`; names, channels and chats of the company never enter this toolkit's repository. Its CI runs `dbt parse`, which needs the adapter but no connection, and hands the manifest to the toolkit's image:
 
 ```bash
 platform-ops metadata check \
@@ -26,7 +35,7 @@ With `--manifest` the check reads no settings, opens no database and writes noth
 
 [`examples/github-actions/ownership-check.yml`](../../../examples/github-actions/ownership-check.yml) is a workflow to copy, written for a ClickHouse project; another adapter only changes the `pip install` line and the parse-only profile.
 
-### Rolling out on a repository
+#### Rolling out
 
 A check that blocks every merge on day one gets switched off by the end of the week, and a registry written by hand for hundreds of models never gets finished. The rollout is ordered to avoid both.
 

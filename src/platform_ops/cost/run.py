@@ -10,7 +10,7 @@ Three prices for one measured workload (version 2.0, Phase 13):
 - ``cluster``: what the company actually pays, its self-managed ClickHouse's
   stated monthly cost, shared by bytes read (compute) and bytes stored;
 - ``scan``: what the same queries would cost on BigQuery on demand;
-- ``compute``: what they would cost on Snowflake warehouses (ADR 0005, 0006).
+- ``compute``: what they would cost on Snowflake warehouses (ADR 0004).
 """
 
 from __future__ import annotations

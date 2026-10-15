@@ -1,6 +1,6 @@
 # incidents
 
-When one bad raw table fails a dozen checks, who gets woken up, and how many times? The company's last three weeks are production on ClickHouse, after the migration's parallel run. Every night runs dbt's source freshness, run, snapshot and test, and things go wrong the way they do in production: eight faults in operation, from a loader writing NULLs to a feed that stops. The incident desk ingests every invocation as it finishes and turns the failing checks into incidents: one per real problem, scored by how much of the business it reaches, paged to the person who can fix it, and resolved on its own once a later run finds the root healthy ([ADR 0019](../../../docs/adr/0019-incidents-on-the-companys-production-runs.md)).
+When one bad raw table fails a dozen checks, who gets woken up, and how many times? The company's last three weeks are production on ClickHouse, after the migration's parallel run. Every night runs dbt's source freshness, run, snapshot and test, and things go wrong the way they do in production: eight faults in operation, from a loader writing NULLs to a feed that stops. The incident desk ingests every invocation as it finishes and turns the failing checks into incidents: one per real problem, scored by how much of the business it reaches, paged to the person who can fix it, and resolved on its own once a later run finds the root healthy ([ADR 0016](../../../docs/adr/0016-incidents-on-the-companys-production-runs.md)).
 
 ```bash
 make demo                 # the company's 16 weeks, the production weeks included
@@ -29,7 +29,7 @@ The incident tables live in the Postgres ops store, versioned (`store.py`), and 
 
 ## The decisions that shape the numbers
 
-**`dbt run` then `dbt test`, not `dbt build`.** `dbt build` skips everything below a failed test, so the downstream checks that make up an alert storm would never run. Separate invocations let bad data flow downstream as it does in production, and the grouping has something real to group ([ADR 0008](../../../docs/adr/0008-incident-grouping-severity-and-routing.md)).
+**`dbt run` then `dbt test`, not `dbt build`.** `dbt build` skips everything below a failed test, so the downstream checks that make up an alert storm would never run. Separate invocations let bad data flow downstream as it does in production, and the grouping has something real to group ([ADR 0005](../../../docs/adr/0005-incident-grouping-severity-and-routing.md)).
 
 **One incident per root, across invocations.** A failed node whose ancestors are all healthy is a root, and every other failure belongs to the root above it. A run is every invocation that shares its run id, regrouped on every ingest, so a run split one invocation per model (as Cosmos runs it) gives the same incidents as one build, whatever order the pieces arrive in. When a later invocation shows an earlier root was not the real one, its incident is merged into the real root's.
 
@@ -67,15 +67,36 @@ What the numbers say:
 - **34 failing checks became 8 pages, one per problem.** Without grouping, marco would have been paged 28 times in three weeks, mostly by tests on the models below two broken payment feeds; with it, twice.
 - **Paging whoever can fix it moves the load, and shows where it piles up.** The staging rule pages the right person 8 times out of 8, the root's owner only 3. But 6 of the 8 pages land on priya, who owns most of the feeds. Grouping does not spread that load; it makes it visible, which is the case for sharing source ownership before the pages do.
 - **The schedule, not the people, sets the floor of MTTR.** The simulated owners land most fixes within hours (the first SEV1 was fixed under 7 hours after detection), but nothing resolves until the next nightly run finds the root healthy, so no incident resolved in less than 24 hours. A rerun on demand after a fix is the cheapest way to cut MTTR here, cheaper than faster people.
-- **A stale feed is caught late by design.** Every fault was detected by the first night after it happened (16 hours), except the stopped web sessions feed: the freshness rule allows 48 hours, so it took 64.0. Tightening the rule would catch it a night earlier, and page someone on every quiet night.
+- **A stale feed is caught late by design.** Every fault was detected by the first night after it happened (16 hours), except the stopped web sessions feed: the freshness rule allows two days, so it took 64.0 hours. Tightening the rule would catch it a night earlier, and page someone on every quiet night.
 
-## On a real dbt project
+## Adopting it
 
-`incidents ingest` is the same code the company's desk runs. Point it at a dbt target folder after each invocation, with the orchestrator's run id, and it does the rest; `--registry-dir` takes the consuming repository's registry, and an `incidents.yaml` there sets its own severity thresholds. Set `SLACK_BOT_TOKEN` and `TELEGRAM_BOT_TOKEN` to page the teams in `teams.yaml`. The tests ingest artifacts recorded from a Snowflake build and a BigQuery night of a small shop project (`tests/fixtures/dbt_artifacts`, written by `scripts/make_artifact_fixtures.py`), Cosmos-style partial invocations in both orders, and two ingests at once.
+`incidents ingest` is the same code the company's desk runs, and it reads nothing but what dbt writes, so it works on any dbt project, adapter and scheduler.
 
-With an orchestrator, one hook does it (`platform_ops.integrations`, standard library only, so it imports into any scheduler's environment without the toolkit's dependencies):
+- **Runs as is:**
+  - `platform-ops incidents ingest --target <dbt target folder> --run-id <run id> [--at <time>] [--registry-dir <folder>]`, after every dbt invocation. It reads `run_results.json`, `sources.json` and `manifest.json` from any adapter, stores everything in the Postgres store (`store.py` creates and migrates its tables), regroups the run, and sends what it opened, appended or resolved.
+  - The hooks for Airflow with Cosmos and Dagster with dagster-dbt (`platform_ops.integrations`, standard library only), with the run id contract in the [orchestrators README](../../../orchestrators/README.md).
+  - Slack and Telegram, switched on by `SLACK_BOT_TOKEN` and `TELEGRAM_BOT_TOKEN`, addressed by each team's `channel` and `telegram_chat` in `teams.yaml`.
+  - Your own severity thresholds and tier weights in an `incidents.yaml` next to the registry (`IncidentPolicy`).
+- **Belongs to the simulated company:**
+  - `incidents run`: its report and postmortems are graded against the faults the simulation planted (`ops.incident_faults`) and read the company's run.
+  - `incidents summary` reads the bundled project's manifest.
+  - `production.py` plays the company's owners (acknowledging, fixing) and `simulation/faults.py` breaks raw on purpose.
+  - The Incidents page of the dashboards reads the graded tables.
+- **What you replace:**
+  - **The registry:** your `teams.yaml` and `ownership.yaml`, passed with `--registry-dir`, because routing is the registry: without owners every incident goes to the platform team.
+  - **The Postgres** the store lives in (`POSTGRES_*`), and a namespace (`PLATFORM_OPS_NAMESPACE`) if it shares a server.
+  - **The settings file:** the toolkit's image carries one that works as it is; the sections about the simulated company are read but not used by `ingest`.
+  - **The report:** yours, written over the store's tables (`incidents`, `incident_check_events`, `incident_notifications`) instead of `incidents run`.
+- **In order:**
+  1. Get the ownership check passing on your project ([metadata](../metadata/README.md#adopting-it)).
+  2. Ingest one night's target folder by hand and read the `incidents` table.
+  3. Wire the hook or the call after each invocation.
+  4. Set a chat token last, once the incidents look right.
+- **Traps we hit:**
+  - **Every invocation of one run must share the run id**, or a run split per model looks like many runs, each opening its own incidents.
+  - **Give each invocation its own target folder,** or clear old result files first: a `run_results.json` left from an earlier build is read as part of tonight (Cosmos and dagster-dbt already use one folder per invocation).
+  - **An incident resolves only when a later run ran its root's tests** and found them healthy: a run that never touched the model cannot close it, and the time to resolve is bounded by the schedule, so a rerun after a fix is the cheapest way to cut it.
+  - **A freshness failure above an open incident is absorbed into it,** not paged again; without that, a stale feed and the failures it causes page twice.
 
-- **Airflow with Cosmos**: `cosmos.ingest_after_task` as the operators' `callback`. Cosmos calls it after every task, failed or not, with that task's `target/`; the run id is `airflow:<dag id>:<run id>`, so a DAG run of a few hundred tasks is regrouped as one run.
-- **Dagster with dagster-dbt**: `dagster.ingest_dbt_invocation(invocation, context)` after each `dbt.cli(...)` in a `@dbt_assets` function; the run id is `dagster:<run id>`.
-
-Both stacks run the company's project for real in Docker, each on a company of its own, and a fault through either opens one incident, pages it and resolves it after the fix; the release waits for both ([orchestrators](../../../orchestrators/README.md)).
+The tests ingest artifacts recorded from a Snowflake build and a BigQuery night of a small shop project (`tests/fixtures/dbt_artifacts`, written by `scripts/make_artifact_fixtures.py`), Cosmos-style partial invocations in both orders, and two ingests at once; both orchestrator stacks run a fault end to end before every release.

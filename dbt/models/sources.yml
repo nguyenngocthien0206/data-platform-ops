@@ -10,7 +10,7 @@ sources:
     schema: "{{ var('namespace', '') }}raw"
     config:
       loaded_at_field: _loaded_at
-      # Measured on simulated time, not the wall clock. See ADR 0003.
+      # Measured on simulated time, not the wall clock. See ADR 0002.
       freshness:
         warn_after: {count: 24, period: hour}
         error_after: {count: 48, period: hour}

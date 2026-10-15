@@ -1,7 +1,7 @@
 """The company's query workload on ClickHouse, day by day (version 2.0, Phase 13).
 
 Besides dbt and the ingestion, two kinds of people use the warehouse, and each
-one runs as its own ClickHouse user (ADR 0016), so the query log records who
+one runs as its own ClickHouse user (ADR 0013), so the query log records who
 did what:
 
 - **Metabase** refreshes every dashboard on its own schedule (12 hours for a
@@ -37,7 +37,7 @@ from platform_ops.simulation import bi
 # What people actually type, per team, from careful to careless. Placeholders:
 # {marts}, {staging}, {raw} are the namespaced databases; {d1}, {d7}, {d14},
 # {d30} are dates that many days back; {n} is a number. The business teams
-# read the marts (ADR 0016), the platform team every layer. Nobody queries the
+# read the marts (ADR 0013), the platform team every layer. Nobody queries the
 # abandoned models, which is exactly why they are waste.
 ADHOC_TEMPLATES: dict[str, tuple[str, ...]] = {
     "sales": (

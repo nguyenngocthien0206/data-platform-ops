@@ -105,6 +105,21 @@ services:
       metabase:
         condition: service_healthy
 
+  # Screenshots of Airflow and Dagster for the docs (Phase 15), after
+  # docker-test-orchestrators left each stack with a faulted run and the fix.
+  # Same image as above; `make docker-docs-images` runs it.
+  docs-screens:
+    build: *playwright
+    image: data-platform-ops-browser-check:local
+    pull_policy: build
+    profiles: ["docs"]
+    env_file: .env
+    working_dir: /work
+    command: ["python", "scripts/screenshot_orchestrators.py"]
+    volumes:
+      - ./scripts:/work/scripts:ro
+      - ./reports:/work/reports
+
   # Answers like Slack and Telegram and keeps every message, so the orchestrator
   # tests (Phase 14b) can check a page without sending one. The toolkit image
   # already holds the script; it needs neither server.
@@ -127,7 +142,7 @@ services:
       retries: 12
 
   # The company's dbt project scheduled by Airflow 3 through Cosmos (Phase 14b,
-  # ADR 0020), as its own company in the af_ namespace, so nothing it does
+  # ADR 0017), as its own company in the af_ namespace, so nothing it does
   # touches `make demo`. Its own image: Airflow's environment and the toolkit's
   # never share packages. The container gets only what it uses, not .env: the
   # Postgres login for its metadata database (`airflow`) and the incident store,

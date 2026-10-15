@@ -1,0 +1,30 @@
+# 0016: Incidents on the company's own production runs, from a store any run can feed
+
+Status: accepted
+Date: 2026-10-14
+
+## Context
+
+In 1.x the incident module ran its own 21-day scenario on DuckDB: a fresh seed, faults injected into raw data, dbt run only on the nights a fault was active and only on the part of the graph it reached, and incidents kept in memory and written at the end. That proved the grouping, severity and routing rules (ADR 0005), but it was not how a team meets incidents. A real team does not know which nights will fail, runs its whole schedule every night, receives dbt's results one invocation at a time from an orchestrator, and needs the incidents to survive between runs.
+
+Version 2.0 has a company with a history: seven weeks before the migration, a six-week parallel run, and a cutover. Phase 14 had to decide where incidents happen in it, and how the toolkit receives dbt's results. The owner chose to put them after the cutover, inside the company's own timeline, accepting a longer demo and a longer cost window, rather than a separate scenario with a second history of the same company. The owner also split the phase: the core here (14a), and the real orchestrators in Docker next (14b).
+
+## Decision
+
+- **Three weeks of production after the parallel run** (`company.production_weeks`). The window grows to 16 weeks. Every production night runs `dbt source freshness`, `dbt run`, `dbt snapshot` and `dbt test`, as separate invocations so bad data flows downstream and the alert storm is real (ADR 0005). A failing check is recorded, not fatal. The project is parsed once for the production weeks and the parse is reused, since freshness reads the simulated time when it runs.
+- **Faults happen in operation.** Eight faults on four days, two a day on different tables, planted in ClickHouse's raw layer after the day's work and before the next night's load. Each aims at a check the project already has. `ReplacingMergeTree` deduplicates raw by key, so 1.x's duplicate keys cannot happen; orphan payments, which point at no order, take their place, a failure an engine without enforced foreign keys makes common. A stale feed and a changed raw table stop the loader for that table, so its watermark waits and the first load after the fix catches up.
+- **The fix is a resync.** Postgres is the source of truth, so an owner's fix replaces the faulted raw table with a full reload from it. The fix lands at a time the lifecycle models (acknowledgement and fix delays per severity, slower when the owner is busy). It covers every faulted source upstream of the incident's root.
+- **Resolution is observed, not scheduled.** An incident resolves when a later run covers its root and finds it healthy: the model ran and every test on it that ran passed (at least one must have run, if it has tests), or the source is fresh again. A run that did not cover the root resolves nothing. MTTR is therefore the owner's fix plus the wait for the next run, as it is in production.
+- **One store, any producer.** `platform-ops incidents ingest --target <dir> --run-id <id>` reads one invocation's artifacts from any adapter. The company's desk calls the same code after every invocation. Invocations that share a run id are one run, regrouped from everything the store holds on every ingest, so partial invocations (Cosmos runs one per model) arriving in any order give the same incidents as one build. When a later invocation shows a this-run incident's root was not the real root, that incident is merged into the real root's. A new failure above the root of an incident still open (a feed gone stale because a changed table stopped its loader, while its staging model's incident is open) appends to that incident: it is the same problem seen from the source, and paging again for it was the noise the first full run showed.
+- **The store is live and versioned.** The incident tables in the Postgres ops store are migrated in order from a version table, and every ingest runs in one transaction holding an advisory lock, so concurrent ingests serialise. One open incident per root is enforced by a partial unique index. An invocation already ingested is recognised by dbt's invocation id and changes nothing.
+- **Notifications after commit.** A page, an update or a resolution is queued in the transaction and sent after it commits, to the team's Slack channel (bot token) and Telegram chat (bot token) from `teams.yaml`. How each went is recorded. With no token they stay local, and the simulated company's own pages always do.
+- **Policy next to the registry.** Severity thresholds and tier weights default to the settings, and a team can override them in an optional `incidents.yaml` beside its ownership registry.
+- **The report reads the store.** `make incidents` grades the store against the planted faults (`ops.incident_faults`) and writes `reports/incidents.md` and a postmortem per SEV1; `incidents summary` prints failing checks against pages per person and week.
+
+## Consequences
+
+The incident numbers now come from the same nights, the same data and the same dbt runs as everything else in the demo, and the cost report includes what production nights and their failures cost. The path the company uses is the path a real orchestrator uses, so 14b only has to wire Airflow and Dagster to `incidents ingest`.
+
+Detection is slower than in 1.x and more honest. A stale feed is not an error until the freshness rule says so, 48 hours after its last row. A team that wants it faster tightens the rule, and pays for the extra pages on quiet days. One bursty source, support tickets, had its freshness rule removed for that reason: at small scale whole days pass without a ticket, and the newest row says nothing about whether the export runs.
+
+The demo is longer: 21 more nights of four dbt invocations each, and the cost window grows from 91 to 112 days, so every cost figure changes. The test suite's company grows from two weeks to three, with one production week and two fault days, which is enough to prove the whole cycle from fault to resolution end to end.

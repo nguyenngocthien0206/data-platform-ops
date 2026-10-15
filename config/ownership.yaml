@@ -3,7 +3,7 @@
 # Each rule globs on a dbt unique_id and names an owner, their team, and a tier
 # (critical | important | best_effort). The most specific matching rule wins:
 # the one with the most literal characters, then the fewest wildcards. Two rules
-# that tie are an error, not a coin toss. See docs/adr/0002.
+# that tie are an error, not a coin toss. See docs/adr/0001.
 #
 # Validated by platform_ops.metadata.registry; enforced by
 # `platform-ops metadata check`, which fails if any source, model or exposure

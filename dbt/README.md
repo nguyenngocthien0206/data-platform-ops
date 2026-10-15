@@ -14,7 +14,7 @@ The simulated company's transformation layer, built with dbt-duckdb on top of th
 
 That is 118 models in total. Every model is a full-refresh table, so each one has a real storage size and a real build cost for the cost module to price. Mart, abandoned and exposure names start with the owning team (`finance_fct_revenue`), which lets one ownership rule cover a whole team while narrower rules override it.
 
-The platform team owns everything below the marts. Most root causes surface there, so most incidents will route there too. That concentration is a deliberate choice, recorded in [ADR 0002](../docs/adr/0002-ownership-resolution-and-platform-team.md).
+The platform team owns everything below the marts. Most root causes surface there, so most incidents will route there too. That concentration is a deliberate choice, recorded in [ADR 0001](../docs/adr/0001-ownership-resolution-and-platform-team.md).
 
 ## Abandoned models
 
@@ -29,7 +29,7 @@ Twelve exposures stand in for dashboards, three per business team, and they are 
 ## Conventions worth knowing
 
 - **Query comments.** Every query dbt issues ends with a JSON comment carrying the node id, for example `/* {"app": "platform-ops", "unique_id": "model.company.sales_fct_orders"} */`, so query history can be joined back to models and owners.
-- **Freshness on simulated time.** `macros/collect_freshness.sql` measures source freshness against the `simulated_now` var instead of the wall clock, and fails loudly if the var is missing. See [ADR 0003](../docs/adr/0003-source-freshness-on-simulated-time.md).
+- **Freshness on simulated time.** `macros/collect_freshness.sql` measures source freshness against the `simulated_now` var instead of the wall clock, and fails loudly if the var is missing. See [ADR 0002](../docs/adr/0002-source-freshness-on-simulated-time.md).
 - **No packages.** The three custom generic tests (`row_count_in_range`, `non_negative`, `unique_combination_of_columns`) live in `tests/generic`, so setup needs no network access. Row count bounds are given at scale 1.0 and scaled by the `scale_factor` var.
 - **Generic test arguments** use the `arguments:` block that dbt 1.12 requires.
 - **Usage tracking is off** (`flags.send_anonymous_usage_stats: false`), because the toolkit runs offline.

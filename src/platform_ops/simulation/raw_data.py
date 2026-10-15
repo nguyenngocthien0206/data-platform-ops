@@ -12,7 +12,7 @@ What is *not* deterministic is the on-disk encoding. DuckDB picks a compression
 codec per segment when it writes, and that choice can differ between two runs
 of identical data (seen as FSST versus Dictionary on the same column). Anything
 that needs a stable size, such as Phase 2's scan estimate, must be computed from
-the logical data, not from compressed storage. See ADR 0004.
+the logical data, not from compressed storage. See ADR 0003.
 
 Each table is defined over a fixed id space that covers the history *and* the
 whole simulated window. A load inserts only the rows whose ``_loaded_at`` falls

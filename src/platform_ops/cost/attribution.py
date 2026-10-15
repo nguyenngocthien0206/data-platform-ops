@@ -1,7 +1,7 @@
 """Who pays for each query, and for each table's storage.
 
 Every query's cost is charged exactly once, so team totals always add up to the
-bill (ADR 0006):
+bill (ADR 0004):
 
 - **Production cost** goes to the owner of what was built or loaded: a dbt
   build to the owner of the model it writes, a dbt test to the owner of the
