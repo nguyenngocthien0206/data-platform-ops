@@ -73,4 +73,9 @@ What the numbers say:
 
 `incidents ingest` is the same code the company's desk runs. Point it at a dbt target folder after each invocation, with the orchestrator's run id, and it does the rest; `--registry-dir` takes the consuming repository's registry, and an `incidents.yaml` there sets its own severity thresholds. Set `SLACK_BOT_TOKEN` and `TELEGRAM_BOT_TOKEN` to page the teams in `teams.yaml`. The tests ingest artifacts recorded from a Snowflake build and a BigQuery night of a small shop project (`tests/fixtures/dbt_artifacts`, written by `scripts/make_artifact_fixtures.py`), Cosmos-style partial invocations in both orders, and two ingests at once.
 
-Phase 14b wires real Airflow (Cosmos) and Dagster (dagster-dbt) in Docker to the same command.
+With an orchestrator, one hook does it (`platform_ops.integrations`, standard library only, so it imports into any scheduler's environment without the toolkit's dependencies):
+
+- **Airflow with Cosmos**: `cosmos.ingest_after_task` as the operators' `callback`. Cosmos calls it after every task, failed or not, with that task's `target/`; the run id is `airflow:<dag id>:<run id>`, so a DAG run of a few hundred tasks is regrouped as one run.
+- **Dagster with dagster-dbt**: `dagster.ingest_dbt_invocation(invocation, context)` after each `dbt.cli(...)` in a `@dbt_assets` function; the run id is `dagster:<run id>`.
+
+Both stacks run the company's project for real in Docker, each on a company of its own, and a fault through either opens one incident, pages it and resolves it after the fix; the release waits for both ([orchestrators](../../../orchestrators/README.md)).
