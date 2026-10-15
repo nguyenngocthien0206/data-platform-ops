@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from platform_ops.common.config import CONFIG_PATH_ENV_VAR, SCALE_ENV_VAR, Settings, load_settings
+from platform_ops.common.config import (
+    CONFIG_PATH_ENV_VAR,
+    NAMESPACE_ENV_VAR,
+    SCALE_ENV_VAR,
+    Settings,
+    load_settings,
+)
 
 WriteSettings = Callable[[dict[str, object]], Path]
 
@@ -92,3 +98,16 @@ def test_the_scale_can_be_overridden_for_one_run(
     assert load_settings(settings_file).scale_factor == 0.1
     monkeypatch.setenv(SCALE_ENV_VAR, "0.05")
     assert load_settings(settings_file).scale_factor == 0.05
+
+
+def test_the_namespace_can_be_overridden_for_another_company(
+    settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An orchestrator stack runs its own company from the same file."""
+    assert load_settings(settings_file).company.namespace == ""
+    monkeypatch.setenv(NAMESPACE_ENV_VAR, "af_")
+    settings = load_settings(settings_file)
+    assert settings.company.namespace == "af_"
+    assert settings.company.name("marts") == "af_marts"
+    monkeypatch.setenv(NAMESPACE_ENV_VAR, "  ")
+    assert load_settings(settings_file).company.namespace == ""

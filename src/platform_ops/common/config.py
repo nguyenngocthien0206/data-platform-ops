@@ -21,6 +21,9 @@ CONFIG_PATH_ENV_VAR = "PLATFORM_OPS_CONFIG"
 # not the numbers (the release workflow's demo). Results are always quoted at
 # the scale in config/settings.yaml.
 SCALE_ENV_VAR = "PLATFORM_OPS_SCALE_FACTOR"
+# Runs another company from the same config, in its own namespace (Phase 14b):
+# each orchestrator stack runs its own, so `make demo` is never touched.
+NAMESPACE_ENV_VAR = "PLATFORM_OPS_NAMESPACE"
 
 
 class _Strict(BaseModel):
@@ -384,7 +387,8 @@ def load_settings(path: Path | str | None = None) -> Settings:
 
     Resolution order: explicit argument, then ``PLATFORM_OPS_CONFIG``, then
     ``config/settings.yaml`` relative to the working directory.
-    ``PLATFORM_OPS_SCALE_FACTOR``, when set, replaces the file's scale factor.
+    ``PLATFORM_OPS_SCALE_FACTOR``, when set, replaces the file's scale factor,
+    and ``PLATFORM_OPS_NAMESPACE`` the company's namespace.
     """
     config_file = _config_path(path)
     if not config_file.is_file():
@@ -400,4 +404,7 @@ def load_settings(path: Path | str | None = None) -> Settings:
     scale = os.environ.get(SCALE_ENV_VAR, "").strip()
     if scale:
         raw["scale_factor"] = float(scale)
+    namespace = os.environ.get(NAMESPACE_ENV_VAR, "").strip()
+    if namespace:
+        raw["company"] = {**(raw.get("company") or {}), "namespace": namespace}
     return Settings.model_validate(raw)
