@@ -61,3 +61,58 @@ uv run platform-ops reconcile run --strict    # exits non-zero when the cutover 
 ```
 
 Tunables live under `reconcile:` in `config/settings.yaml` (workers, leaf width, rounding tolerance, the canonical rules, the thresholds, the clean nights the cutover needs) and under `company:` (the parallel run's length, when the fix ships, the delivered job's defects). What is compared is in `config/reconcile.yaml`.
+
+## Adopting it
+
+The comparison engine knows nothing about the simulated company: give it two connections and a list of pairs, and it diffs Postgres against ClickHouse the way the parallel run does. What the company adds is the nightly loop around it, the planted faults, and the grading against them.
+
+- **Runs as is, as a library:**
+  - `specs.load_specs` turns `reconcile.yaml` into table specs, reading every column and type from Postgres's `information_schema` and ClickHouse's `system.columns`, and each report's upstream tables from dbt's manifest.
+  - `canonical.rules_for` applies the equality policy from the settings.
+  - `diff.diff_table`, with `PostgresConnector` and `ClickHouseConnector`, runs the segmented diff.
+  - `parallel.discrepancies_of` classifies each difference, and `metrics.verdict` judges a pair against the thresholds.
+- **Belongs to the simulated company:**
+  - `ParallelRun` is called by `company run` after each simulated night and grades every night against the ground truth of what was planted (`metrics.grade`).
+  - `reconcile run` writes the report from the nights it recorded.
+  - The delivered job's defects and the one-off faults come from `simulation/migration.py`.
+- **What you replace:**
+  - **The pairs:** `reconcile.yaml` with your tables and reports, their keys, renamed columns and decimal scales.
+  - **The names:** the schema and database names under `company:` in the settings (`legacy_schema`, `reporting_schema`, `raw_database`). The reports' ClickHouse database is named `marts`.
+  - **The policy:** the equality rules and thresholds under `reconcile:`, which your data owner signs, not you.
+  - **The loop:** a scheduled job that, every night after dbt has built, runs the pairs and stores each verdict, and your own cutover rule over the stored nights.
+
+```python
+from decimal import Decimal
+
+from platform_ops.reconcile.canonical import rules_for
+from platform_ops.reconcile.connectors import ClickHouseConnector, PostgresConnector
+from platform_ops.reconcile.diff import diff_table
+from platform_ops.reconcile.metrics import verdict
+from platform_ops.reconcile.parallel import discrepancies_of
+from platform_ops.reconcile.specs import load_specs
+
+specs = load_specs(settings, postgres, clickhouse, manifest_path, config_path)
+tolerance = Decimal(str(settings.reconcile.rounding_tolerance))
+for spec in specs:
+    diff = diff_table(
+        spec,
+        PostgresConnector(postgres),
+        ClickHouseConnector(clickhouse),
+        rules_for(spec, settings.reconcile),
+        leaf_width=settings.reconcile.leaf_width,
+    )
+    found = discrepancies_of(spec, diff, tolerance)
+    result = verdict(spec, diff, found, settings.reconcile.thresholds)
+```
+
+- **In order:**
+  1. The operational tables first, which tell you whether the copy is right.
+  2. The reports, which tell you whether the business sees the same numbers.
+  3. The equality policy, agreed with the data owner before the first night.
+  4. The cutover rule, written down before the run starts, so nobody negotiates it on the night.
+- **Traps we hit:**
+  - **Two engines rarely agree on a value's text:** decimal padding, boolean spelling, time zones, `NULL` in a condition. Everything is rendered to one canonical string first, and a golden-row test holds Python, Postgres and ClickHouse to byte-identical output (ADR 0009).
+  - **ClickHouse's `avg` rounds a half to even** where Postgres rounds away from zero, and a ratio cast to a smaller scale truncates. Both showed up as report differences before any fault was planted, so compare the reports early, not only the tables.
+  - **Raw in ClickHouse is read with `FINAL`,** or a row changed in place is counted twice.
+  - **A report difference with no upstream cause is a logic difference** between the old SQL and the new model. It should block a clean night: it is the one a finance user finds after cutover.
+  - **Thresholds are the data owner's statement of what matters:** six payments a cent off were within the rounding allowance, so that night counted as clean.

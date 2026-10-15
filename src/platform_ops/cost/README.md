@@ -71,15 +71,35 @@ What the numbers say:
 
 The incremental models that already exist show why layout matters as much as the setting (bytes read per build, from `ops.query_log`). The two mart models (`sales_fct_order_items`, `marketing_fct_sessions`) read 63% less in their last build than in their first full one (150.3 MB, then 56.0 MB for order items). The two intermediate ones read more with every build (`int_order_items_enriched`: 68.0 MB in the first build, 115.0 MB in the last), because they read staging views over raw, and raw is sorted by its key, not by date, so the incremental filter skips nothing.
 
-## On a real warehouse
+## Adopting it
 
-Collection is the only step that knows where queries came from. On a real ClickHouse cluster the collector is the same, `clickhouse_records`, run with a read-only role after the access and data handling review; what the company has to add is the tag, which dbt can carry through its profile's `custom_settings` and a BI tool through its connection settings.
+On a real platform the pricing, the bill split and the attribution are the parts to keep; what you write is the step that collects queries, because only it knows where your queries come from.
 
-For the cloud warehouses, `cost/collectors/` has two collectors implementing the same `QueryCollector` protocol:
+- **Runs as is, as a library:**
+  - `pricing.py` prices any list of `QueryRecord`s on BigQuery on demand (`ScanPricing`) and on Snowflake warehouses (`ComputePricing`).
+  - `cluster.py` shares a stated monthly cost out exactly: `pools` prorates it per month, `compute_shares` splits compute by bytes read, `storage_shares` storage by table size.
+  - `attribution.py` (`attribute`, `Owners`) charges production to the table's owner and consumption to the reader, from a dbt manifest and an ownership registry.
+  - `collectors/` reads BigQuery's `INFORMATION_SCHEMA.JOBS` and Snowflake's `ACCOUNT_USAGE.QUERY_HISTORY` into the same records, pinned by contract tests. It never connects itself: you hand it the rows.
+- **Belongs to the simulated company:**
+  - `cost report` (`run.py`) reads the company's run (`ops.company_run`), its nightly merge (`ops.raw_maintenance`), its in-place changes (`ops.source_changes`) and the cutover the parallel run recommended.
+  - The ClickHouse collector (`collect.clickhouse_records`) keeps only queries carrying the simulation's tag, with its run id and simulated time.
+  - The business case compares the company's stated legacy replica with its cluster.
+- **What you replace:**
+  - **Collection on ClickHouse:** read `system.query_log` (`type = 'QueryFinish'`) into `QueryRecord`s. The actor is the query's `user`, one per team and service ([ADR 0016](../../../docs/adr/0016-users-per-team-and-bi-from-exposures.md)). The dbt node is the `unique_id` in the comment dbt puts in front of every statement (`query-comment` in `dbt_project.yml`). The dashboard is the tag your BI sets in `log_comment`.
+  - **The stated cost** (`cost.clickhouse` in the settings) with your own invoice.
+  - **The report:** yours, over the shares and the attribution.
+  - **On BigQuery or Snowflake:** a `Principals` mapping that says which service account is dbt and which is the BI tool.
+- **In order:**
+  1. One ClickHouse user per team and service, so the log knows who.
+  2. dbt's query comment and the BI's tag, so it knows what for.
+  3. The collector, on a week of history.
+  4. Shares and attribution against your registry.
+  5. Showback to each team before any chargeback: a team that sees its share for a month first argues less with the number.
+- **Traps we hit:**
+  - **`read_bytes` repeats only if raw is merged:** a `FINAL` read depends on how far ClickHouse's background merges got, so the company merges raw every night (about a fifth of its compute).
+  - **A `LIMIT` reads the same rows only on one thread**, so workload queries run with `max_threads = 1`.
+  - **`written_bytes` changes with how ClickHouse cuts blocks**, so only rows written are kept.
+  - **Catalogue-only statements are dropped:** dbt sends a different number of `CREATE` and `DROP` statements from run to run.
+  - **A dashboard refresh must land on the dashboard's owner,** not on the BI tool's user, or the bill tells every team that "metabase" is expensive.
 
-- `BigQueryJobsCollector` reads `INFORMATION_SCHEMA.JOBS`. It skips jobs that are not queries, not finished, failed, served from cache, and the parent job of a script (its children carry the statements), and counts each reason.
-- `SnowflakeQueryHistoryCollector` reads `ACCOUNT_USAGE.QUERY_HISTORY`. It skips `fail` and `incident` statuses and keeps result-cache hits, which scan nothing but still ran.
-
-Both take a `Principals` mapping that says which service account is dbt and which is the BI tool; everyone else is a person, recorded by the name before the `@` so it lines up with `config/teams.yaml`. The dbt node comes from the query comment dbt appends to every statement, and a dashboard from its job label or query tag.
-
-Neither collector makes a network call. They are pinned by contract tests (`tests/test_collectors.py`) against a few hundred recorded rows per vendor in `tests/fixtures/`, written in the documented column names and types. The fixtures were generated in 1.x from the simulated query log by `scripts/make_vendor_fixtures.py`, which needs the 1.x simulation and runs from tag `v1.2.0`.
+The two cloud collectors make no network call; their contract tests (`tests/test_collectors.py`) use a few hundred recorded rows per vendor in `tests/fixtures/`, in the documented column names and types.

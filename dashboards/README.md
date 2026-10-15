@@ -37,3 +37,15 @@ Looking at those screenshots found what no assertion would have:
 - dark dots where the rounded corners of four grid cells met.
 
 All three are fixed. The check itself found one more thing: Streamlit reports a page as done for a moment between running `app.py` and running the page, which a cold first load could land on, so the check now waits until the page stays done. The 1.x limits it found earlier (repeated month labels and an unexplained drop at the end of the window, a timeline without dates, narrow tables cutting off a column) are gone: the monthly chart names each month with the days the window covers in it, and the incident timeline's axis shows dates.
+
+## Adopting it
+
+The pages read the tables the simulated company's run writes (`company_run`, the cost, incident and reconciliation tables), so they do not run against your platform as they are. What carries over is how they are built:
+
+- **A read-only role of their own** on the results store, with default privileges so tables recreated by every run stay readable.
+- **One data layer** (`queries.py`) holding every query with the tables it needs, tested to read nothing outside the store, so a page can never touch production data.
+- **Nothing recomputed in a page:** whatever a report states is stored by the module that computed it, and the page only reads it.
+- **One set of colour rules** for every chart (`charts.py`), and a status shown by a glyph as well as a colour.
+- **A browser check with screenshots** after every run, which found what no assertion did.
+
+To reuse them, point `queries.py` at your own results tables and keep the pages thin.

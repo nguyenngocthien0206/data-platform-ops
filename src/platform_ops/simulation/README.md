@@ -130,3 +130,19 @@ During the production weeks things go wrong the way they do in production. Eight
 Each is planted in ClickHouse's raw layer, the copy, never in Postgres, the source of truth: during the working day after a night's run, rows picked by a stable hash of the seed from the history before the window, which no load re-reads. 1.x had duplicate keys instead of orphans, but a `ReplacingMergeTree` deduplicates raw by key, so they cannot happen here. A stopped loader leaves its table's watermark where it was, so the first load after the fix catches up on everything it missed.
 
 The fix is what a team does once the owner has found the cause: the raw table is resynced from Postgres in full (`Ingestion.resync`), at the time the owner's simulated response puts it (`incidents/lifecycle.py`). The next night's run then finds the root healthy and the incident resolves. Every fault, when it happened, how many rows it touched and when it was repaired is recorded in `ops.incident_faults`, the ground truth only the grading reads.
+
+## Adopting it
+
+This module is the simulated company itself, so none of it runs on yours. What carries over are four patterns, each a small file to read and copy:
+
+- **Watermark ingestion without change data capture** (`ingest.py`): ClickHouse pulls from Postgres through `postgresql()`, so the copy runs on the warehouse with no extra service; the overlap re-reads a margin for late commits; `ReplacingMergeTree` makes a double read harmless; every load records its range, and the latest one is the watermark. To copy it, replace the table list (`raw_data.TABLES` and their keys) with yours and size the overlap from your longest transaction.
+- **A ClickHouse user per team and per service** (`access.py`): reader and writer profiles, grants per layer, and the two extra grants the tools turned out to need (dbt-clickhouse reads `system.parts`, Metabase's driver reads `system.processes`). It is what makes the query log say who ran what, and the cost module depends on it.
+- **The BI generated from dbt exposures** (`bi.py`, `metabase.py`): one dashboard per exposure in its owning team's collection, created or updated by name, so adding a dashboard goes through the same review as the model it reads. The rule for a card's SQL and the 91-day window for daily charts are the parts to keep.
+- **Legacy reports as the migration's reference** (`legacy_reporting/`): keep the old SQL as views and test each dbt mart against the report it replaces, row count and every total, long before any parallel run.
+
+Traps we hit while building the company:
+
+- **ClickHouse's `avg` rounds a half to even**, Postgres's away from zero, so the marts average through an `avg_half_up` macro to match the legacy reports.
+- **Metabase draws only the first 2,000 rows of a chart**, without a warning, so daily charts cover their last 91 days and the check fails any chart that reaches the limit.
+- **A password with a shared default** is how test accounts reach production: every company user's password comes from `.env` with no default, and a missing one stops the run naming the variable.
+- **`ReplacingMergeTree` deduplicates only within a partition**, so raw is not partitioned by a column that changes, such as `updated_at`.
