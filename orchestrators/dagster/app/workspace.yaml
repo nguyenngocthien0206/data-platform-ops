@@ -1,0 +1,5 @@
+# One code location, `company`: the company's dbt project as assets.
+load_from:
+  - python_file:
+      relative_path: company_dbt.py
+      location_name: company
