@@ -25,7 +25,7 @@ Version 1.x (up to [`v1.2.0`](https://github.com/nguyenngocthien0206/data-platfo
 | Cost and FinOps on ClickHouse's query log: the cluster's bill per team, the migration's business case, BigQuery and Snowflake on the same workload | running | 13a, done |
 | The Streamlit dashboards on the ops store, read as their own read-only role | running | 13b, done |
 | Incidents on the company's production runs: faults in operation, every night's invocations ingested, one incident per root, resolved by a later run | running | 14a, done |
-| Incidents from real Airflow (Cosmos) and Dagster runs: the hooks they call, a namespace each, a chat double ([orchestrators](orchestrators/README.md)) | hooks ready; the stacks follow | 14b |
+| Incidents from real Airflow (Cosmos) and Dagster runs: the hooks they call, a namespace each, a chat double ([orchestrators](orchestrators/README.md)) | Airflow 3 with Cosmos running, tested end to end on demand; Dagster follows | 14b |
 | Documentation and release 2.0.0 | | 15 |
 
 Every 1.x module now runs on the new company; `make paused` confirms none is left. To run the complete 1.x toolkit, check out `v1.2.0` and follow its README. The full plan is in [docs/SPEC.md](docs/SPEC.md), and [docs/PROGRESS.md](docs/PROGRESS.md) records every decision and measurement along the way.
@@ -123,6 +123,8 @@ make docker-build         # the toolkit image; the first build downloads the dep
 make docker-demo          # Postgres and ClickHouse up, then the demo from a clean state
 make docker-test          # the full suite, skips listed with their reason
 make docker-metabase-check  # after docker-demo: every dashboard provisioned, run and opened in a browser
+make airflow              # Airflow 3 with Cosmos on its own company, UI on localhost:8080
+make docker-test-orchestrators  # a fault through Airflow: its incident, page, fix and resolution
 ```
 
 `make docker-lint` and `make docker-metadata-check` run the same checks as CI ([ADR 0013](docs/adr/0013-ci-and-release-from-the-same-container.md)). The company's data lives in the Postgres and ClickHouse volumes, the toolkit's scratch state on its own volumes; `make docker-clean` removes the latter, and `make help` lists every target.
@@ -199,15 +201,15 @@ src/platform_ops/  common, metadata, simulation (the company, its legacy Postgre
                    the ingestion), cost, incidents, reconcile, dashboard
 dashboards/        the Streamlit app over the ops store
 scripts/           vendor fixtures, README check, browser checks of the dashboards and of
-                   Metabase, release notes
+                   Metabase, the orchestrator check, release notes
 tests/             unit, integration and contract tests
 examples/          a GitHub Actions ownership check for a company dbt repository
 orchestrators/     how Airflow (Cosmos) and Dagster hand their dbt runs to the incident desk,
-                   and a chat double for their tests
+                   the Airflow stack (its image and DAG), and a chat double for their tests
 docs/              SPEC, PROGRESS, the ADRs and the Phase 6 review record
-.github/workflows/ CI and the release
+.github/workflows/ CI, the release, and the orchestrator check on demand
 Dockerfile         the toolkit image; docker-compose.yml runs it next to Postgres, ClickHouse
-                   and, behind a profile, Metabase
+                   and, behind profiles, Metabase, Airflow and the chat double
 ```
 
 The build plan is in [docs/SPEC.md](docs/SPEC.md), [docs/PROGRESS.md](docs/PROGRESS.md) records what was decided along the way and why, and [CHANGELOG.md](CHANGELOG.md) lists what each release contains.
