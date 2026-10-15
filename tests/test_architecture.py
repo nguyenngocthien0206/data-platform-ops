@@ -9,6 +9,7 @@ count too, since they are how boundaries usually get crossed quietly.
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,13 @@ ALLOWED: dict[str, set[str]] = {
     "incidents": {"common", "metadata", "simulation"},
     "reconcile": {"common", "metadata", "simulation"},
     "dashboard": {"common", "metadata"},
+    # The hooks orchestrators call (Phase 14b, ADR 0020): they run the CLI, so
+    # they need nothing of the toolkit, and nothing outside the standard library.
+    "integrations": set(),
 }
+
+# Neither orchestrator is ever a dependency of the toolkit: they call it.
+ORCHESTRATORS = ("airflow", "cosmos", "dagster", "dagster_dbt")
 
 # Accepted exceptions, by package. Version 2.0 has none: the 1.x simulated
 # warehouse carried the cost module's collection instruments
@@ -66,6 +73,31 @@ def _violations(package: str) -> list[str]:
 @pytest.mark.parametrize("package", sorted(ALLOWED))
 def test_packages_import_only_what_they_are_allowed_to(package: str) -> None:
     assert _violations(package) == []
+
+
+def _modules(path: Path) -> set[str]:
+    """Top-level names of every module ``path`` imports, platform_ops included."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            found.add(node.module.split(".", 1)[0])
+        elif isinstance(node, ast.Import):
+            found.update(a.name.split(".", 1)[0] for a in node.names)
+    return found
+
+
+def test_no_module_imports_an_orchestrator() -> None:
+    offenders = {
+        str(path.relative_to(SRC)): sorted(_modules(path) & set(ORCHESTRATORS))
+        for path in SRC.rglob("*.py")
+    }
+    assert {k: v for k, v in offenders.items() if v} == {}
+
+
+def test_the_integrations_use_the_standard_library_only() -> None:
+    for path in (SRC / "integrations").rglob("*.py"):
+        outside = _modules(path) - set(sys.stdlib_module_names) - {"__future__", "platform_ops"}
+        assert not outside, f"{path.name} imports {sorted(outside)}"
 
 
 def test_every_package_is_covered() -> None:
