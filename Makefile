@@ -49,7 +49,7 @@ up: ## Start Docker services (postgres, clickhouse)
 	$(COMPOSE) up -d --wait postgres clickhouse
 
 down: ## Stop Docker services
-	$(COMPOSE) --profile app --profile dashboard --profile browser --profile metabase down
+	$(COMPOSE) --profile app --profile dashboard --profile browser --profile metabase 		--profile chat --profile airflow down
 
 seed: ## Seed the legacy Postgres, empty ClickHouse, backfill its raw layer
 	$(RUN) platform-ops seed
@@ -186,3 +186,24 @@ docker-clean: check-env ## Remove the container's generated state and the report
 	$(COMPOSE) --profile app --profile dashboard --profile browser rm --force --stop
 	docker volume rm --force $(addprefix data-platform-ops_,app_data app_warehouse app_dbt_target app_dbt_logs)
 	find reports -type f ! -name .gitkeep -delete 2>/dev/null || true
+
+# -- the orchestrators (Phase 14b) -----------------------------------------------
+#
+# The company's dbt project scheduled by a real orchestrator, as a company of its
+# own (namespace af_), so make demo and its reports are never touched. Its pages
+# go to the chat double. Everything runs in containers: the toolkit image seeds
+# the company and serves the double (after a code change, make docker-build),
+# and the orchestrator has its own image, rebuilt here when its files change.
+
+AIRFLOW_SCALE ?= 0.1
+
+airflow: docker-up ## Seed the af_ company, start Airflow with Cosmos (AIRFLOW_SCALE=...)
+	$(COMPOSE) run --rm -e PLATFORM_OPS_NAMESPACE=af_ -e PLATFORM_OPS_SCALE_FACTOR=$(AIRFLOW_SCALE) 		app platform-ops seed
+	AIRFLOW_SCALE=$(AIRFLOW_SCALE) $(COMPOSE) --profile chat --profile airflow up -d --wait --build 		chat airflow
+	@echo "Airflow: http://localhost:$${AIRFLOW_PORT:-8080}, user admin, AIRFLOW_ADMIN_PASSWORD in .env."
+	@echo "DAG company_dbt runs at 02:00 UTC once unpaused; pages: http://localhost:$${CHAT_DOUBLE_PORT:-8099}/messages"
+
+# Seeds the af_ company anew at scale 0.01 (make airflow afterwards for 0.1).
+docker-test-orchestrators: docker-up ## A fault, its incident and page, the fix and the resolution, through Airflow
+	AIRFLOW_SCALE=0.01 $(COMPOSE) --profile chat --profile airflow up -d --wait --build chat airflow
+	$(COMPOSE) run --rm -e PLATFORM_OPS_NAMESPACE=af_ -e PLATFORM_OPS_SCALE_FACTOR=0.01 		app python scripts/check_orchestrators.py airflow

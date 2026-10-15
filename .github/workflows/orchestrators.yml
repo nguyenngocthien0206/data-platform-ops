@@ -1,0 +1,48 @@
+# The company's dbt project through a real orchestrator, end to end (Phase 14b).
+#
+# Airflow 3 with Cosmos runs the project in its own container; the check plants
+# one fault, waits for the DAG run to open one incident and page it into the
+# chat double, applies the fix, and waits for the next run to resolve it. Slower
+# than pull requests should wait for, so it runs on demand; pull requests test
+# the hooks against a fake CLI instead (tests/test_integrations.py).
+name: orchestrators
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  airflow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      # Fresh volumes on every run, so the example credentials are the real ones.
+      - name: Local settings for Compose
+        run: cp .env.example .env
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Loaded under the tag Compose expects, so the make target does not rebuild.
+      - name: Build the toolkit image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: data-platform-ops:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: A fault, its incident and page, the fix, the resolution
+        run: make docker-test-orchestrators
+
+      - name: Airflow's log
+        if: failure()
+        run: docker logs dpo-airflow 2>&1 | tail -300
+
+      - name: Stop the services
+        if: always()
+        run: make down

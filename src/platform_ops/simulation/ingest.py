@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+import psycopg
 from psycopg import sql
 
 from platform_ops.common.config import Settings
@@ -97,6 +98,26 @@ def raw_columns(table: str) -> list[tuple[str, str]]:
 
 def _ts(value: datetime) -> str:
     return f"toDateTime64('{value:%Y-%m-%d %H:%M:%S}', 6, 'UTC')"
+
+
+def company_clock(settings: Settings) -> datetime | None:
+    """The company's simulated time: where its latest load reached, ``None`` before any.
+
+    ``company run`` keeps the time itself. When the company's dbt runs under an
+    orchestrator instead (Phase 14b), on the real clock, source freshness is
+    measured against this (dbt's ``simulated_now`` var): the data is as fresh as
+    the last load the company made, not as the date on the wall.
+    """
+    try:
+        with open_store(settings) as store:
+            row = store.execute(
+                sql.SQL("SELECT max(loaded_until) FROM {}").format(
+                    ops_table(settings, "ingestion_loads")
+                )
+            ).fetchone()
+    except psycopg.errors.UndefinedTable:
+        return None
+    return row[0] if row else None
 
 
 @dataclass

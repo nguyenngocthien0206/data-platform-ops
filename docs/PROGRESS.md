@@ -6,14 +6,24 @@ Last updated: 2026-10-15
 
 ## Current phase
 
-Phase 14b-1: the foundation for real orchestrators (version 2.0): the hooks Airflow and Dagster call, a namespace per company, and a chat double. Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a to 14a are merged (PRs #15 to #20). Phase 14b is in three parts, one PR each: 14b-1 (this), 14b-2 (Airflow with Cosmos), 14b-3 (Dagster with dagster-dbt, the release gate).
-Branch: `phase-14b1-integrations` (off `main` at `d69f07f`).
+Phase 14b-2: Airflow 3 with Cosmos runs the company's dbt project on its own company (`af_`) and feeds the incident desk, tested end to end on demand (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a to 14b-1 are merged (PRs #15 to #21). Phase 14b is in three parts, one PR each: 14b-1 (merged), 14b-2 (this), 14b-3 (Dagster with dagster-dbt, the release gate).
+Branch: `phase-14b2-airflow` (off `main` at `a0ffc66`).
 
 Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
 
-- Phase 14b-1 implemented (branch `phase-14b1-integrations`, uncommitted):
+- Phase 14b-2 implemented (branch `phase-14b2-airflow`, uncommitted):
+  - **The Cosmos hook fixed**: Cosmos 1.15 calls `callback(tmp_project_dir, context=context, **callback_args)`, after dbt and before it raises, so it runs on a failed task too; `ingest_after_task` now reads the task context from that keyword (14b-1 read only the top level and fell back to `AIRFLOW_CTX_*`).
+  - **`platform-ops company clock`** (`simulation.ingest.company_clock`): the company's simulated time, where its latest load reached. An orchestrator's freshness is measured against it (owner's choice A), because the company's data lives on simulated time.
+  - **The Airflow image** (`orchestrators/airflow/Dockerfile`, `apache/airflow:3.3.2-python3.11`, 5.51 GB unpacked): Cosmos 1.15.1 against Airflow's constraint file; the toolkit in its own venv at `/opt/toolkit` from `uv.lock`, whose dbt Cosmos runs; the toolkit package without dependencies in Airflow's environment, for the hook; the manifest parsed at build time.
+  - **The DAG** `company_dbt` (`orchestrators/airflow/dags/company_dbt.py`): a `DbtTaskGroup` from the manifest, `TestBehavior.AFTER_EACH`, tests on two models detached into their own task, `ingest_after_task` on every task; a source freshness task beside it on the company's clock; 02:00 UTC, paused at creation, `max_active_runs=1`, 8 tasks at once.
+  - **The stack** (Compose profile `airflow`, `start.py`): `airflow standalone`, the `airflow` metadata database created on the company's Postgres, its URL from `start.py --connection` (`SQL_ALCHEMY_CONN_CMD`), the admin password from `AIRFLOW_ADMIN_PASSWORD` (no default). The container gets the Postgres login and the company's `dbt` ClickHouse user only, not `.env`; pages go to the chat double.
+  - **`make airflow`** (seeds `af_` at `AIRFLOW_SCALE`, default 0.1, starts `chat` and `airflow`), **`make docker-test-orchestrators`** (`scripts/check_orchestrators.py`), and the `orchestrators` workflow (`workflow_dispatch`).
+  - `test_architecture`: `platform_ops/__init__.py` must import the standard library only too, since Airflow's environment holds the package without its dependencies.
+  - `orchestrators/README.md` (the Airflow stack, wiring your own Cosmos DAG, the end-to-end check); README status, commands and layout; `.env.example`.
+- Phase 14b-2 verification: `make lint` clean; `make docker-test`: 422 passed, nothing skipped, 11 min 2 s. A manual run on a healthy `af_` company at scale 0.01 succeeded in 6 min 22 s (224 tasks). `make docker-test-orchestrators` from a clean stack (no containers, no `airflow` database), twice: passed in 9 min 21 s and 9 min 40 s. Each time F1 planted 66 NULLs; the faulted run failed in 152 s and 162 s, its 70 invocations became one incident (INC-001 at `model.company.stg_orders`, SEV1, priya) with one page in the chat double; after the resync the next run succeeded in 364 s and 374 s, resolved INC-001, and sent one resolution, nothing else. `make demo`, `company`, `dbt/` and the desk are unchanged, so the 14a runs stand.
+- Phase 14b-1 implemented and merged (PR #21):
   - **`PLATFORM_OPS_NAMESPACE`** replaces `company.namespace` for one run, as `PLATFORM_OPS_SCALE_FACTOR` does the scale: another company from the same config file.
   - **`platform_ops.integrations`**, standard library only: `ingest` runs `platform-ops incidents ingest` (`PLATFORM_OPS_CLI`, `PLATFORM_OPS_REGISTRY_DIR`), passes the run id and an optional detection time as naive UTC, and logs a failure or a hang, never raising it; `cosmos.ingest_after_task` (run id `airflow:<dag>:<run>` from the task context or `AIRFLOW_CTX_*`); `dagster.ingest_dbt_invocation` (run id `dagster:<run>`).
   - **The chat double** (`orchestrators/chat_double.py`, Compose profile `chat`): answers like Slack's `chat.postMessage` and Telegram's `sendMessage`, refuses a missing token or chat, keeps every message.
@@ -183,7 +193,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 
 ## In progress
 
-Phase 14b-1, waiting for the owner's review and commits. Nothing of 14b-2 or 14b-3 is started: no orchestrator image, DAG, Dagster definition, Compose profile for them, or orchestrator test exists yet.
+Phase 14b-2, waiting for the owner's review and commits. Nothing of 14b-3 is started: no Dagster image, definitions, Compose profile or test exists yet. `scripts/check_orchestrators.py` takes `airflow` only; 14b-3 adds `dagster`.
 
 ## Decisions made
 
@@ -193,6 +203,18 @@ Phase 14b-1, waiting for the owner's review and commits. Nothing of 14b-2 or 14b
 2. **Each orchestrator runs its own company in its own namespace** (`af_`, `dg_`), with its own incident store; `make demo` is never touched.
 3. **A real 02:00 schedule, paused by default**; the tests trigger runs through the APIs.
 4. **Three parts, one PR each** (14b-1 the foundation, 14b-2 Airflow, 14b-3 Dagster and the release gate), so every session ends in a state that can be committed.
+
+### Phase 14b-2, made during implementation
+
+- **Freshness on the company's clock** (owner, 2026-10-15, option A): `platform-ops company clock` gives dbt's `simulated_now`; on the wall clock every source of the simulated company would be stale every night.
+- **Freshness beside the models, not before them**: a stale feed turns the run red without holding the build back (the plan had it as the first task).
+- **The toolkit's dbt is the one Cosmos runs** (`dbt_executable_path`): Airflow's environment holds no dbt, so the two lock files never meet.
+- **The manifest is parsed at image build** (`LoadMode.DBT_MANIFEST`): no dbt runs while the DAG is parsed; Cosmos caches the partial parse after the first task, so later tasks skip the full parse (about 10 s each).
+- **Tests on two models are detached** (`should_detach_multiple_parents_tests`): on the first healthy run, `relationships` from `stg_payments` to `stg_orders` ran with `stg_orders`'s tests before `stg_payments` existed and failed.
+- **No `start_date`** on the schedule (`CronTriggerTimetable`, `run_immediately=timedelta(0)`, `catchup=False`): with one, Airflow 3.3 runs the night that just passed as soon as a fresh stack is unpaused, which made a clean-stack test run twice and attribute the incident to the scheduled run. Without it, a fresh stack waits for the next 02:00, and a stack that was down runs the latest night missed once.
+- **The container gets only what it uses**: the Postgres login and the company's `dbt` ClickHouse user, no `.env`; nothing secret is in the DAG.
+- **The whole project in the test, no selection**: one run of all 224 tasks takes about 6 minutes at scale 0.01, under the 15 minutes the plan allowed.
+- **No screenshot in the README**: the repository tracks no images (screenshots go to `reports/`); the UI was checked through the API instead.
 
 ### Phase 14b-1, made during implementation
 
@@ -546,7 +568,6 @@ None open.
 
 ## Next step
 
-1. The owner reviews Phase 14b-1, commits it in the proposed sequence, and merges.
-2. Phase 14b-2 (planned, in the plan file): the Airflow 3 image with Cosmos and the toolkit in its own venv, the company DAG (`af_`, 02:00, paused), `make airflow`, the Airflow half of `make docker-test-orchestrators`, and the on-demand workflow. Check Cosmos's callback and Airflow 3's API auth against the installed versions first.
-3. Phase 14b-3: Dagster with dagster-dbt, its half of the tests, and the release gate.
+1. The owner reviews Phase 14b-2, commits it in the proposed sequence, and merges.
+2. Phase 14b-3 (planned, in the plan file): Dagster with dagster-dbt in its own image (`dg_`, 02:00, stopped), `make dagster`, the Dagster half of `make docker-test-orchestrators` through its GraphQL API, and the release gate (`release.yml` waits for both orchestrators). Check dagster-dbt's invocation API against the installed version first.
 3. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).

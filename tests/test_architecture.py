@@ -95,7 +95,9 @@ def test_no_module_imports_an_orchestrator() -> None:
 
 
 def test_the_integrations_use_the_standard_library_only() -> None:
-    for path in (SRC / "integrations").rglob("*.py"):
+    # The package's own __init__ too: the Airflow image installs the toolkit
+    # without its dependencies so a DAG can import the hooks.
+    for path in [SRC / "__init__.py", *(SRC / "integrations").rglob("*.py")]:
         outside = _modules(path) - set(sys.stdlib_module_names) - {"__future__", "platform_ops"}
         assert not outside, f"{path.name} imports {sorted(outside)}"
 
