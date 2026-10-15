@@ -6,14 +6,20 @@ Last updated: 2026-10-15
 
 ## Current phase
 
-Phase 14b-3: Dagster with dagster-dbt runs the company's dbt project on its own company (`dg_`), and the release waits for a fault to go through both orchestrators (version 2.0). This completes Phase 14. Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a to 14b-2 are merged (PRs #15 to #22).
-Branch: `phase-14b3-dagster` (off `main` at `a5a114c`).
+Phase 15a: the architecture diagram and the screenshots for the docs (version 2.0). Implemented and verified, uncommitted, waiting for the owner's review. Phases 11a to 14 are merged (PRs #15 to #23). Phase 15 is in three parts, one PR each: 15a (this), 15b (the README around 2.0 and an adoption guide per module), 15c (the release run and 2.0.0).
+Branch: `phase-15a-visuals` (off `main` at `3b8b38d`).
 
 Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilds the simulated company on Postgres and ClickHouse.
 
 ## Done
 
-- Phase 14b-3 implemented (branch `phase-14b3-dagster`, uncommitted):
+- Phase 15a implemented (branch `phase-15a-visuals`, uncommitted):
+  - **Logos from each vendor's own files, in full colour** (`docs/images/logos/`, 13 files, 66 KB): PostgreSQL, ClickHouse, dbt, Airflow, Dagster, Metabase, Streamlit, Slack, Telegram, Docker, GitHub, BigQuery, Snowflake. `LICENSES.md` gives each one's source, the date and the guidelines; nothing is modified, the two PNGs only scaled to 256 px.
+  - **The architecture diagram** (`docs/images/architecture.svg`, 119 KB) drawn by `scripts/make_architecture.py` (`make docs-diagram`) in the style of the owner's template: a title, a legend, the company's flow in six numbered steps (legacy Postgres, the incremental copy, ClickHouse, dbt run nightly by Airflow or Dagster, Metabase, the teams), the toolkit's lane (reconcile, cost, incidents on the shared metadata layer, the ops store, the dashboards, pages to Slack and Telegram), and three panels underneath (the sign-off, the bill, one page per problem). Its numbers are read from the dbt project and the config; logos are embedded as data URIs so the SVG stands alone; a text that does not fit its box fails the script.
+  - **Screenshots**: `scripts/screenshot_orchestrators.py` (the `docs-screens` Compose service, in the Playwright image) opens Airflow with a JWT set as its `_token` cookie, expands the task groups and photographs the grid, then Dagster's runs and its latest failed run; `scripts/curate_screens.py` picks 11 screens (4 Streamlit pages, a Metabase dashboard per team, Airflow, two of Dagster) into `docs/images/screens/`, light theme, cut to a README height, optimised PNG, under a 3 MB budget. `make docker-docs-images` runs the three after `docker-demo`, `docker-metabase-check` and `docker-test-orchestrators`.
+  - `tests/test_docs_images.py`: the committed diagram equals what the script draws, its numbers come from the project, every vendored logo is listed in `LICENSES.md` and every listed one is vendored, overflowing text fails, and the curation cuts and names each screen and names the target that makes a missing one.
+- Phase 15a verification: `make lint` clean; `make docker-test`: 429 passed, nothing skipped, 10 min 34 s. The diagram was rendered in Chromium as GitHub shows it (an `<img>`) and checked by eye; `make docker-docs-images` ran end to end on the Phase 14 demo state and the orchestrator stacks: 8 of 8 dashboard page loads passed, 3 orchestrator screenshots, 11 screens in 1.30 MB. The screenshots in `docs/images/screens/` are not committed in 15a: the committed set comes from the 2.0.0 release run (15c).
+- Phase 14b-3 implemented and merged (PR #23):
   - **The Dagster image** (`orchestrators/dagster/Dockerfile`, `python:3.11.16-slim-bookworm`, 2.12 GB unpacked): Dagster 1.13.25 and dagster-dbt 0.29.25 from a pinned, hashed `requirements.txt` (compiled from `requirements.in` with `uv pip compile`); the toolkit in its own venv at `/opt/toolkit`, whose dbt dagster-dbt runs (`dbt_executable`); the toolkit package without dependencies in Dagster's environment, for the hook; the manifest parsed at build time.
   - **The definitions** (`orchestrators/dagster/app/company_dbt.py`): `@dbt_assets` over the manifest; source freshness on the company's clock, then one `dbt build`, both with `raise_on_error=False`, each ingested with `ingest_dbt_invocation` under `dagster:<run id>`; the run fails afterwards when dbt failed. Job `company_dbt`, schedule `company_dbt_nightly` at 02:00 UTC, stopped by default.
   - **The stack** (Compose profile `dagster`, `start.py`, `dagster.yaml`): `dagster dev` (webserver and daemon), storage in a `dagster` database on the company's Postgres, created at start; UI on 127.0.0.1 only (`DAGSTER_PORT`, default 3001), since it has no login. Same least privilege as Airflow (`dg_dbt`).
@@ -202,7 +208,7 @@ Phases 0 to 9 are released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstra
 
 ## In progress
 
-Phase 14b-3, waiting for the owner's review and commits. Phase 14 is complete with it. The release gate has run locally only (the same make target); its first run on GitHub is the next tag's release, or the `orchestrators` workflow run by hand.
+Phase 15a, waiting for the owner's review and commits. 15b (the README and the adoption guides) and 15c (the release run, the committed screenshots, 2.0.0) are planned, not started.
 
 ## Decisions made
 
@@ -212,6 +218,22 @@ Phase 14b-3, waiting for the owner's review and commits. Phase 14 is complete wi
 2. **Each orchestrator runs its own company in its own namespace** (`af_`, `dg_`), with its own incident store; `make demo` is never touched.
 3. **A real 02:00 schedule, paused by default**; the tests trigger runs through the APIs.
 4. **Three parts, one PR each** (14b-1 the foundation, 14b-2 Airflow, 14b-3 Dagster and the release gate), so every session ends in a state that can be committed.
+
+### Phase 15 (owner, 2026-10-15)
+
+1. **Not plug-n-play, but adoptable**: no new commands for use outside the simulation; each module's README says what runs as is, what belongs to the simulated company, and what to replace.
+2. **The README speaks of version 2 only**: no DuckDB, SQL Server, 1.x results or superseded ADRs. The legacy Postgres and its reports stay, as the input of the migration.
+3. **"How the decisions were made" becomes how the problems were seen, framed and solved.**
+4. **A professional architecture diagram** in the style of the owner's template, white background, one version, **every logo in full colour from the vendor's own files**.
+5. **Screenshots committed** in the repository.
+
+### Phase 15a, made during implementation
+
+- **The diagram is generated, not drawn by hand**: reviewed as code, its numbers from the project, a test that fails when it is stale.
+- **Logos where the brand kit could not be fetched directly**: Slack's media kit downloads through a portal that needs a browser, and Snowflake's brand page refuses automated requests, so both come from the vendor's own site (Slack's marketing CDN, Snowflake's documentation). dbt's kit and the ASF's Airflow logos ship PNG only. ClickHouse's kit ships black and white only. All recorded in `LICENSES.md`.
+- **No Python logo**: the official file carries the wordmark, and the diagram does not need it.
+- **Dagster's run page, not its asset graph**: the graph of 120 assets is unreadable at README size.
+- **Metabase screenshots are the first 900 px** of each dashboard: Metabase scrolls inside the page, so a full-page capture stops at the viewport.
 
 ### Phase 14b-3, made during implementation
 
@@ -589,6 +611,6 @@ None open.
 
 ## Next step
 
-1. The owner reviews Phase 14b-3, commits it in the proposed sequence, and merges. Phase 14 is then complete.
-2. Phase 15 (SPEC): documentation and release 2.0.0. The root README around the migration story with results from a real 2.0 run, the ADRs and later notes on the 1.x ADRs the re-platform changed, the SPEC's layout and Makefile table, `readme-check` revived for 2.0, PROGRESS closed out, `CHANGELOG.md` 2.0.0; the owner pushes the tag, and the release runs the orchestrator checks for the first time on GitHub.
+1. The owner reviews Phase 15a, commits it in the proposed sequence, and merges.
+2. Phase 15b (planned, in the plan file): the root README around version 2.0 (the architecture diagram and its steps, the screenshots, how the problems were solved, use it on your platform), an "Adopting it" section in every module README, ADR 0010's later note, the SPEC's layout and Makefile table. Then 15c: the release run at scale 1.0, the committed screenshots, `readme-check` for 2.0, 2.0.0.
 3. Pilot rollout of the ownership check, with 1.2.0 (unaffected by 2.0): follow "Rolling out on a repository" in the metadata README and record the baseline here (numbers only).
