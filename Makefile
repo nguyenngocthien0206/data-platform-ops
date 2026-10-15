@@ -32,7 +32,8 @@ DOCKER_ENGINES ?= postgres clickhouse
         dashboard paused readme-check test lint fmt clean pipeline demo check-env \
         docker-build docker-up docker-demo docker-test docker-lint \
         docker-metadata-check docker-metabase-check docker-readme-check docker-dashboard \
-        docker-browser-check docker-shell docker-clean
+        docker-browser-check docker-shell docker-clean \
+        airflow dagster docker-test-orchestrators
 
 help: ## Show the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -49,7 +50,8 @@ up: ## Start Docker services (postgres, clickhouse)
 	$(COMPOSE) up -d --wait postgres clickhouse
 
 down: ## Stop Docker services
-	$(COMPOSE) --profile app --profile dashboard --profile browser --profile metabase 		--profile chat --profile airflow down
+	$(COMPOSE) --profile app --profile dashboard --profile browser --profile metabase \
+		--profile chat --profile airflow --profile dagster down
 
 seed: ## Seed the legacy Postgres, empty ClickHouse, backfill its raw layer
 	$(RUN) platform-ops seed
@@ -189,21 +191,43 @@ docker-clean: check-env ## Remove the container's generated state and the report
 
 # -- the orchestrators (Phase 14b) -----------------------------------------------
 #
-# The company's dbt project scheduled by a real orchestrator, as a company of its
-# own (namespace af_), so make demo and its reports are never touched. Its pages
-# go to the chat double. Everything runs in containers: the toolkit image seeds
-# the company and serves the double (after a code change, make docker-build),
-# and the orchestrator has its own image, rebuilt here when its files change.
+# The company's dbt project scheduled by a real orchestrator, each as a company
+# of its own (namespace af_ for Airflow, dg_ for Dagster), so make demo and its
+# reports are never touched. Their pages go to the chat double. Everything runs
+# in containers: the toolkit image seeds the companies and serves the double
+# (after a code change, make docker-build), and each orchestrator has its own
+# image, rebuilt here when its files change.
 
 AIRFLOW_SCALE ?= 0.1
+DAGSTER_SCALE ?= 0.1
+ORCHESTRATORS ?= airflow dagster
 
 airflow: docker-up ## Seed the af_ company, start Airflow with Cosmos (AIRFLOW_SCALE=...)
-	$(COMPOSE) run --rm -e PLATFORM_OPS_NAMESPACE=af_ -e PLATFORM_OPS_SCALE_FACTOR=$(AIRFLOW_SCALE) 		app platform-ops seed
-	AIRFLOW_SCALE=$(AIRFLOW_SCALE) $(COMPOSE) --profile chat --profile airflow up -d --wait --build 		chat airflow
+	$(COMPOSE) run --rm -e PLATFORM_OPS_NAMESPACE=af_ -e PLATFORM_OPS_SCALE_FACTOR=$(AIRFLOW_SCALE) \
+		app platform-ops seed
+	AIRFLOW_SCALE=$(AIRFLOW_SCALE) $(COMPOSE) --profile chat --profile airflow up -d --wait --build \
+		chat airflow
 	@echo "Airflow: http://localhost:$${AIRFLOW_PORT:-8080}, user admin, AIRFLOW_ADMIN_PASSWORD in .env."
 	@echo "DAG company_dbt runs at 02:00 UTC once unpaused; pages: http://localhost:$${CHAT_DOUBLE_PORT:-8099}/messages"
 
-# Seeds the af_ company anew at scale 0.01 (make airflow afterwards for 0.1).
-docker-test-orchestrators: docker-up ## A fault, its incident and page, the fix and the resolution, through Airflow
-	AIRFLOW_SCALE=0.01 $(COMPOSE) --profile chat --profile airflow up -d --wait --build chat airflow
-	$(COMPOSE) run --rm -e PLATFORM_OPS_NAMESPACE=af_ -e PLATFORM_OPS_SCALE_FACTOR=0.01 		app python scripts/check_orchestrators.py airflow
+dagster: docker-up ## Seed the dg_ company, start Dagster with dagster-dbt (DAGSTER_SCALE=...)
+	$(COMPOSE) run --rm -e PLATFORM_OPS_NAMESPACE=dg_ -e PLATFORM_OPS_SCALE_FACTOR=$(DAGSTER_SCALE) \
+		app platform-ops seed
+	DAGSTER_SCALE=$(DAGSTER_SCALE) $(COMPOSE) --profile chat --profile dagster up -d --wait --build \
+		chat dagster
+	@echo "Dagster: http://localhost:$${DAGSTER_PORT:-3001} (no login; published on this machine only)."
+	@echo "Job company_dbt runs at 02:00 UTC once its schedule is started; pages: http://localhost:$${CHAT_DOUBLE_PORT:-8099}/messages"
+
+# Seeds each company anew at scale 0.01 (make airflow or make dagster afterwards
+# for 0.1). ORCHESTRATORS=airflow runs one; the release runs each on its own runner.
+docker-test-orchestrators: docker-up ## A fault, its incident and page, the fix and the resolution, through each orchestrator
+	@for orchestrator in $(ORCHESTRATORS); do \
+		case $$orchestrator in airflow) ns=af_ ;; dagster) ns=dg_ ;; \
+			*) echo "unknown orchestrator: $$orchestrator"; exit 2 ;; esac; \
+		scale=$$(echo $$orchestrator | tr a-z A-Z)_SCALE; \
+		echo "== $$orchestrator"; \
+		env $$scale=0.01 $(COMPOSE) --profile chat --profile $$orchestrator up -d --wait --build \
+			chat $$orchestrator; \
+		$(COMPOSE) run --rm -e PLATFORM_OPS_NAMESPACE=$$ns -e PLATFORM_OPS_SCALE_FACTOR=0.01 \
+			app python scripts/check_orchestrators.py $$orchestrator; \
+	done
