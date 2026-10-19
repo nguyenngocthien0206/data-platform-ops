@@ -35,13 +35,13 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 - **CI caught a diagram that differed between Windows and Linux**: `postgresql.svg` was downloaded with CRLF line ends, git stored it with LF (`* text=auto eol=lf`), but the working copy kept CRLF, so the diagram drawn on the development laptop embedded different bytes than CI's checkout. `make_architecture.py` now turns CRLF into LF before embedding an SVG logo, and the working copy matches git again; the test passes on Linux from a clean `git archive` of the branch, and the old files reproduce the failure.
 - Verification: `make lint` clean; `make docker-test`: 465 passed, nothing skipped, 10 min 39 s; `make readme-check` passes.
 
-### After the merge of Phase 15 (uncommitted, branch `fix-release-reports-permission`)
+### After the merge of Phase 15 (merged as PR #25)
 
 - **The first `v2.0.0` release failed in its Metabase job**: `make docker-demo` could not write `reports/reconciliation.md` (`PermissionError`). The toolkit's container runs as user 1000 and writes to `reports/` and `docs/images/screens/`, bind-mounted from the checkout, which on a GitHub runner belongs to user 1001; Docker Desktop on the development laptop does not check, and no release had run the demo before (the Metabase job is from Phase 11b, after 1.2.0). `make check-env`, which every `docker-*` target runs first, now creates both folders and opens them to the container (`chmod a+w`). Reproduced and checked in Linux containers: a folder owned by 1001 refuses user 1000, and after `check-env` run by its owner, user 1000 writes the report, a subfolder and a screenshot.
 
 ## In progress
 
-Phase 15 is merged (PR #24). The fix for the release (`make check-env` opens the bind-mounted folders to the container) waits for the owner's review; then the tag again.
+Phase 15 is merged (PR #24), and the fix for the release (PR #25). `v2.0.0` was tagged again on `main` after the fix. Nothing is in progress.
 
 ## Decisions made
 
@@ -435,12 +435,33 @@ For version 2.0.0 (design limits; the ADRs and module READMEs say where):
 - **The screenshots in `docs/images/screens/` are from the 2.0.0 release run** and must be retaken (`make docker-docs-images`) when a page changes; the architecture diagram is checked by a test, the screenshots are not.
 - `make docker-browser-check`, `readme-check` and the Metabase check stay out of pull request CI: they need a full run. The release runs Metabase and both orchestrators; `readme-check` needs a scale 1.0 run, so it runs by hand before a release.
 
+## Backlog
+
+Improvements the owner asked to note after 2.0.0, not planned yet.
+
+### Dashboard cost by viewer (owner, 2026-10-19)
+
+The cost module charges a dashboard today, but not the way its viewers use it:
+
+1. **The simulation only has scheduled refreshes, no one opening a dashboard.** Each dashboard is refreshed every 12 or 24 hours after the 02:00 run (`simulation/workload.py`), so a dashboard's cost today is the cost of keeping it fresh, not the cost of the views it gets.
+2. **The owner pays, not the viewer.** A refresh is consumption charged to the team that owns the dashboard (`cost/attribution.py`): a finance dashboard that sales opens all day is paid by finance alone.
+3. **In real life it is harder.** Every query the BI tool sends runs as its one service user, so the warehouse's query log sees the BI tool, not the person viewing; and a view served from the BI tool's cache sends no query at all, so there is nothing to charge.
+
+Directions discussed, none decided:
+
+- **A. Keep the owner paying** (today): simple, and the owner has a reason to tune the dashboard.
+- **B. Share each dashboard's measured cost across teams by views**, from the BI tool's own view log (who opened which dashboard, when), mapped from BI users to teams; scheduled refreshes shared the same way, since they exist for the viewers. Totals still add up to the bill. The assistant's recommendation.
+- **C. Charge each query to the person who triggered it**, where the BI tool writes the user's id into the query it sends; exact, and cache hits cost nothing, but it depends on the driver keeping that comment (to check first), and scheduled refreshes still need A or B.
+
+Any of them needs the simulation to model people opening dashboards, by team, so the demo shows the difference.
+
 ## Open questions for the owner
 
 None open.
 
 ## Next step
 
-1. The owner merges the fix for the release, deletes the failed `v2.0.0` tag, and tags the new `main` again (the failed release published nothing).
-2. The owner pushes `v2.0.0`. The release workflow runs CI, the Metabase check and both orchestrator checks (their first run on GitHub) before it publishes the image and the GitHub Release; if an orchestrator job fails on GitHub, the `orchestrators` workflow can be run by hand to look at it before tagging again.
+1. Check that the second `v2.0.0` release published: the image `2.0.0` on GHCR and the GitHub Release with the changelog's notes.
+2. If a release job failed again, fix it on a branch, then delete and push the tag again (a failed release publishes nothing); the `orchestrators` workflow can be run by hand to look at an orchestrator job.
 3. Pilot rollout of the ownership check on a company dbt repository, with the 2.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
+4. Decide on dashboard cost by viewer (Backlog): A, B or C, then a phase to build it.
