@@ -455,6 +455,18 @@ Directions discussed, none decided:
 
 Any of them needs the simulation to model people opening dashboards, by team, so the demo shows the difference.
 
+### Incidents (owner, 2026-10-19)
+
+How the desk works today: it reads each dbt invocation's results as soon as that step of the pipeline finishes (after each of a production night's four invocations, after each Cosmos task, after Dagster's build), regroups the whole run, and pages at once; no second scan. The gaps:
+
+1. **An incident resolves only at the next scheduled run.** Owners fix within hours, but the incident waits for the next night's run to show its root healthy, so none closes in less than 24 hours. There is no way to rerun the root's checks right after a fix.
+2. **No acknowledgement or escalation in real use.** A page goes to one person, the owner: no on-call rotation, no backup, no escalation when nobody acknowledges, and no acknowledgement recorded from the chat. The time to acknowledge and to fix is simulated (`incidents/lifecycle.py`).
+3. **Only what a test or a freshness check catches.** Wrong data no test checks is invisible, and a stopped feed is found only once the freshness rule's two days are over (64 hours in the release run).
+4. **Grouping stays within one run.** Two unrelated faults failing the same downstream node in one run attach it to one of the two roots, by tie-break.
+5. **The routing exception is narrow.** Only a staging model reading exactly one source pages the source's owner; when broken source data first shows in an intermediate model or a mart, the page goes to that model's owner.
+6. **Severity comes from lineage alone.** The score weighs what sits downstream by tier, not the moment (a finance month-end close) or how long the data has been broken.
+7. **The load is shown, not balanced.** 6 of the 8 pages went to the one person who owns most feeds; the desk measures that, but has no secondary owner or way to share the load.
+
 ## Open questions for the owner
 
 None open.
@@ -465,3 +477,4 @@ None open.
 2. If a release job failed again, fix it on a branch, then delete and push the tag again (a failed release publishes nothing); the `orchestrators` workflow can be run by hand to look at an orchestrator job.
 3. Pilot rollout of the ownership check on a company dbt repository, with the 2.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
 4. Decide on dashboard cost by viewer (Backlog): A, B or C, then a phase to build it.
+5. Decide which incident gaps to close (Backlog), then a phase to build them.
