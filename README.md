@@ -14,7 +14,7 @@ The company is simulated so it can run on a laptop, offline, from one command, w
 
 **The migration window.** The company's 112 days end with its migration: six weeks of a **parallel run**, where both systems run and are compared every night, and the cutover once the comparison has been clean for 14 nights in a row; then three weeks of **production** on ClickHouse alone, where faults happen the way they do in real life.
 
-**The toolkit.** Three modules read what the company already produces and never call each other. They share one metadata layer, the ownership registry and the lineage graph, and write every result to one store, a separate Postgres database that the Streamlit dashboards read through a read-only role. **reconcile** compares Postgres and ClickHouse table by table and report by report. **cost** reads ClickHouse's own query log and storage tables. **incidents** reads each dbt invocation's results, from the nightly schedule, Airflow or Dagster alike, and pages the owner, in Slack or Telegram once their tokens are set. Every place a real deployment talks to an outside system sits behind a small interface with a local default ([ADR 0007](docs/adr/0007-local-first-design.md)).
+**The toolkit.** Three modules read what the company already produces and never call each other. They share one metadata layer, the ownership registry and the lineage graph, and write every result to one store, a separate Postgres database that the Streamlit dashboards read through a read-only role. **reconcile** compares Postgres and ClickHouse table by table and report by report. **cost** reads ClickHouse's own query log and storage tables. **incidents** reads each dbt invocation's results, from the nightly schedule, Airflow or Dagster alike, and pages the owner, in Slack or Telegram once their tokens are set. Every place a real deployment talks to an outside system sits behind a small interface with a local default ([ADR 0007](docs/adr/0007-local-first-design.md)). [How it works](docs/HOW-IT-WORKS.md) explains each module step by step, starting from the simplest approach and adding one idea at a time.
 
 ## What it looks like
 
@@ -198,7 +198,7 @@ scripts/           the architecture diagram, screenshots, browser checks of the 
                    and Metabase, the orchestrator check, release notes
 tests/             unit, integration and contract tests
 examples/          a GitHub Actions ownership check for a company dbt repository
-docs/              SPEC, PROGRESS, the ADRs and the images
+docs/              SPEC, PROGRESS, how each module works, the ADRs and the images
 .github/workflows/ CI, the orchestrator checks, and the release, which waits for both
 Dockerfile         the toolkit image; docker-compose.yml runs it next to Postgres, ClickHouse
                    and, behind profiles, Metabase, Airflow, Dagster and the chat double
