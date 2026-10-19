@@ -46,6 +46,7 @@ data-platform-ops/
     ├── CLAUDE.md
     ├── PROGRESS.md
     ├── SPEC.md
+    ├── HOW-IT-WORKS.md        # each module explained step by step (after 2.0.0)
     ├── images/                # the architecture diagram, vendor logos, screenshots (Phase 15)
     ├── review/                # the Phase 6 review record
     └── adr/                   # decision records, indexed in adr/README.md

@@ -35,13 +35,18 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 - **CI caught a diagram that differed between Windows and Linux**: `postgresql.svg` was downloaded with CRLF line ends, git stored it with LF (`* text=auto eol=lf`), but the working copy kept CRLF, so the diagram drawn on the development laptop embedded different bytes than CI's checkout. `make_architecture.py` now turns CRLF into LF before embedding an SVG logo, and the working copy matches git again; the test passes on Linux from a clean `git archive` of the branch, and the old files reproduce the failure.
 - Verification: `make lint` clean; `make docker-test`: 465 passed, nothing skipped, 10 min 39 s; `make readme-check` passes.
 
-### After the merge of Phase 15 (uncommitted, branch `fix-release-reports-permission`)
+### After the merge of Phase 15 (merged as PR #25)
 
 - **The first `v2.0.0` release failed in its Metabase job**: `make docker-demo` could not write `reports/reconciliation.md` (`PermissionError`). The toolkit's container runs as user 1000 and writes to `reports/` and `docs/images/screens/`, bind-mounted from the checkout, which on a GitHub runner belongs to user 1001; Docker Desktop on the development laptop does not check, and no release had run the demo before (the Metabase job is from Phase 11b, after 1.2.0). `make check-env`, which every `docker-*` target runs first, now creates both folders and opens them to the container (`chmod a+w`). Reproduced and checked in Linux containers: a folder owned by 1001 refuses user 1000, and after `check-env` run by its owner, user 1000 writes the report, a subfolder and a screenshot.
 
+### After 2.0.0 (uncommitted, branch `docs-module-explainers`)
+
+- **`docs/HOW-IT-WORKS.md`** (owner, 2026-10-19): every module explained the same way, from the simplest approach that could work, where it breaks, and one idea at a time, each fixing one problem; the owner found the step-by-step reconcile explanation the one that made it clear. Linked from the README and the SPEC's layout; the link check covers its table of contents.
+- **The Backlog** in this file: dashboard cost by viewer, the incident desk's seven gaps, reconcile's six.
+
 ## In progress
 
-Phase 15 is merged (PR #24). The fix for the release (`make check-env` opens the bind-mounted folders to the container) waits for the owner's review; then the tag again.
+Phase 15 is merged (PR #24), and the fix for the release (PR #25). `v2.0.0` was tagged again on `main` after the fix. Nothing is in progress.
 
 ## Decisions made
 
@@ -435,12 +440,58 @@ For version 2.0.0 (design limits; the ADRs and module READMEs say where):
 - **The screenshots in `docs/images/screens/` are from the 2.0.0 release run** and must be retaken (`make docker-docs-images`) when a page changes; the architecture diagram is checked by a test, the screenshots are not.
 - `make docker-browser-check`, `readme-check` and the Metabase check stay out of pull request CI: they need a full run. The release runs Metabase and both orchestrators; `readme-check` needs a scale 1.0 run, so it runs by hand before a release.
 
+## Backlog
+
+Improvements the owner asked to note after 2.0.0, not planned yet.
+
+### Dashboard cost by viewer (owner, 2026-10-19)
+
+The cost module charges a dashboard today, but not the way its viewers use it:
+
+1. **The simulation only has scheduled refreshes, no one opening a dashboard.** Each dashboard is refreshed every 12 or 24 hours after the 02:00 run (`simulation/workload.py`), so a dashboard's cost today is the cost of keeping it fresh, not the cost of the views it gets.
+2. **The owner pays, not the viewer.** A refresh is consumption charged to the team that owns the dashboard (`cost/attribution.py`): a finance dashboard that sales opens all day is paid by finance alone.
+3. **In real life it is harder.** Every query the BI tool sends runs as its one service user, so the warehouse's query log sees the BI tool, not the person viewing; and a view served from the BI tool's cache sends no query at all, so there is nothing to charge.
+
+Directions discussed, none decided:
+
+- **A. Keep the owner paying** (today): simple, and the owner has a reason to tune the dashboard.
+- **B. Share each dashboard's measured cost across teams by views**, from the BI tool's own view log (who opened which dashboard, when), mapped from BI users to teams; scheduled refreshes shared the same way, since they exist for the viewers. Totals still add up to the bill. The assistant's recommendation.
+- **C. Charge each query to the person who triggered it**, where the BI tool writes the user's id into the query it sends; exact, and cache hits cost nothing, but it depends on the driver keeping that comment (to check first), and scheduled refreshes still need A or B.
+
+Any of them needs the simulation to model people opening dashboards, by team, so the demo shows the difference.
+
+### Incidents (owner, 2026-10-19)
+
+How the desk works today: it reads each dbt invocation's results as soon as that step of the pipeline finishes (after each of a production night's four invocations, after each Cosmos task, after Dagster's build), regroups the whole run, and pages at once; no second scan. The gaps:
+
+1. **An incident resolves only at the next scheduled run.** Owners fix within hours, but the incident waits for the next night's run to show its root healthy, so none closes in less than 24 hours. There is no way to rerun the root's checks right after a fix.
+2. **No acknowledgement or escalation in real use.** A page goes to one person, the owner: no on-call rotation, no backup, no escalation when nobody acknowledges, and no acknowledgement recorded from the chat. The time to acknowledge and to fix is simulated (`incidents/lifecycle.py`).
+3. **Only what a test or a freshness check catches.** Wrong data no test checks is invisible, and a stopped feed is found only once the freshness rule's two days are over (64 hours in the release run).
+4. **Grouping stays within one run.** Two unrelated faults failing the same downstream node in one run attach it to one of the two roots, by tie-break.
+5. **The routing exception is narrow.** Only a staging model reading exactly one source pages the source's owner; when broken source data first shows in an intermediate model or a mart, the page goes to that model's owner.
+6. **Severity comes from lineage alone.** The score weighs what sits downstream by tier, not the moment (a finance month-end close) or how long the data has been broken.
+7. **The load is shown, not balanced.** 6 of the 8 pages went to the one person who owns most feeds; the desk measures that, but has no secondary owner or way to share the load.
+
+### Reconcile (owner, 2026-10-19)
+
+The comparison works as designed on the simulated company, which never writes while it is compared and never changes a column mid-run. On a real migration these gaps matter, the first one most:
+
+1. **A duplicated row can slip through.** A differing leaf's rows are kept as key to row on each side (`reconcile/diff.py`), so two identical rows with the same key on one side become one, and nothing differs. The row counts do differ, but the verdict does not compare them (`reconcile/metrics.py`). Raw tables are deduplicated by key, but a report is not: a new mart whose join doubles rows, the classic migration bug, can pass.
+2. **No "as of" point.** A night compares the tables as they are when it runs. The legacy system keeps taking writes after the copy's watermark, so every row changed since shows as missing or different, every night, and no night is ever clean. Tables need comparing up to the copy's watermark (`updated_at` at most the watermark); a legacy report computed live has the same problem.
+3. **"Explained" is loose.** A differing report counts as explained when any upstream table differs that night (`reconcile/parallel.py`), even an unrelated one: trimmed emails would explain a revenue report with a wrong formula. Such a night is not clean anyway, so the logic error shows once the copy is fixed, but the explained count can mislead.
+4. **Columns are read once.** The pairs' columns and types are loaded on the first night and kept for the whole parallel run; a column added or changed during six weeks breaks the comparison or is missed.
+5. **The cause labels are guesses.** A difference of a whole number of hours is labelled a time zone shift, and one of at most 0.01 rounding, even when it is a real error that happens to look like one.
+6. **It runs only inside the simulation**, and the grading needs the planted ground truth (see "Adopting it" in the reconcile README).
+
 ## Open questions for the owner
 
 None open.
 
 ## Next step
 
-1. The owner merges the fix for the release, deletes the failed `v2.0.0` tag, and tags the new `main` again (the failed release published nothing).
-2. The owner pushes `v2.0.0`. The release workflow runs CI, the Metabase check and both orchestrator checks (their first run on GitHub) before it publishes the image and the GitHub Release; if an orchestrator job fails on GitHub, the `orchestrators` workflow can be run by hand to look at it before tagging again.
+1. Check that the second `v2.0.0` release published: the image `2.0.0` on GHCR and the GitHub Release with the changelog's notes.
+2. If a release job failed again, fix it on a branch, then delete and push the tag again (a failed release publishes nothing); the `orchestrators` workflow can be run by hand to look at an orchestrator job.
 3. Pilot rollout of the ownership check on a company dbt repository, with the 2.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
+4. Decide on dashboard cost by viewer (Backlog): A, B or C, then a phase to build it.
+5. Decide which incident gaps to close (Backlog), then a phase to build them.
+6. Decide which reconcile gaps to close (Backlog), the duplicated rows and the "as of" point first, then a phase to build them.
