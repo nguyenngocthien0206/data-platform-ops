@@ -39,6 +39,11 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 
 - **The first `v2.0.0` release failed in its Metabase job**: `make docker-demo` could not write `reports/reconciliation.md` (`PermissionError`). The toolkit's container runs as user 1000 and writes to `reports/` and `docs/images/screens/`, bind-mounted from the checkout, which on a GitHub runner belongs to user 1001; Docker Desktop on the development laptop does not check, and no release had run the demo before (the Metabase job is from Phase 11b, after 1.2.0). `make check-env`, which every `docker-*` target runs first, now creates both folders and opens them to the container (`chmod a+w`). Reproduced and checked in Linux containers: a folder owned by 1001 refuses user 1000, and after `check-env` run by its owner, user 1000 writes the report, a subfolder and a screenshot.
 
+### After 2.0.0 (uncommitted, branch `docs-module-explainers`)
+
+- **`docs/HOW-IT-WORKS.md`** (owner, 2026-10-19): every module explained the same way, from the simplest approach that could work, where it breaks, and one idea at a time, each fixing one problem; the owner found the step-by-step reconcile explanation the one that made it clear. Linked from the README and the SPEC's layout; the link check covers its table of contents.
+- **The Backlog** in this file: dashboard cost by viewer, the incident desk's seven gaps, reconcile's six.
+
 ## In progress
 
 Phase 15 is merged (PR #24), and the fix for the release (PR #25). `v2.0.0` was tagged again on `main` after the fix. Nothing is in progress.
@@ -467,6 +472,17 @@ How the desk works today: it reads each dbt invocation's results as soon as that
 6. **Severity comes from lineage alone.** The score weighs what sits downstream by tier, not the moment (a finance month-end close) or how long the data has been broken.
 7. **The load is shown, not balanced.** 6 of the 8 pages went to the one person who owns most feeds; the desk measures that, but has no secondary owner or way to share the load.
 
+### Reconcile (owner, 2026-10-19)
+
+The comparison works as designed on the simulated company, which never writes while it is compared and never changes a column mid-run. On a real migration these gaps matter, the first one most:
+
+1. **A duplicated row can slip through.** A differing leaf's rows are kept as key to row on each side (`reconcile/diff.py`), so two identical rows with the same key on one side become one, and nothing differs. The row counts do differ, but the verdict does not compare them (`reconcile/metrics.py`). Raw tables are deduplicated by key, but a report is not: a new mart whose join doubles rows, the classic migration bug, can pass.
+2. **No "as of" point.** A night compares the tables as they are when it runs. The legacy system keeps taking writes after the copy's watermark, so every row changed since shows as missing or different, every night, and no night is ever clean. Tables need comparing up to the copy's watermark (`updated_at` at most the watermark); a legacy report computed live has the same problem.
+3. **"Explained" is loose.** A differing report counts as explained when any upstream table differs that night (`reconcile/parallel.py`), even an unrelated one: trimmed emails would explain a revenue report with a wrong formula. Such a night is not clean anyway, so the logic error shows once the copy is fixed, but the explained count can mislead.
+4. **Columns are read once.** The pairs' columns and types are loaded on the first night and kept for the whole parallel run; a column added or changed during six weeks breaks the comparison or is missed.
+5. **The cause labels are guesses.** A difference of a whole number of hours is labelled a time zone shift, and one of at most 0.01 rounding, even when it is a real error that happens to look like one.
+6. **It runs only inside the simulation**, and the grading needs the planted ground truth (see "Adopting it" in the reconcile README).
+
 ## Open questions for the owner
 
 None open.
@@ -478,3 +494,4 @@ None open.
 3. Pilot rollout of the ownership check on a company dbt repository, with the 2.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
 4. Decide on dashboard cost by viewer (Backlog): A, B or C, then a phase to build it.
 5. Decide which incident gaps to close (Backlog), then a phase to build them.
+6. Decide which reconcile gaps to close (Backlog), the duplicated rows and the "as of" point first, then a phase to build them.
