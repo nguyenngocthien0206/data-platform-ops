@@ -134,6 +134,7 @@ Why two hash numbers per row (`h1`, `h2`) in the code: two different groups coul
 | Rule | Label | Real example (first night) |
 |---|---|---|
 | key only on the legacy side | missing | 74 web sessions lost at page boundaries |
+| key more than once on either side | duplicate key | a join that doubles a report's row (never in the simulated company) |
 | decimals within 0.01 | rounding | `149.92` became `149.91` |
 | times a whole number of hours apart | time zone shift | `13:11:49` became `17:11:49` |
 | equal once spaces are trimmed | whitespace | `"grace.novak53426@post.test "` lost its trailing space |

@@ -2,6 +2,17 @@
 
 All notable changes to data-platform-ops. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The GitHub Release for each version uses its section below as the notes.
 
+## [Unreleased]
+
+### Fixed
+
+- **A duplicated row no longer passes the reconciliation.** A differing segment's rows were kept one per key, so a row that appeared twice on one side, the classic join that doubles a report's line, compared as equal. Every row is kept now, a key that appears more than once on either side is reported as `duplicate_key`, and its rows count as unmatched.
+- **A pair whose row counts do not add up fails.** The verdict now checks that the difference in row counts is exactly what the missing, extra and duplicated rows explain.
+
+### Changed
+
+- **`reconcile.thresholds.max_discrepancies` needs a `duplicate_key` entry.** The thresholds still name every class, so a settings file from 2.0.0 fails to load until the line is added (`duplicate_key: 0` in the shipped config). The sign-off's criteria table gains a line for it.
+
 ## [2.0.0] - 2026-10-15
 
 The simulated company now looks like the one the toolkit is meant for: its reporting runs on a legacy Postgres, it migrates to a self-managed ClickHouse with its analytics rebuilt as one dbt project, and every module works on that migration. The reconciliation signs it off over a six-week parallel run, the cost module shares the cluster's bill out by team, and the incident desk runs on the company's production nights and on real Airflow and Dagster runs.

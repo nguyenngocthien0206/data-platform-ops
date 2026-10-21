@@ -46,7 +46,9 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 
 ## In progress
 
-Phase 15 is merged (PR #24), and the fix for the release (PR #25). `v2.0.0` was tagged again on `main` after the fix. Nothing is in progress.
+Phase 15 is merged (PR #24), and the fix for the release (PR #25). `v2.0.0` was tagged again on `main` after the fix.
+
+The Backlog is being closed one gap at a time (owner, 2026-10-20). In progress: reconcile gap 1, duplicated rows, on branch `fix-reconcile-duplicate-keys`.
 
 ## Decisions made
 
@@ -476,7 +478,7 @@ How the desk works today: it reads each dbt invocation's results as soon as that
 
 The comparison works as designed on the simulated company, which never writes while it is compared and never changes a column mid-run. On a real migration these gaps matter, the first one most:
 
-1. **A duplicated row can slip through.** A differing leaf's rows are kept as key to row on each side (`reconcile/diff.py`), so two identical rows with the same key on one side become one, and nothing differs. The row counts do differ, but the verdict does not compare them (`reconcile/metrics.py`). Raw tables are deduplicated by key, but a report is not: a new mart whose join doubles rows, the classic migration bug, can pass.
+1. **Closed (branch `fix-reconcile-duplicate-keys`): a duplicated row can slip through.** A differing leaf's rows were kept as key to row on each side, so two identical rows with the same key on one side became one, and the verdict did not compare row counts. Now every row is kept, a key seen more than once on either side is `duplicate_key` (threshold 0), and a pair whose row counts differ beyond the missing, extra and duplicated rows fails. Tested with fake connectors and on both engines; the demo's numbers are unchanged, its criteria table has one more line.
 2. **No "as of" point.** A night compares the tables as they are when it runs. The legacy system keeps taking writes after the copy's watermark, so every row changed since shows as missing or different, every night, and no night is ever clean. Tables need comparing up to the copy's watermark (`updated_at` at most the watermark); a legacy report computed live has the same problem.
 3. **"Explained" is loose.** A differing report counts as explained when any upstream table differs that night (`reconcile/parallel.py`), even an unrelated one: trimmed emails would explain a revenue report with a wrong formula. Such a night is not clean anyway, so the logic error shows once the copy is fixed, but the explained count can mislead.
 4. **Columns are read once.** The pairs' columns and types are loaded on the first night and kept for the whole parallel run; a column added or changed during six weeks breaks the comparison or is missed.
@@ -494,4 +496,4 @@ None open.
 3. Pilot rollout of the ownership check on a company dbt repository, with the 2.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
 4. Decide on dashboard cost by viewer (Backlog): A, B or C, then a phase to build it.
 5. Decide which incident gaps to close (Backlog), then a phase to build them.
-6. Decide which reconcile gaps to close (Backlog), the duplicated rows and the "as of" point first, then a phase to build them.
+6. Close the other reconcile gaps (Backlog) one at a time, a plan for each first; the "as of" point next.
