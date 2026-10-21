@@ -13,6 +13,7 @@ row the same way, and put each key in the same segment. The engine cases need
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -30,6 +31,7 @@ from platform_ops.reconcile.canonical import (
     row_hash,
     row_string,
 )
+from platform_ops.reconcile.diff import diff_table
 from platform_ops.reconcile.schema import Column, TableSpec
 
 COLUMNS = (
@@ -276,3 +278,28 @@ def test_each_engine_matches_the_reference(
         assert (key, *values) == expected[key], f"{dialect} {policy} row {key}"
         assert (int(h1), int(h2)) == row_hash(row_string(list(expected[key])))
         assert int(bucket) == key_bucket(key, 8)
+
+
+@pytest.mark.integration
+def test_a_row_inserted_twice_in_clickhouse_is_a_duplicate_key(
+    engines: tuple[Any, Any],
+) -> None:
+    """A join that doubles a row: the real connectors keep both copies, the diff names the key."""
+    from platform_ops.reconcile.connectors import ClickHouseConnector, PostgresConnector
+
+    pg, ch = engines
+    ch.command(f"CREATE TABLE {SCHEMA}.golden_dup AS {SCHEMA}.golden")
+    try:
+        ch.command(f"INSERT INTO {SCHEMA}.golden_dup SELECT * FROM {SCHEMA}.golden")
+        ch.command(f"INSERT INTO {SCHEMA}.golden_dup SELECT * FROM {SCHEMA}.golden WHERE id = 7")
+        source, target = PostgresConnector(pg), ClickHouseConnector(ch)
+        rules = POLICIES["strict"]
+        assert diff_table(_spec(), source, target, rules, leaf_width=4).clean
+        doubled = replace(_spec(), target=f"`{SCHEMA}`.`golden_dup`")
+        result = diff_table(doubled, source, target, rules, leaf_width=4)
+        source.forget()
+    finally:
+        ch.command(f"DROP TABLE {SCHEMA}.golden_dup")
+    assert (result.source_rows, result.target_rows) == (len(ROWS), len(ROWS) + 1)
+    assert [(d.key, d.source, d.target) for d in result.duplicates] == [("7", 1, 2)]
+    assert not result.missing and not result.extra and not result.cells

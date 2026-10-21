@@ -29,6 +29,8 @@ Nothing in the diff reads the ground truth. Only the grading does, the same spli
 
 **Only differing segments are opened.** Rows fall into 16 segments by the first hex digit of their key's MD5, 256 by the first two, and so on. Each engine returns a count and two hash sums per segment, and only segments that disagree are split again, down to about 256 rows. An integer key, a date and a key of three columns all segment the same way.
 
+**Every row counts, not every key.** A differing segment's rows are compared as a list, not as one row per key, so a key that appears twice on either side is reported as `duplicate_key` with how many rows each side has. Its cells are not compared, because nobody can say which copy is "the" row, and its rows count as unmatched. As a last net, a pair fails when the two sides' row counts differ by more than the missing, extra and duplicated rows explain.
+
 **The cutover rule is fixed before the run.** A night is clean when every table and every report is within the thresholds and no report difference is unexplained; the cutover is recommended on the night that completes 14 consecutive clean nights.
 
 ## Results at scale 1.0
@@ -114,5 +116,6 @@ for spec in specs:
   - **Two engines rarely agree on a value's text:** decimal padding, boolean spelling, time zones, `NULL` in a condition. Everything is rendered to one canonical string first, and a golden-row test holds Python, Postgres and ClickHouse to byte-identical output (ADR 0006).
   - **ClickHouse's `avg` rounds a half to even** where Postgres rounds away from zero, and a ratio cast to a smaller scale truncates. Both showed up as report differences before any fault was planted, so compare the reports early, not only the tables.
   - **Raw in ClickHouse is read with `FINAL`,** or a row changed in place is counted twice.
+  - **A report keyed on what should be unique often is not:** a join in the new model that matches two rows doubles a line of the report. Declare the key the legacy report is really unique on, and keep `duplicate_key` at 0. Version 2.0.0 kept one row per key and let such a copy pass.
   - **A report difference with no upstream cause is a logic difference** between the old SQL and the new model. It should block a clean night: it is the one a finance user finds after cutover.
   - **Thresholds are the data owner's statement of what matters:** six payments a cent off were within the rounding allowance, so that night counted as clean.

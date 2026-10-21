@@ -85,9 +85,11 @@ def verdict(
     by_class: dict[DiscrepancyClass, int] = dict.fromkeys(DISCREPANCY_CLASSES, 0)
     for d in mine:
         by_class[d.klass] += 1
-    in_both = diff.source_rows - len(diff.missing)
+    # Rows of a duplicated key are not compared cell by cell, so none of them matches.
+    duplicated = sum(d.source for d in diff.duplicates)
+    in_both = diff.source_rows - len(diff.missing) - duplicated
     rows_with_diffs = len({d.key for d in mine if d.column})
-    matched = diff.source_rows - len(diff.missing) - rows_with_diffs
+    matched = in_both - rows_with_diffs
     row_rate = matched / diff.source_rows if diff.source_rows else 1.0
     per_column = Counter(d.column for d in mine if d.column)
     column_rates = {
@@ -97,6 +99,17 @@ def verdict(
     result = TableVerdict(
         spec.name, diff.source_rows, diff.target_rows, row_rate, column_rates, by_class
     )
+    # Every row one side has and the other has not is a missing, extra or
+    # duplicated row found above. If the counts differ by more, something was
+    # lost between the summaries and the leaves: fail rather than pass it.
+    accounted = (
+        len(diff.extra) - len(diff.missing) + sum(d.target - d.source for d in diff.duplicates)
+    )
+    if diff.target_rows - diff.source_rows != accounted:
+        result.failures.append(
+            f"row counts differ ({diff.source_rows:,} against {diff.target_rows:,}) beyond "
+            "the missing, extra and duplicated rows found"
+        )
     if row_rate < thresholds.min_row_match_rate:
         result.failures.append(
             f"row match rate {row_rate:.4%} is below {thresholds.min_row_match_rate:.2%}"

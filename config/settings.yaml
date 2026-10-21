@@ -179,6 +179,9 @@ reconcile:
     max_discrepancies:
       missing_in_target: 0
       extra_in_target: 0
+      # A key that appears more than once on either side: a join that doubles
+      # rows in a new report, or a key declared that is not one.
+      duplicate_key: 0
       value_mismatch: 0
       timezone_shift: 0
       whitespace: 0

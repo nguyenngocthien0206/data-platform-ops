@@ -40,7 +40,13 @@ class Connector(Protocol):
 
     def fetch(
         self, table: TableSpec, rendered: RenderedTable, depth: int, buckets: Sequence[int]
-    ) -> dict[str, tuple[str, ...]]: ...
+    ) -> list[tuple[str, tuple[str, ...]]]:
+        """Every row of the given segments as (canonical key, canonical values).
+
+        A list, not a mapping by key: two rows with the same key are both
+        returned, so the diff can see a duplicated key instead of losing a row.
+        """
+        ...
 
     def forget(self) -> None: ...
 
@@ -97,14 +103,14 @@ class PostgresConnector:
 
     def fetch(
         self, table: TableSpec, rendered: RenderedTable, depth: int, buckets: Sequence[int]
-    ) -> dict[str, tuple[str, ...]]:
+    ) -> list[tuple[str, tuple[str, ...]]]:
         values = ", ".join(rendered.values) or "''"
         rows = self._rows(
             f"SELECT {rendered.key}, {values} FROM {table.source} "
             f"WHERE ({rendered.bucket} >> {_shift(depth)}) IN (SELECT unnest(%s::bigint[]))",
             [list(buckets)],
         )
-        return {str(row[0]): tuple(str(v) for v in row[1:]) for row in rows}
+        return [(str(row[0]), tuple(str(v) for v in row[1:])) for row in rows]
 
 
 class ClickHouseConnector:
@@ -139,11 +145,11 @@ class ClickHouseConnector:
 
     def fetch(
         self, table: TableSpec, rendered: RenderedTable, depth: int, buckets: Sequence[int]
-    ) -> dict[str, tuple[str, ...]]:
+    ) -> list[tuple[str, tuple[str, ...]]]:
         values = ", ".join(rendered.values) or "''"
         members = ", ".join(str(b) for b in buckets)
         rows = self.client.query(
             f"SELECT {rendered.key}, {values} FROM {self._relation(table)} "
             f"WHERE bitShiftRight({rendered.bucket}, {_shift(depth)}) IN ({members})"
         ).result_rows
-        return {str(row[0]): tuple(str(v) for v in row[1:]) for row in rows}
+        return [(str(row[0]), tuple(str(v) for v in row[1:])) for row in rows]
