@@ -8,6 +8,7 @@ the engines do, so the algorithm is tested without a server.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -28,7 +29,7 @@ from platform_ops.reconcile.classify import classify
 from platform_ops.reconcile.connectors import Summary
 from platform_ops.reconcile.diff import diff_table, leaf_depth
 from platform_ops.reconcile.metrics import Discrepancy, grade, neutralized_by_policy, verdict
-from platform_ops.reconcile.parallel import decide
+from platform_ops.reconcile.parallel import decide, discrepancies_of
 from platform_ops.reconcile.schema import Column, TableSpec, kind_from_postgres
 from platform_ops.simulation.company import Timeline
 from platform_ops.simulation.migration import (
@@ -88,12 +89,12 @@ class Fake:
 
     def fetch(
         self, table: Any, rendered: Any, depth: int, buckets: Sequence[int]
-    ) -> dict[str, tuple[str, ...]]:
-        return {
-            key: values
+    ) -> list[tuple[str, tuple[str, ...]]]:
+        return [
+            (key, values)
             for bucket, key, _, _, values in self.rows
             if bucket >> (32 - 4 * depth) in buckets
-        }
+        ]
 
     def forget(self) -> None:
         return None
@@ -184,6 +185,48 @@ def test_a_composite_date_key_segments_like_any_other() -> None:
     )
     key = row_string([left[123]["day"].isoformat(), left[123]["channel"]])
     assert [(c.key, c.column, c.target) for c in result.cells] == [(key, "orders", "-1")]
+
+
+def test_a_row_doubled_in_the_target_is_a_duplicate_key(repo_settings: Settings) -> None:
+    left = _rows(1000)
+    right = [*left, dict(left[41])]
+    diff = _diff(left, right)
+    assert [(d.key, d.source, d.target) for d in diff.duplicates] == [("42", 1, 2)]
+    assert not diff.missing and not diff.extra and not diff.cells
+    assert not diff.clean
+    found = discrepancies_of(SPEC, diff, TOLERANCE)
+    assert [(d.key, d.klass, d.source_value, d.target_value) for d in found] == [
+        ("42", "duplicate_key", "1 row", "2 rows")
+    ]
+    result = verdict(SPEC, diff, found, repo_settings.reconcile.thresholds)
+    assert result.row_match_rate == pytest.approx(0.999)
+    assert not result.passed
+    assert result.failures == ["1 duplicate_key over the limit of 0"]
+
+
+def test_a_row_doubled_in_the_source_is_found_too() -> None:
+    left = _rows(500)
+    diff = _diff([*left, dict(left[7])], left)
+    assert [(d.key, d.source, d.target) for d in diff.duplicates] == [("8", 2, 1)]
+
+
+def test_copies_that_differ_are_one_duplicate_and_no_value_mismatch() -> None:
+    left = _rows(500)
+    right = [*left, {**left[9], "price": Decimal("0.00")}]
+    diff = _diff(left, right)
+    assert [(d.key, d.source, d.target) for d in diff.duplicates] == [("10", 1, 2)]
+    assert diff.cells == []
+
+
+def test_row_counts_that_do_not_add_up_fail_the_pair(repo_settings: Settings) -> None:
+    diff = _diff(_rows(1000), _rows(1000))
+    lost = replace(diff, target_rows=diff.target_rows + 1)
+    result = verdict(SPEC, lost, [], repo_settings.reconcile.thresholds)
+    assert not result.passed
+    assert result.failures == [
+        "row counts differ (1,000 against 1,001) beyond the missing, extra and duplicated "
+        "rows found"
+    ]
 
 
 # -- classification ---------------------------------------------------------------------

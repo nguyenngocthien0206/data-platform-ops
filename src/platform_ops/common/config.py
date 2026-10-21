@@ -209,6 +209,7 @@ Engine = Literal["postgres"]
 DiscrepancyClass = Literal[
     "missing_in_target",
     "extra_in_target",
+    "duplicate_key",
     "rounding",
     "timezone_shift",
     "whitespace",
@@ -218,6 +219,7 @@ DiscrepancyClass = Literal[
 DISCREPANCY_CLASSES: tuple[DiscrepancyClass, ...] = (
     "missing_in_target",
     "extra_in_target",
+    "duplicate_key",
     "rounding",
     "timezone_shift",
     "whitespace",

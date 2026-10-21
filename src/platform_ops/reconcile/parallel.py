@@ -151,9 +151,17 @@ class Cutover:
     parallel_nights: int
 
 
+def _rows(n: int) -> str:
+    return f"{n} row" if n == 1 else f"{n} rows"
+
+
 def discrepancies_of(spec: TableSpec, diff: TableDiff, tolerance: Decimal) -> list[Discrepancy]:
     found = [Discrepancy(spec.name, k, "", "missing_in_target", "", "") for k in diff.missing]
     found += [Discrepancy(spec.name, k, "", "extra_in_target", "", "") for k in diff.extra]
+    found += [
+        Discrepancy(spec.name, d.key, "", "duplicate_key", _rows(d.source), _rows(d.target))
+        for d in diff.duplicates
+    ]
     found += [
         Discrepancy(
             spec.name,
