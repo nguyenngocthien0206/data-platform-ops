@@ -8,18 +8,22 @@
 # cannot say is written here: the key, a renamed column, a scale to compare
 # decimals at, or a column left out (with the reason next to it).
 #
+# `changed_at` names the column the copy reads by. The legacy side keeps
+# taking writes after the copy has read it, so a night compares each table as
+# of the copy's watermark, and leaves anything written since for the next.
+#
 # Validated by platform_ops.reconcile.schema.ReconcileConfig.
 
 tables:
-  - {name: customers, source: customers, target: customers, key: [customer_id]}
-  - {name: products, source: products, target: products, key: [product_id]}
-  - {name: orders, source: orders, target: orders, key: [order_id]}
-  - {name: order_items, source: order_items, target: order_items, key: [order_item_id]}
-  - {name: payments, source: payments, target: payments, key: [payment_id]}
-  - {name: web_sessions, source: web_sessions, target: web_sessions, key: [session_id]}
-  - {name: marketing_campaigns, source: marketing_campaigns, target: marketing_campaigns, key: [campaign_id]}
-  - {name: marketing_spend, source: marketing_spend, target: marketing_spend, key: [spend_id]}
-  - {name: support_tickets, source: support_tickets, target: support_tickets, key: [ticket_id]}
+  - {name: customers, source: customers, target: customers, key: [customer_id], changed_at: updated_at}
+  - {name: products, source: products, target: products, key: [product_id], changed_at: updated_at}
+  - {name: orders, source: orders, target: orders, key: [order_id], changed_at: updated_at}
+  - {name: order_items, source: order_items, target: order_items, key: [order_item_id], changed_at: updated_at}
+  - {name: payments, source: payments, target: payments, key: [payment_id], changed_at: updated_at}
+  - {name: web_sessions, source: web_sessions, target: web_sessions, key: [session_id], changed_at: updated_at}
+  - {name: marketing_campaigns, source: marketing_campaigns, target: marketing_campaigns, key: [campaign_id], changed_at: updated_at}
+  - {name: marketing_spend, source: marketing_spend, target: marketing_spend, key: [spend_id], changed_at: updated_at}
+  - {name: support_tickets, source: support_tickets, target: support_tickets, key: [ticket_id], changed_at: updated_at}
 
 # One report per dashboard. A report and its mart have the same columns; the
 # key is what makes a row of the dashboard unique.

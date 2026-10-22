@@ -84,6 +84,8 @@ def _spec(
     missing = [k for k in pair.key if k not in {c.name for c in columns}]
     if missing:
         raise ValueError(f"{pair.name}: key columns {missing} are not compared")
+    if pair.changed_at and pair.changed_at not in {c.name for c in columns if c.kind == "ts"}:
+        raise ValueError(f"{pair.name}: changed_at {pair.changed_at} is not a compared timestamp")
     return TableSpec(
         name=pair.name,
         level=level,
@@ -93,6 +95,7 @@ def _spec(
         target=f"`{target_database}`.`{pair.target}`",
         final=level == "table",
         upstream=upstream_tables,
+        changed_at=pair.changed_at,
     )
 
 
@@ -104,13 +107,22 @@ def report_upstream(manifest_path: Path, mart: str) -> tuple[str, ...]:
 
 
 def load_specs(
-    settings: Settings, connection: Any, client: Any, manifest_path: Path, config_path: Path
+    settings: Settings,
+    connection: Any,
+    client: Any,
+    manifest_path: Path,
+    config_path: Path,
+    reports_schema: str | None = None,
 ) -> list[TableSpec]:
-    """Every pair to reconcile, tables first, in the order the configuration lists them."""
+    """Every pair to reconcile, tables first, in the order the configuration lists them.
+
+    ``reports_schema`` is where the legacy reports are read: the reporting
+    schema by default, the frozen one during the parallel run (``asof``).
+    """
     config = ReconcileConfig.load(config_path)
     company = settings.company
     app = company.name(company.legacy_schema)
-    reporting = company.name(company.reporting_schema)
+    reporting = company.name(reports_schema or company.reporting_schema)
     raw = company.name(company.raw_database)
     marts = company.name("marts")
     specs = [_spec(p, "table", app, raw, connection, client) for p in config.tables]

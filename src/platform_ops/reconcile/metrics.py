@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from platform_ops.common.config import DISCREPANCY_CLASSES, DiscrepancyClass, Thresholds
 from platform_ops.reconcile.canonical import Rule
@@ -80,7 +81,9 @@ def verdict(
     diff: TableDiff,
     discrepancies: Sequence[Discrepancy],
     thresholds: Thresholds,
+    at: datetime | None = None,
 ) -> TableVerdict:
+    """Judge one pair against the thresholds; ``at`` is when it was compared."""
     mine = [d for d in discrepancies if d.table == spec.name]
     by_class: dict[DiscrepancyClass, int] = dict.fromkeys(DISCREPANCY_CLASSES, 0)
     for d in mine:
@@ -103,13 +106,25 @@ def verdict(
     # duplicated row found above. If the counts differ by more, something was
     # lost between the summaries and the leaves: fail rather than pass it.
     accounted = (
-        len(diff.extra) - len(diff.missing) + sum(d.target - d.source for d in diff.duplicates)
+        len(diff.extra)
+        + len(diff.in_flight)
+        - len(diff.missing)
+        + sum(d.target - d.source for d in diff.duplicates)
     )
     if diff.target_rows - diff.source_rows != accounted:
         result.failures.append(
             f"row counts differ ({diff.source_rows:,} against {diff.target_rows:,}) beyond "
-            "the missing, extra and duplicated rows found"
+            "the missing, extra, duplicated and in-flight rows found"
         )
+    # A copy that stops leaves its watermark behind, and everything newer would
+    # be left out night after night: the pair fails instead.
+    if at is not None and spec.watermark is not None:
+        lag = (at - spec.watermark).total_seconds() / 3600
+        if lag > thresholds.max_watermark_lag_hours:
+            result.failures.append(
+                f"the legacy side is as of {spec.watermark:%Y-%m-%d %H:%M}, {lag:,.1f} hours "
+                f"before the comparison, over the limit of {thresholds.max_watermark_lag_hours:g}"
+            )
     if row_rate < thresholds.min_row_match_rate:
         result.failures.append(
             f"row match rate {row_rate:.4%} is below {thresholds.min_row_match_rate:.2%}"
