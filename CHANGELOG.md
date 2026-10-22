@@ -8,10 +8,14 @@ All notable changes to data-platform-ops. The format follows [Keep a Changelog](
 
 - **A duplicated row no longer passes the reconciliation.** A differing segment's rows were kept one per key, so a row that appeared twice on one side, the classic join that doubles a report's line, compared as equal. Every row is kept now, a key that appears more than once on either side is reported as `duplicate_key`, and its rows count as unmatched.
 - **A pair whose row counts do not add up fails.** The verdict now checks that the difference in row counts is exactly what the missing, extra and duplicated rows explain.
+- **The reconciliation compares the legacy side as of the copy.** It compared the live legacy tables, so on a system that keeps taking writes every row written since the copy showed as missing, every night. Each table is now compared up to the copy's watermark on its `changed_at` column, a row changed in place after it counts as in flight instead of as a difference, and the legacy reports are frozen in one snapshot just before the copy reads (`reconcile.asof.freeze_reports`) and compared frozen. A pair whose legacy side is more than `max_watermark_lag_hours` behind fails.
+- **The nightly record keeps the `duplicate_key` count**, which the dashboard shows with the missing and extra rows.
 
 ### Changed
 
 - **`reconcile.thresholds.max_discrepancies` needs a `duplicate_key` entry.** The thresholds still name every class, so a settings file from 2.0.0 fails to load until the line is added (`duplicate_key: 0` in the shipped config). The sign-off's criteria table gains a line for it.
+- **`reconcile.thresholds.max_watermark_lag_hours` is required** (26 in the shipped config), and each table pair in `reconcile.yaml` names its `changed_at` column to be compared as of a watermark. The sign-off's night table gains a column, the rows written after the copy.
+- **The simulated company keeps writing after the copy** during the parallel run (`company.writes_after_ingest_minutes`, 60): the next hour of new rows reaches Postgres before the comparison. The run ends with the same data, since those rows arrive the next day either way. M1's invented orders take keys far above the ones in use, so they are never mistaken for rows in flight.
 
 ## [2.0.0] - 2026-10-15
 
