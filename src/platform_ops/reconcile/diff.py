@@ -12,6 +12,14 @@ how many times each side holds it, and its cells are not compared: which copy
 would be "the" row is unknown. A duplicate always shows in the summaries (one
 more row, a different hash sum), so the descent reaches its leaf.
 
+With a watermark (the copy's, ``TableSpec.watermark``), the legacy side is
+compared as of it: a row written after it is in no summary, so it makes no
+segment differ and costs nothing; ``after_watermark`` counts it. A row changed
+in place after it still has its old version in the copy, which shows as a row
+only the copy has. The legacy side is asked which keys of the leaves changed
+after the watermark, and those are in flight, not extra: the next night, once
+the copy has read them, compares them.
+
 A child segment's number divided by 16 is its parent's, so every level is one
 ``GROUP BY`` per side whatever the number of segments, and the same descent
 works for an integer key, a date or a key of several columns.
@@ -27,7 +35,7 @@ import math
 from dataclasses import dataclass, field
 
 from platform_ops.reconcile.canonical import Rule, render
-from platform_ops.reconcile.connectors import Connector, Summary
+from platform_ops.reconcile.connectors import Connector, Source, Summary
 from platform_ops.reconcile.schema import TableSpec
 
 FANOUT = 16
@@ -58,6 +66,10 @@ class TableDiff:
     extra: list[str] = field(default_factory=list)
     cells: list[CellDiff] = field(default_factory=list)
     duplicates: list[DuplicateKey] = field(default_factory=list)
+    # Keys only the copy has whose legacy row changed after the watermark.
+    in_flight: list[str] = field(default_factory=list)
+    # Legacy rows changed after the watermark, left for the next night.
+    after_watermark: int = 0
     # (depth, segments compared, segments differing) per level, top first.
     levels: list[tuple[int, int, int]] = field(default_factory=list)
     summary_rows: int = 0
@@ -94,13 +106,13 @@ def _differing(source: dict[int, Summary], target: dict[int, Summary]) -> list[i
 
 def diff_table(
     table: TableSpec,
-    source: Connector,
+    source: Source,
     target: Connector,
     rules: dict[str, Rule],
     *,
     leaf_width: int,
 ) -> TableDiff:
-    result = TableDiff(table.name)
+    result = TableDiff(table.name, after_watermark=source.count_after(table))
     source_sql = render(source.dialect, table, rules)
     target_sql = render(target.dialect, table, rules)
 
@@ -130,6 +142,11 @@ def diff_table(
     result.fetched_rows = len(left_rows) + len(right_rows)
     source_by_key, target_by_key = _by_key(left_rows), _by_key(right_rows)
     names = [c.name for c in table.value_columns]
+    changed: set[str] = set()
+    if result.after_watermark and target_by_key.keys() - source_by_key.keys():
+        changed = set(source.keys_after(table, source_sql, depth, parents))
+        result.queries += 1
+        result.fetched_rows += len(changed)
     for key in sorted(source_by_key.keys() | target_by_key.keys()):
         a, b = source_by_key.get(key, []), target_by_key.get(key, [])
         if len(a) > 1 or len(b) > 1:
@@ -137,7 +154,7 @@ def diff_table(
         elif not b:
             result.missing.append(key)
         elif not a:
-            result.extra.append(key)
+            (result.in_flight if key in changed else result.extra).append(key)
         elif a[0] != b[0]:
             result.cells += [
                 CellDiff(key, name, x, y)

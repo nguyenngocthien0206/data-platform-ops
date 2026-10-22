@@ -210,15 +210,21 @@ def test_row_hash_is_md5_split_into_two_unsigned_32_bit_halves() -> None:
 
 
 @pytest.fixture(scope="module")
-def engines(
+def golden_settings(
     tmp_path_factory: pytest.TempPathFactory,
     isolated_config: Callable[..., Path],
     servers_or_skip: Callable[[Settings], None],
-) -> Iterator[tuple[Any, Any]]:
-    from platform_ops.common.servers import clickhouse_client, connect_postgres
-
+) -> Settings:
     settings = load_settings(isolated_config(tmp_path_factory.mktemp("golden"), 0.01))
     servers_or_skip(settings)
+    return settings
+
+
+@pytest.fixture(scope="module")
+def engines(golden_settings: Settings) -> Iterator[tuple[Any, Any]]:
+    from platform_ops.common.servers import clickhouse_client, connect_postgres
+
+    settings = golden_settings
     pg = connect_postgres(settings)
     pg.autocommit = True
     ch = clickhouse_client(settings)
@@ -303,3 +309,69 @@ def test_a_row_inserted_twice_in_clickhouse_is_a_duplicate_key(
     assert (result.source_rows, result.target_rows) == (len(ROWS), len(ROWS) + 1)
     assert [(d.key, d.source, d.target) for d in result.duplicates] == [("7", 1, 2)]
     assert not result.missing and not result.extra and not result.cells
+
+
+@pytest.mark.integration
+def test_rows_written_after_the_watermark_wait_for_the_next_night(
+    engines: tuple[Any, Any],
+) -> None:
+    """As of a watermark on ``ts``: rows 2 and 4 changed after it, so the copy's older
+    versions are in flight; a row written after it is invisible. Both are counted."""
+    from platform_ops.reconcile.connectors import ClickHouseConnector, PostgresConnector
+
+    pg, ch = engines
+    watermark = datetime(2025, 7, 1)
+    pg.execute(f"CREATE TABLE {SCHEMA}.golden_late AS SELECT * FROM {SCHEMA}.golden")
+    try:
+        pg.execute(
+            f"INSERT INTO {SCHEMA}.golden_late (id, t, ts) "
+            "VALUES (10, 'written later', TIMESTAMP '2025-07-02 09:00:00')"
+        )
+        spec = replace(
+            _spec(), source=f'"{SCHEMA}"."golden_late"', changed_at="ts", watermark=watermark
+        )
+        source = PostgresConnector(pg)
+        result = diff_table(spec, source, ClickHouseConnector(ch), POLICIES["strict"], leaf_width=4)
+        source.forget()
+    finally:
+        pg.execute(f"DROP TABLE {SCHEMA}.golden_late")
+    assert result.clean
+    assert sorted(result.in_flight) == ["2", "4"]
+    assert result.after_watermark == 3
+    assert (result.source_rows, result.target_rows) == (len(ROWS) - 2, len(ROWS))
+
+
+@pytest.mark.integration
+def test_frozen_reports_keep_the_rows_they_were_frozen_with(
+    engines: tuple[Any, Any], golden_settings: Settings
+) -> None:
+    """Two reports frozen by two workers, each in its own connection, in one snapshot."""
+    from platform_ops.common.servers import connect_postgres
+    from platform_ops.reconcile.asof import freeze_reports
+
+    pg, _ = engines
+    frozen = f"{SCHEMA}_asof"
+    names = ["counted", "summed"]
+
+    def freeze() -> None:
+        connect = lambda: connect_postgres(golden_settings)  # noqa: E731
+        freeze_reports(connect, SCHEMA, frozen, names, workers=2)
+
+    def read(schema: str) -> list[Any]:
+        return [pg.execute(f"SELECT * FROM {schema}.{n}").fetchone() for n in names]
+
+    pg.execute(f"CREATE TABLE {SCHEMA}.written (id bigint)")
+    pg.execute(f"CREATE VIEW {SCHEMA}.counted AS SELECT count(*) AS n FROM {SCHEMA}.written")
+    pg.execute(f"CREATE VIEW {SCHEMA}.summed AS SELECT sum(id) AS s FROM {SCHEMA}.written")
+    try:
+        pg.execute(f"INSERT INTO {SCHEMA}.written VALUES (1), (2)")
+        freeze()
+        pg.execute(f"INSERT INTO {SCHEMA}.written VALUES (3)")
+        assert read(frozen) == [(2,), (3,)]
+        assert read(SCHEMA) == [(3,), (6,)]
+        freeze()
+        assert read(frozen) == [(3,), (6,)]
+    finally:
+        pg.execute(f"DROP SCHEMA IF EXISTS {frozen} CASCADE")
+        pg.execute(f"DROP VIEW {SCHEMA}.counted, {SCHEMA}.summed")
+        pg.execute(f"DROP TABLE {SCHEMA}.written")

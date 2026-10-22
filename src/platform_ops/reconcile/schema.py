@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -51,6 +52,13 @@ class TableSpec:
     final: bool = False
     # For a report: the operational tables its mart is built from (lineage).
     upstream: tuple[str, ...] = field(default=())
+    # The legacy column that records when a row last changed. With a
+    # watermark, the legacy side is compared as of it: rows changed later are
+    # left for the next night (the copy has not read them yet).
+    changed_at: str = ""
+    # What the legacy side is as of tonight: the copy's watermark for a table,
+    # the time its snapshot was frozen for a report. None compares it as it is.
+    watermark: datetime | None = None
 
     @property
     def value_columns(self) -> tuple[Column, ...]:
@@ -96,6 +104,9 @@ class PairConfig(_Strict):
     scale: dict[str, int] = Field(default_factory=dict)
     # Columns left out of the comparison, each with the reason in the YAML.
     skip: list[str] = Field(default_factory=list)
+    # The legacy column that records when a row last changed (the one the copy
+    # reads by), so a night compares the table as of the copy's watermark.
+    changed_at: str = ""
 
 
 class ReconcileConfig(_Strict):

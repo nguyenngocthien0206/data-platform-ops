@@ -89,6 +89,7 @@ SETTINGS_YAML = textwrap.dedent(
         min_column_match_rate: 0.999
         max_discrepancies: {missing_in_target: 0, extra_in_target: 0, duplicate_key: 0,
           value_mismatch: 0, timezone_shift: 0, whitespace: 0, case_only: 0, rounding: 100}
+        max_watermark_lag_hours: 26
     metadata:
       tier_weights:
         critical: 3

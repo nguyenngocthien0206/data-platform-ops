@@ -252,6 +252,9 @@ class Thresholds(_Strict):
     min_row_match_rate: Annotated[float, Field(ge=0, le=1)]
     min_column_match_rate: Annotated[float, Field(ge=0, le=1)]
     max_discrepancies: dict[DiscrepancyClass, Annotated[int, Field(ge=0)]]
+    # How far behind the comparison the legacy side may be: the copy's
+    # watermark for a table, the frozen snapshot for a report.
+    max_watermark_lag_hours: Annotated[float, Field(gt=0)]
 
     @model_validator(mode="after")
     def _every_class(self) -> Thresholds:
@@ -316,6 +319,9 @@ class CompanySettings(_Strict):
     # Legacy Postgres: operational tables, and the hand-written reports.
     legacy_schema: str = "app"
     reporting_schema: str = "reporting"
+    # The reports frozen every night of the parallel run, as of the copy's
+    # watermark, for the reconciliation to compare (reconcile.asof).
+    frozen_reporting_schema: str = "reporting_asof"
     # ClickHouse: the raw layer the ingestion fills; dbt's own databases are
     # named after its layers (staging, intermediate, marts).
     raw_database: str = "raw"
@@ -348,6 +354,10 @@ class CompanySettings(_Strict):
     # Nights into the parallel run when the migration team ships the fixed job
     # and backfills. Until then the job runs as delivered.
     fix_after_nights: Annotated[int, Field(ge=1)] = 7
+    # During the parallel run the application keeps writing after the copy has
+    # read it: the next day's first minutes of new rows reach Postgres before
+    # the reconciliation runs. Zero writes nothing between them.
+    writes_after_ingest_minutes: Annotated[int, Field(ge=0)] = 0
     delivered_job: DeliveredJob = Field(default_factory=lambda: DeliveredJob())
 
     def name(self, base: str) -> str:

@@ -58,27 +58,57 @@ TOLERANCE = Decimal("0.01")
 
 
 class Fake:
-    """A connector over Python rows, rendered and hashed by the reference."""
+    """A connector over Python rows, rendered and hashed by the reference.
+
+    As the legacy side (``legacy=True``) it answers as of the pair's
+    watermark, by the row's ``changed_at`` value, the way Postgres does.
+    """
 
     engine = "fake"
     dialect = "postgres"
 
-    def __init__(self, spec: TableSpec, rules: dict[str, Rule], rows: list[dict[str, Any]]):
+    def __init__(
+        self,
+        spec: TableSpec,
+        rules: dict[str, Rule],
+        rows: list[dict[str, Any]],
+        legacy: bool = False,
+    ):
+        self.legacy = legacy
         self.rows = []
         for row in rows:
             values = {c.name: canonical_value(c, row[c.name], rules[c.name]) for c in spec.columns}
             key = row_string([values[k] for k in spec.key])
             text = row_string([values[c.name] for c in spec.columns])
             h1, h2 = row_hash(text)
+            changed = row[spec.changed_at] if spec.changed_at else None
             self.rows.append(
-                (key_bucket(key, 8), key, h1, h2, tuple(values[c.name] for c in spec.value_columns))
+                (
+                    key_bucket(key, 8),
+                    key,
+                    h1,
+                    h2,
+                    tuple(values[c.name] for c in spec.value_columns),
+                    changed,
+                )
             )
+
+    def _after(self, table: TableSpec, changed: datetime | None) -> bool:
+        return (
+            self.legacy
+            and table.watermark is not None
+            and changed is not None
+            and changed > table.watermark
+        )
+
+    def _visible(self, table: TableSpec) -> list[Any]:
+        return [r for r in self.rows if not self._after(table, r[5])]
 
     def summarize(
         self, table: Any, rendered: Any, depth: int, parents: Sequence[int]
     ) -> dict[int, Summary]:
         found: dict[int, list[int]] = {}
-        for bucket, _, h1, h2, _ in self.rows:
+        for bucket, _, h1, h2, _, _ in self._visible(table):
             if depth > 1 and bucket >> (32 - 4 * (depth - 1)) not in parents:
                 continue
             tally = found.setdefault(bucket >> (32 - 4 * depth), [0, 0, 0])
@@ -92,8 +122,20 @@ class Fake:
     ) -> list[tuple[str, tuple[str, ...]]]:
         return [
             (key, values)
-            for bucket, key, _, _, values in self.rows
+            for bucket, key, _, _, values, _ in self._visible(table)
             if bucket >> (32 - 4 * depth) in buckets
+        ]
+
+    def count_after(self, table: TableSpec) -> int:
+        return sum(1 for r in self.rows if self._after(table, r[5]))
+
+    def keys_after(
+        self, table: TableSpec, rendered: Any, depth: int, buckets: Sequence[int]
+    ) -> list[str]:
+        return [
+            key
+            for bucket, key, _, _, _, changed in self.rows
+            if self._after(table, changed) and bucket >> (32 - 4 * depth) in buckets
         ]
 
     def forget(self) -> None:
@@ -112,9 +154,18 @@ def _rows(n: int) -> list[dict[str, Any]]:
     ]
 
 
-def _diff(left: list[dict[str, Any]], right: list[dict[str, Any]], leaf: int = 16) -> Any:
+def _diff(
+    left: list[dict[str, Any]],
+    right: list[dict[str, Any]],
+    leaf: int = 16,
+    spec: TableSpec = SPEC,
+) -> Any:
     return diff_table(
-        SPEC, Fake(SPEC, RULES, left), Fake(SPEC, RULES, right), RULES, leaf_width=leaf
+        spec,
+        Fake(spec, RULES, left, legacy=True),
+        Fake(spec, RULES, right),
+        RULES,
+        leaf_width=leaf,
     )
 
 
@@ -181,7 +232,7 @@ def test_a_composite_date_key_segments_like_any_other() -> None:
     right = [dict(r) for r in left]
     right[123]["orders"] = -1
     result = diff_table(
-        spec, Fake(spec, rules, left), Fake(spec, rules, right), rules, leaf_width=16
+        spec, Fake(spec, rules, left, legacy=True), Fake(spec, rules, right), rules, leaf_width=16
     )
     key = row_string([left[123]["day"].isoformat(), left[123]["channel"]])
     assert [(c.key, c.column, c.target) for c in result.cells] == [(key, "orders", "-1")]
@@ -224,8 +275,60 @@ def test_row_counts_that_do_not_add_up_fail_the_pair(repo_settings: Settings) ->
     result = verdict(SPEC, lost, [], repo_settings.reconcile.thresholds)
     assert not result.passed
     assert result.failures == [
-        "row counts differ (1,000 against 1,001) beyond the missing, extra and duplicated "
-        "rows found"
+        "row counts differ (1,000 against 1,001) beyond the missing, extra, duplicated and "
+        "in-flight rows found"
+    ]
+
+
+# -- as of the copy's watermark -------------------------------------------------------------
+
+COPIED = datetime(2025, 1, 1, 23)  # every row of _rows changed at or before it
+AS_OF = replace(SPEC, changed_at="seen", watermark=COPIED)
+LATER = COPIED + timedelta(hours=1)
+
+
+def test_a_row_written_after_the_watermark_waits_for_the_next_night() -> None:
+    copy = _rows(1000)
+    legacy = [*copy, {"id": 5000, "name": "new", "price": Decimal("1.00"), "seen": LATER}]
+    diff = _diff(legacy, copy, spec=AS_OF)
+    assert diff.clean and diff.after_watermark == 1
+    assert diff.source_rows == 1000 and diff.fetched_rows == 0
+    # Without the watermark, the same night reports it missing.
+    assert _diff(legacy, copy).missing == ["5000"]
+
+
+def test_a_row_changed_after_the_watermark_is_in_flight(repo_settings: Settings) -> None:
+    copy = _rows(1000)
+    legacy = [{**r, "name": "renamed", "seen": LATER} if r["id"] == 7 else r for r in copy]
+    diff = _diff(legacy, copy, spec=AS_OF)
+    assert diff.in_flight == ["7"] and diff.after_watermark == 1
+    assert diff.clean and not diff.extra and not diff.cells
+    found = discrepancies_of(AS_OF, diff, TOLERANCE)
+    assert found == []
+    result = verdict(AS_OF, diff, found, repo_settings.reconcile.thresholds, LATER)
+    assert result.passed, result.failures
+    assert result.row_match_rate == 1.0
+
+
+def test_a_difference_before_the_watermark_is_still_found() -> None:
+    legacy = _rows(1000)
+    copy = [{**r, "price": Decimal("0.00")} if r["id"] == 3 else r for r in legacy]
+    copy = [r for r in copy if r["id"] != 4]
+    legacy.append({"id": 5000, "name": "new", "price": Decimal("1.00"), "seen": LATER})
+    diff = _diff(legacy, copy, spec=AS_OF)
+    assert diff.missing == ["4"]
+    assert [(c.key, c.column) for c in diff.cells] == [("3", "price")]
+    assert diff.in_flight == [] and diff.after_watermark == 1
+
+
+def test_a_legacy_side_too_far_behind_fails_the_pair(repo_settings: Settings) -> None:
+    diff = _diff(_rows(100), _rows(100), spec=AS_OF)
+    thresholds = repo_settings.reconcile.thresholds
+    assert verdict(AS_OF, diff, [], thresholds, COPIED + timedelta(hours=26)).passed
+    late = verdict(AS_OF, diff, [], thresholds, COPIED + timedelta(hours=27))
+    assert late.failures == [
+        "the legacy side is as of 2025-01-01 23:00, 27.0 hours before the comparison, "
+        "over the limit of 26"
     ]
 
 

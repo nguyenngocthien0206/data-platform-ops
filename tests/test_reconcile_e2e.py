@@ -83,7 +83,7 @@ def test_every_report_difference_is_explained_by_an_upstream_table(
         company_warehouse,
         "reconcile_nights",
         "SELECT night, name, explained, differing_upstream FROM {} WHERE level = 'report' "
-        "AND (missing + extra + rows_with_diffs) > 0 ORDER BY 1, 2",
+        "AND (missing + extra + duplicate_key + rows_with_diffs) > 0 ORDER BY 1, 2",
     )
     assert rows, "the delivered job reaches at least one report"
     assert all(explained for _, _, explained, _ in rows)

@@ -31,6 +31,8 @@ Nothing in the diff reads the ground truth. Only the grading does, the same spli
 
 **Every row counts, not every key.** A differing segment's rows are compared as a list, not as one row per key, so a key that appears twice on either side is reported as `duplicate_key` with how many rows each side has. Its cells are not compared, because nobody can say which copy is "the" row, and its rows count as unmatched. As a last net, a pair fails when the two sides' row counts differ by more than the missing, extra and duplicated rows explain.
 
+**The legacy side is compared as of the copy.** The application keeps writing after the copy has read it: every night of the parallel run, the next hour of new rows reaches Postgres between the ingestion and the comparison. Each table is compared up to the copy's watermark on its `changed_at` column (`updated_at`), so a row written later makes no segment differ and costs nothing; a row changed in place later still has its old version in the copy, and counts as in flight, not as a difference. Reports are views, which Postgres cannot read as they were, so they are frozen into `reporting_asof` in one snapshot just before the copy reads, and the frozen tables are compared. A pair whose legacy side is more than `max_watermark_lag_hours` behind fails, so a copy that stops cannot hide behind its own watermark.
+
 **The cutover rule is fixed before the run.** A night is clean when every table and every report is within the thresholds and no report difference is unexplained; the cutover is recommended on the night that completes 14 consecutive clean nights.
 
 ## Results at scale 1.0
@@ -78,7 +80,8 @@ The comparison engine knows nothing about the simulated company: give it two con
   - `reconcile run` writes the report from the nights it recorded.
   - The delivered job's defects and the one-off faults come from `simulation/migration.py`.
 - **What you replace:**
-  - **The pairs:** `reconcile.yaml` with your tables and reports, their keys, renamed columns and decimal scales.
+  - **The pairs:** `reconcile.yaml` with your tables and reports, their keys, renamed columns and decimal scales, and each table's `changed_at`, the column your copy reads by.
+  - **The point in time:** set each table spec's `watermark` to your copy's watermark for that table (`dataclasses.replace(spec, watermark=...)`), and pass the comparison's time to `verdict`. Freeze the legacy reports with `asof.freeze_reports` just before your copy reads, compare the frozen schema (`load_specs(..., reports_schema=...)`), and set the report specs' `watermark` to the time of the freeze.
   - **The names:** the schema and database names under `company:` in the settings (`legacy_schema`, `reporting_schema`, `raw_database`). The reports' ClickHouse database is named `marts`.
   - **The policy:** the equality rules and thresholds under `reconcile:`, which your data owner signs, not you.
   - **The loop:** a scheduled job that, every night after dbt has built, runs the pairs and stores each verdict, and your own cutover rule over the stored nights.
@@ -116,6 +119,8 @@ for spec in specs:
   - **Two engines rarely agree on a value's text:** decimal padding, boolean spelling, time zones, `NULL` in a condition. Everything is rendered to one canonical string first, and a golden-row test holds Python, Postgres and ClickHouse to byte-identical output (ADR 0006).
   - **ClickHouse's `avg` rounds a half to even** where Postgres rounds away from zero, and a ratio cast to a smaller scale truncates. Both showed up as report differences before any fault was planted, so compare the reports early, not only the tables.
   - **Raw in ClickHouse is read with `FINAL`,** or a row changed in place is counted twice.
+  - **The legacy system never stops:** compared as it is, every row written since the copy shows as missing, every night, and no night is ever clean. Compare as of the copy's watermark, and freeze the reports before the copy reads, not after. Version 2.0.0 compared the live tables; the simulated company wrote nothing between the copy and the comparison, so it never showed.
+  - **An invented row under a key the application uses next** is in flight, not extra, for one night: with only `updated_at`, a row inserted after the watermark cannot be told from one changed after it. The next copy brings the real row, and the key compares again.
   - **A report keyed on what should be unique often is not:** a join in the new model that matches two rows doubles a line of the report. Declare the key the legacy report is really unique on, and keep `duplicate_key` at 0. Version 2.0.0 kept one row per key and let such a copy pass.
   - **A report difference with no upstream cause is a logic difference** between the old SQL and the new model. It should block a clean night: it is the one a finance user finds after cutover.
   - **Thresholds are the data owner's statement of what matters:** six payments a cent off were within the rounding allowance, so that night counted as clean.

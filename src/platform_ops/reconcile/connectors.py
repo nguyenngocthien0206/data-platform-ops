@@ -11,6 +11,11 @@ table at every level, because rendering a row canonically is the expensive part
 (1.x measured 53 against 20 seconds). ClickHouse renders and groups on the fly:
 it is columnar and parallel, and the reconciliation reads it as the platform
 team's user, which is read-only (ADR 0013).
+
+The legacy side keeps taking writes after the copy has read it. When a pair has
+a watermark, Postgres answers for the rows changed at or before it only, and
+two more questions tell the diff about the rest: how many rows changed since,
+and which keys of a few segments did.
 """
 
 from __future__ import annotations
@@ -51,6 +56,31 @@ class Connector(Protocol):
     def forget(self) -> None: ...
 
 
+class Source(Connector, Protocol):
+    """The legacy side, which can be compared as of a watermark (``TableSpec.watermark``)."""
+
+    def count_after(self, table: TableSpec) -> int:
+        """Rows changed after the watermark, which tonight's comparison leaves out."""
+        ...
+
+    def keys_after(
+        self, table: TableSpec, rendered: RenderedTable, depth: int, buckets: Sequence[int]
+    ) -> list[str]:
+        """The canonical keys of the given segments whose row changed after the watermark."""
+        ...
+
+
+def as_of(table: TableSpec) -> bool:
+    """Whether the legacy side of ``table`` is compared as of a watermark."""
+    return bool(table.changed_at) and table.watermark is not None
+
+
+def _after(table: TableSpec) -> str:
+    """Postgres: the rows of ``table`` changed after its watermark."""
+    assert table.watermark is not None
+    return f"\"{table.changed_at}\" > TIMESTAMP '{table.watermark:%Y-%m-%d %H:%M:%S.%f}'"
+
+
 def _shift(depth: int) -> int:
     return 32 - 4 * depth
 
@@ -69,15 +99,23 @@ class PostgresConnector:
         cursor = self.connection.execute(sql, list(params))
         return cursor.fetchall() if cursor.description else []
 
+    def _relation(self, table: TableSpec) -> str:
+        """The legacy relation as tonight compares it: as of the watermark, if it has one."""
+        if not as_of(table):
+            return table.source
+        # A row that never recorded a change is as old as the table: always compared.
+        return f"(SELECT * FROM {table.source} WHERE NOT coalesce({_after(table)}, false)) AS as_of"
+
     def _hashes(self, table: TableSpec, rendered: RenderedTable) -> str:
         name = f"rowhash_{table.level}_{table.name}"
-        if self._prepared.get(name) != rendered.row:
+        relation = self._relation(table)
+        if self._prepared.get(name) != relation + rendered.row:
             self._rows(f"DROP TABLE IF EXISTS {name}")
             self._rows(
                 f"CREATE TEMP TABLE {name} AS SELECT {rendered.bucket} AS bucket, "
-                f"{rendered.h1} AS h1, {rendered.h2} AS h2 FROM {table.source}"
+                f"{rendered.h1} AS h1, {rendered.h2} AS h2 FROM {relation}"
             )
-            self._prepared[name] = rendered.row
+            self._prepared[name] = relation + rendered.row
         return name
 
     def forget(self) -> None:
@@ -106,11 +144,29 @@ class PostgresConnector:
     ) -> list[tuple[str, tuple[str, ...]]]:
         values = ", ".join(rendered.values) or "''"
         rows = self._rows(
-            f"SELECT {rendered.key}, {values} FROM {table.source} "
+            f"SELECT {rendered.key}, {values} FROM {self._relation(table)} "
             f"WHERE ({rendered.bucket} >> {_shift(depth)}) IN (SELECT unnest(%s::bigint[]))",
             [list(buckets)],
         )
         return [(str(row[0]), tuple(str(v) for v in row[1:])) for row in rows]
+
+    def count_after(self, table: TableSpec) -> int:
+        if not as_of(table):
+            return 0
+        ((n,),) = self._rows(f"SELECT count(*) FROM {table.source} WHERE {_after(table)}")
+        return int(n)
+
+    def keys_after(
+        self, table: TableSpec, rendered: RenderedTable, depth: int, buckets: Sequence[int]
+    ) -> list[str]:
+        if not as_of(table):
+            return []
+        rows = self._rows(
+            f"SELECT {rendered.key} FROM {table.source} WHERE {_after(table)} "
+            f"AND ({rendered.bucket} >> {_shift(depth)}) IN (SELECT unnest(%s::bigint[]))",
+            [list(buckets)],
+        )
+        return [str(row[0]) for row in rows]
 
 
 class ClickHouseConnector:

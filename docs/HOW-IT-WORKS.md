@@ -145,7 +145,19 @@ Why two hash numbers per row (`h1`, `h2`) in the code: two different groups coul
 
 **Step 8: a report that differs needs a reason.** If the new revenue report differs from the old one, either a table it is built from differs too (a copy problem, fixed upstream), or nothing upstream differs and the new report computes differently (a logic problem). The lineage graph says which tables feed each report. A difference with no upstream cause blocks the night, because it is exactly what a finance user finds after the cutover.
 
-**Step 9: count clean nights.** A night is clean when every pair passes and no report differs without a reason. After 14 clean nights in a row, the cutover is recommended.
+**Step 9: compare what the copy has read, not what the legacy has now.** The application does not stop for the comparison. The copy reads up to 02:00, the comparison runs later, and by then new orders have arrived in the legacy database. Compared as they are, those rows would show as missing every night, and no night would ever be clean.
+
+So the legacy side is compared as of the copy's watermark, the last `updated_at` it read:
+
+```
+copy reads up to 02:00        →  watermark = 02:00
+order 9001 arrives at 02:20   →  updated_at 02:20 > watermark: left for tomorrow
+customer 17 edited at 02:40   →  the copy still has the old version: "in flight", not a difference
+```
+
+Reports are views over the live tables, and Postgres cannot read a view as it was an hour ago. So just before the copy reads, every legacy report is frozen into a table, all in one snapshot, and the comparison uses the frozen copy. One guard: if the copy stops, its watermark stays behind and everything newer would be skipped forever, so a pair fails when its legacy side is more than 26 hours behind.
+
+**Step 10: count clean nights.** A night is clean when every pair passes and no report differs without a reason. After 14 clean nights in a row, the cutover is recommended.
 
 **The result.** On matching nights the whole run pulled 11,200 rows instead of 378,885,458. Every defect of the delivered copy job was found on the first night, every one-off fault the night it landed.
 

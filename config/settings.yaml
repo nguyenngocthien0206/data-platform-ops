@@ -187,6 +187,10 @@ reconcile:
       whitespace: 0
       case_only: 0
       rounding: 100
+    # How far behind the comparison the legacy side may be: the copy's
+    # watermark for a table, the frozen snapshot for a report. A night a day
+    # apart plus two hours; a copy that stops fails its pairs the next night.
+    max_watermark_lag_hours: 26
 
 metadata:
   # How much a downstream consumer counts, by its ownership tier. Used by the
@@ -203,6 +207,9 @@ company:
   # Hosts, ports and passwords come from .env, never from here.
   legacy_schema: app
   reporting_schema: reporting
+  # The reports frozen every night of the parallel run, just before the copy
+  # reads, so the reconciliation compares them as of the copy's watermark.
+  frozen_reporting_schema: reporting_asof
   # The raw layer the incremental ingestion fills; dbt's databases are named
   # after its layers (staging, intermediate, marts, reference, snapshots).
   raw_database: raw
@@ -225,6 +232,10 @@ company:
   # next day, the way a team works through its morning reconciliation report.
   parallel_run_weeks: 6
   fix_after_nights: 7
+  # The application does not stop for the copy: every night of the parallel
+  # run, the next hour of new rows reaches Postgres after the ingestion and
+  # before the reconciliation, which compares as of the copy's watermark.
+  writes_after_ingest_minutes: 60
   # Production on ClickHouse after the parallel run (Phase 14): every night
   # runs source freshness, run, snapshot and test as separate dbt invocations,
   # faults happen in operation (incidents.fault_days), and the incident desk
