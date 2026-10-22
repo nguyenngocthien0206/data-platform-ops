@@ -136,6 +136,22 @@ class LegacyCompany:
             price_changes=price_changes,
             profile_changes=profile_changes,
         )
+        self._land(after, until)
+        return loaded, changed
+
+    def arrive_new(self, after: datetime, until: datetime) -> dict[str, int]:
+        """New rows in ``(after, until]`` only, into Postgres: the writes of a working morning.
+
+        Splitting a day's arrival in two lands the same rows with the same
+        timestamps as one arrival would: rows come from fixed id ranges and are
+        picked by ``_loaded_at``.
+        """
+        loaded = raw_data.load_window(self.generator, self.plan, after=after, until=until)
+        self._land(after, until)
+        return loaded
+
+    def _land(self, after: datetime, until: datetime) -> None:
+        """Upsert into Postgres every generated row stamped in ``(after, until]``."""
         window = (
             f"{LOADED_AT} > TIMESTAMP '{after:%Y-%m-%d %H:%M:%S}' "
             f"AND {LOADED_AT} <= TIMESTAMP '{until:%Y-%m-%d %H:%M:%S}'"
@@ -144,7 +160,6 @@ class LegacyCompany:
             for table in raw_data.TABLES:
                 self._upsert(connection, table, window)
             connection.commit()
-        return loaded, changed
 
     # -- moving rows ---------------------------------------------------------------
 

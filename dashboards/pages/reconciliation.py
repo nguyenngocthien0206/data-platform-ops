@@ -118,9 +118,18 @@ if nights is not None and not nights.empty:
     else:
         page.table(
             tonight[
-                ["pair", "status", "source_rows", "missing", "extra", "rows_with_diffs", "detail"]
+                [
+                    "pair",
+                    "status",
+                    "source_rows",
+                    "missing",
+                    "extra",
+                    "duplicate_key",
+                    "rows_with_diffs",
+                    "detail",
+                ]
             ],
-            counts=("source_rows", "missing", "extra", "rows_with_diffs"),
+            counts=("source_rows", "missing", "extra", "duplicate_key", "rows_with_diffs"),
         )
     labels = page.frame("labels")
     if labels is not None:

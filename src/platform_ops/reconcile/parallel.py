@@ -10,6 +10,12 @@ Every night of the parallel run, after the company's ingestion and dbt build,
   also differs that night; one that is not is a logic difference between the
   old SQL and the new, the most important thing a parallel run can find.
 
+The legacy side keeps taking writes after the copy has read it, so a night
+compares it as of the copy: each table as of its watermark (``Night.watermarks``,
+by its ``changed_at`` column), each report as frozen just before the copy read
+(``freeze``, ``asof.py``). What was written since waits for the next night, and
+a pair whose legacy side is more than ``max_watermark_lag_hours`` behind fails.
+
 Pairs are compared ``reconcile.workers`` at a time, each with its own Postgres
 connection and its own ClickHouse client, as the platform team's read-only
 user. Every night is recorded in the ops store. The cutover is recommended on
@@ -21,7 +27,7 @@ from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -32,12 +38,13 @@ from platform_ops.common.dbt_invoke import invocation_from_settings
 from platform_ops.common.servers import clickhouse_client, connect_postgres
 from platform_ops.common.store import open_store, replace_ops_table
 from platform_ops.common.tagging import Tag
+from platform_ops.reconcile.asof import freeze_reports
 from platform_ops.reconcile.canonical import Rule, rules_for
 from platform_ops.reconcile.classify import classify
 from platform_ops.reconcile.connectors import ClickHouseConnector, PostgresConnector
 from platform_ops.reconcile.diff import TableDiff, diff_table
 from platform_ops.reconcile.metrics import Discrepancy, Grade, TableVerdict, grade, verdict
-from platform_ops.reconcile.schema import TableSpec
+from platform_ops.reconcile.schema import PairConfig, ReconcileConfig, TableSpec
 from platform_ops.reconcile.specs import load_specs
 from platform_ops.simulation.company import Night
 
@@ -46,7 +53,8 @@ NIGHTS_DDL = """
     backfilled boolean NOT NULL, planted text NOT NULL, repaired text NOT NULL,
     level text NOT NULL, name text NOT NULL,
     source_rows bigint NOT NULL, target_rows bigint NOT NULL,
-    missing bigint NOT NULL, extra bigint NOT NULL, rows_with_diffs bigint NOT NULL,
+    missing bigint NOT NULL, extra bigint NOT NULL, duplicate_key bigint NOT NULL,
+    in_flight bigint NOT NULL, after_watermark bigint NOT NULL, rows_with_diffs bigint NOT NULL,
     rounding bigint NOT NULL, timezone_shift bigint NOT NULL, whitespace bigint NOT NULL,
     case_only bigint NOT NULL, value_mismatch bigint NOT NULL,
     row_match_rate double precision NOT NULL, passed boolean NOT NULL, failures text NOT NULL,
@@ -65,6 +73,9 @@ NIGHTS_COLUMNS = [
     "target_rows",
     "missing",
     "extra",
+    "duplicate_key",
+    "in_flight",
+    "after_watermark",
     "rows_with_diffs",
     "rounding",
     "timezone_shift",
@@ -230,17 +241,44 @@ class ParallelRun:
 
     # -- one night ----------------------------------------------------------------------
 
+    def freeze(self, at: datetime) -> None:
+        """Freeze the legacy reports, just before the copy reads up to ``at``."""
+        company = self.settings.company
+        reports: list[PairConfig] = ReconcileConfig.load(self.config_path).reports
+        freeze_reports(
+            lambda: connect_postgres(self.settings),
+            company.name(company.reporting_schema),
+            company.name(company.frozen_reporting_schema),
+            [pair.source for pair in reports],
+            workers=self.settings.reconcile.workers,
+        )
+
     def _load_specs(self) -> None:
         manifest = invocation_from_settings(self.settings).manifest_path
         with connect_postgres(self.settings) as connection:
             client = clickhouse_client(self.settings, "platform")
             try:
                 self.specs = load_specs(
-                    self.settings, connection, client, manifest, self.config_path
+                    self.settings,
+                    connection,
+                    client,
+                    manifest,
+                    self.config_path,
+                    reports_schema=self.settings.company.frozen_reporting_schema,
                 )
             finally:
                 client.close()
         self.rules = {s.name: rules_for(s, self.settings.reconcile) for s in self.specs}
+
+    def _as_of(self, spec: TableSpec, night: Night) -> TableSpec:
+        """The pair as tonight compares it: a table as of the copy, a report as frozen.
+
+        A table pair is named after its legacy table, which is how the copy
+        records its watermark.
+        """
+        if spec.level == "report":
+            return replace(spec, watermark=night.frozen_at)
+        return replace(spec, watermark=night.watermarks.get(spec.name))
 
     def _compare(self, spec: TableSpec) -> PairResult:
         connection = connect_postgres(self.settings)
@@ -260,9 +298,8 @@ class ParallelRun:
             connection.close()
             client.close()
         found = discrepancies_of(spec, diff, self.tolerance)
-        return PairResult(
-            spec, diff, found, verdict(spec, diff, found, self.settings.reconcile.thresholds)
-        )
+        thresholds = self.settings.reconcile.thresholds
+        return PairResult(spec, diff, found, verdict(spec, diff, found, thresholds, self._night_at))
 
     def __call__(self, night: Night) -> None:
         self._night_at = night.run_at
@@ -272,8 +309,9 @@ class ParallelRun:
             self._recreate_store()
             self._load_specs()
         # The largest pairs first, so the pool is not left waiting on one at the end.
+        tonight = [self._as_of(spec, night) for spec in self.specs]
         with ThreadPoolExecutor(self.settings.reconcile.workers) as pool:
-            pairs = list(pool.map(self._compare, self.specs))
+            pairs = list(pool.map(self._compare, tonight))
         tables = [p for p in pairs if p.spec.level == "table"]
         found = [d for p in tables for d in p.discrepancies]
         specs = {p.spec.name: p.spec for p in tables}
@@ -313,6 +351,9 @@ class ParallelRun:
                     d.target_rows,
                     len(d.missing),
                     len(d.extra),
+                    len(d.duplicates),
+                    len(d.in_flight),
+                    d.after_watermark,
                     d.rows_with_cell_diffs,
                     v.by_class["rounding"],
                     v.by_class["timezone_shift"],

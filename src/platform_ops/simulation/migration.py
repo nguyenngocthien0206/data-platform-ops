@@ -37,7 +37,7 @@ from psycopg import sql
 from platform_ops.common.config import DiscrepancyClass, Settings
 from platform_ops.simulation import raw_data
 from platform_ops.simulation.ingest import raw_columns
-from platform_ops.simulation.legacy_db import LOADED_AT
+from platform_ops.simulation.legacy_db import LOADED_AT, UPDATED_AT
 
 
 @dataclass(frozen=True)
@@ -72,21 +72,28 @@ def _through_float(value: Decimal) -> Decimal:
     return (Decimal(math.trunc(float(value) * 100)) / 100).quantize(Decimal("0.01"))
 
 
-def delivered_truth(settings: Settings, connection: Any) -> list[TruthCell]:
-    """Every discrepancy the delivered job puts in raw, from the legacy rows."""
+def delivered_truth(settings: Settings, connection: Any, as_of: datetime) -> list[TruthCell]:
+    """Every discrepancy the delivered job puts in raw, from the legacy rows.
+
+    Only rows the copy has read: changed at or before ``as_of``, its watermark.
+    The comparison leaves later rows for the next night, so they are not
+    expected tonight.
+    """
     job = settings.company.delivered_job
     schema = sql.Identifier(settings.company.name(settings.company.legacy_schema))
     keys = raw_data.PRIMARY_KEYS
+    read = sql.SQL("{} <= %s").format(sql.Identifier(UPDATED_AT))
 
     def rows(table: str, column: str) -> list[tuple[Any, Any]]:
-        query = sql.SQL("SELECT {}, {} FROM {}.{} WHERE {} IS NOT NULL ORDER BY 1").format(
+        query = sql.SQL("SELECT {}, {} FROM {}.{} WHERE {} IS NOT NULL AND {} ORDER BY 1").format(
             sql.Identifier(keys[table]),
             sql.Identifier(column),
             schema,
             sql.Identifier(table),
             sql.Identifier(column),
+            read,
         )
-        return list(connection.execute(query).fetchall())
+        return list(connection.execute(query, [as_of]).fetchall())
 
     truth: list[TruthCell] = []
     for key, value in rows(job.timezone_table, job.timezone_column):
@@ -127,10 +134,10 @@ def delivered_truth(settings: Settings, connection: Any) -> list[TruthCell]:
             )
     batch_key = sql.Identifier(keys[job.batch_table])
     lost = connection.execute(
-        sql.SQL("SELECT {} FROM {}.{} WHERE mod({}, %s) = 0 ORDER BY 1").format(
-            batch_key, schema, sql.Identifier(job.batch_table), batch_key
+        sql.SQL("SELECT {} FROM {}.{} WHERE mod({}, %s) = 0 AND {} ORDER BY 1").format(
+            batch_key, schema, sql.Identifier(job.batch_table), batch_key, read
         ),
-        [job.batch_rows],
+        [job.batch_rows, as_of],
     ).fetchall()
     truth += [
         TruthCell(
@@ -147,6 +154,9 @@ def delivered_truth(settings: Settings, connection: Any) -> list[TruthCell]:
 
 
 # -- one-off faults ----------------------------------------------------------------------
+
+
+INVENTED_KEYS = 1_000_000_000
 
 
 @dataclass(frozen=True)
@@ -236,7 +246,12 @@ def plant(settings: Settings, client: Any, fault: OneOffFault) -> Planted:
     start = settings.simulation.start.strftime("%Y-%m-%d %H:%M:%S")
     sync = "SETTINGS mutations_sync = 2"
     if fault.klass == "extra_in_target":
-        top = int(client.query(f"SELECT max({key}) FROM {raw}").result_rows[0][0] or 0)
+        # Far above the keys in use: the application's next rows take the keys
+        # just above the copy's, and are in Postgres already, written after the
+        # watermark, so invented rows there would pass as rows in flight.
+        top = INVENTED_KEYS + int(
+            client.query(f"SELECT max({key}) FROM {raw}").result_rows[0][0] or 0
+        )
         keys = list(range(top + 1, top + 1 + fault.rows))
         names = [n for n, _ in raw_columns(fault.table)]
         listed = ", ".join(f"`{n}`" for n in names)

@@ -61,6 +61,13 @@ def _rows(settings: Settings, name: str, order: str) -> list[dict[str, Any]]:
         return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
+def _differing(night: dict[str, Any]) -> int:
+    """Rows of a pair that did not match that night, whatever the reason."""
+    return int(
+        night["missing"] + night["extra"] + night["duplicate_key"] + night["rows_with_diffs"]
+    )
+
+
 def _day(value: Any) -> str:
     return f"{value:%Y-%m-%d}"
 
@@ -122,6 +129,10 @@ def render(settings: Settings) -> str:
                     for k in DISCREPANCY_CLASSES
                 ),
                 ("Rounding tolerance", f"{r.rounding_tolerance}"),
+                (
+                    "Legacy side behind the comparison",
+                    f"<= {r.thresholds.max_watermark_lag_hours:g} hours",
+                ),
             ],
         ),
         "",
@@ -162,11 +173,13 @@ def render(settings: Settings) -> str:
             "" if not g or not g["expected"] else pct(g["true_positives"] / g["expected"])
         )
         clean = t_pass == len(tables) and r_pass == len(reports) and not unexplained
+        written_after = sum(x["after_watermark"] for x in rows)
         timeline.append(
             (
                 _day(head["run_at"]),
                 head["job"],
                 ", ".join(events),
+                f"{written_after:,}",
                 f"{t_pass}/{len(tables)}",
                 f"{r_pass}/{len(reports)}",
                 f"{unexplained}",
@@ -175,11 +188,16 @@ def render(settings: Settings) -> str:
             )
         )
     out += [
+        "Every night compares the legacy side as of the copy: each table up to the "
+        "copy's watermark, each report as frozen just before the copy read. Rows the "
+        "application wrote after it are left for the next night, once the copy has them.",
+        "",
         table(
             [
                 "Night",
                 "Job",
                 "Events",
+                "Written after the copy",
                 "Tables passing",
                 "Reports passing",
                 "Unexplained reports",
@@ -187,7 +205,7 @@ def render(settings: Settings) -> str:
                 "Night",
             ],
             timeline,
-            right=(3, 4, 5, 6),
+            right=(3, 4, 5, 6, 7),
         ),
         "",
     ]
@@ -286,7 +304,7 @@ def render(settings: Settings) -> str:
                     (
                         _day(x["run_at"]),
                         x["name"],
-                        f"{x['rows_with_diffs'] + x['missing'] + x['extra']:,}",
+                        f"{_differing(x):,}",
                     )
                     for x in unexplained_rows
                 ],
@@ -304,7 +322,7 @@ def render(settings: Settings) -> str:
     out += ["## Segmented diff against a naive comparison", ""]
     moved: dict[tuple[str, bool], list[int]] = defaultdict(lambda: [0, 0])
     for x in nights:
-        clean_pair = not (x["missing"] or x["extra"] or x["rows_with_diffs"])
+        clean_pair = not _differing(x)
         tally = moved[(x["level"], clean_pair)]
         tally[0] += x["rows_moved"]
         tally[1] += x["rows_moved_naive"]

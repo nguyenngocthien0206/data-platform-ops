@@ -147,7 +147,7 @@ def remove_company(settings: Settings) -> None:
     drop_users(settings)
     drop_dashboard_role(settings)
     for dbname, schemas in (
-        (None, (company.legacy_schema, company.reporting_schema)),
+        (None, (company.legacy_schema, company.reporting_schema, company.frozen_reporting_schema)),
         (company.ops_database, (company.ops_schema,)),
     ):
         with connect_postgres(settings, dbname) as connection:
@@ -300,6 +300,11 @@ class Night:
     planted: str  # the fault planted tonight, if any
     repaired: str  # the fault repaired tonight, if any
     truth: tuple[TruthCell, ...]
+    # Each legacy table's watermark after tonight's copy: the reconciliation
+    # compares it as of this, and anything written since the next night.
+    watermarks: dict[str, datetime] = field(default_factory=dict)
+    # When the legacy reports were frozen for tonight (``Reconciliation.freeze``).
+    frozen_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -309,6 +314,16 @@ class Fix:
     incident_id: str
     tables: tuple[str, ...]
     at: datetime
+
+
+class Reconciliation(Protocol):
+    """Whoever reconciles the parallel run: freezes the legacy reports, then compares a night."""
+
+    def freeze(self, at: datetime) -> None:
+        """Freeze the legacy reports, just before the copy reads up to ``at``."""
+        ...
+
+    def __call__(self, night: Night) -> None: ...
 
 
 class Desk(Protocol):
@@ -363,7 +378,7 @@ class Timeline:
 def run_company(
     settings: Settings,
     days: int | None = None,
-    nightly: Callable[[Night], None] | None = None,
+    nightly: Reconciliation | None = None,
     daily: Callable[[Day], None] | None = None,
     desk: Desk | None = None,
 ) -> CompanySummary:
@@ -371,8 +386,11 @@ def run_company(
 
     Every day: the day's data reaches Postgres, the ingestion loads it, the
     platform merges raw, dbt builds on its cadence, and the dashboards and
-    people query the marts. During the parallel run dbt builds every night and
-    ``nightly`` (the reconciliation) is called after each build. In production,
+    people query the marts. During the parallel run dbt builds every night;
+    ``nightly`` (the reconciliation) freezes the legacy reports before the copy
+    reads, the application keeps writing after it
+    (``company.writes_after_ingest_minutes``), and ``nightly`` compares the
+    night after its build. In production,
     every night runs freshness, run, snapshot and test, each handed to ``desk``,
     and faults are planted and fixed on the desk's schedule. ``daily`` is called
     at the end of every day. Every query is tagged for the cost module.
@@ -458,6 +476,11 @@ def run_company(
                     if table in active:
                         summary.rows_ingested += ingestion.resync(table, last_load)
                         faults.repaired(settings, active.pop(table), at)
+            parallel = timeline.parallel(day_index)
+            frozen_at = None
+            if parallel and nightly is not None:
+                nightly.freeze(run_at)
+                frozen_at = run_at
             if backfill:
                 # The fixed job ships: raw is reloaded in full, then rebuilt.
                 ingestion.delivered = False
@@ -474,7 +497,12 @@ def run_company(
                 ["sim_at", "table_name", "rows_rewritten", "bytes_rewritten"],
                 optimize_raw(settings, admin, run_at),
             )
-            parallel = timeline.parallel(day_index)
+            late = timedelta(minutes=settings.company.writes_after_ingest_minutes)
+            if parallel and late:
+                # The next day's first writes: tomorrow's copy reads them.
+                arrived = legacy.arrive_new(after=run_at, until=run_at + late)
+                summary.rows_loaded += sum(arrived.values())
+                loaded_until = run_at + late
             if timeline.production(day_index):
                 if manifest is None:
                     manifest = run_dbt(invocation_from_settings(settings), ["parse", *QUIET]).result
@@ -491,7 +519,7 @@ def run_company(
                 truth: list[TruthCell] = []
                 if ingestion.delivered:
                     with connect_postgres(settings) as connection:
-                        truth += delivered_truth(settings, connection)
+                        truth += delivered_truth(settings, connection, as_of=run_at)
                 if planted is not None:
                     truth += planted.truth()
                 nightly(
@@ -503,6 +531,8 @@ def run_company(
                         planted=fault.fault_id if fault is not None else "",
                         repaired=repaired,
                         truth=tuple(truth),
+                        watermarks=ingestion.watermarks(),
+                        frozen_at=frozen_at,
                     )
                 )
             if daily is not None:

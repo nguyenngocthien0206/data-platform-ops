@@ -161,7 +161,8 @@ QUERIES: dict[str, Query] = {
     ),
     "nights": Query(
         """SELECT night, run_at, job, backfilled, planted, repaired, level, name, passed,
-                  explained, source_rows, missing, extra, rows_with_diffs, row_match_rate,
+                  explained, source_rows, missing, extra, duplicate_key, rows_with_diffs,
+                  row_match_rate,
                   failures, differing_upstream, rows_moved, rows_moved_naive
            FROM {ops}.reconcile_nights ORDER BY night, level DESC, name""",
         ("reconcile_nights",),
