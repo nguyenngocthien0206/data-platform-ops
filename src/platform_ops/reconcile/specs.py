@@ -2,14 +2,21 @@
 
 Columns, their kinds and their scales are read from Postgres's
 ``information_schema`` (the legacy side defines what the data is) and checked
-against ClickHouse's ``system.columns``; a column missing on the new side is an
-error before any night is reconciled, not a discrepancy on every row. A
-report's upstream tables come from dbt's lineage: the raw sources its mart is
-built from, which is how a report discrepancy is explained (or not).
+against ClickHouse's ``system.columns``. A report's upstream tables come from
+dbt's lineage: the raw sources its mart is built from, which is how a report
+discrepancy is explained (or not).
+
+Both catalogues are read again every night, because a parallel run lasts
+weeks and schemas move during it: a column added on both sides is compared
+from the night it appears. A pair that no longer lines up (a table gone, a
+legacy column with no counterpart, a key column dropped) is schema drift
+(``load_pairs``): that pair fails its night with the reason, not a discrepancy
+on every row, and the other pairs are compared as usual.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +57,18 @@ def _clickhouse_columns(client: Any, database: str, table: str) -> dict[str, str
     )
 
 
+class SchemaDrift(ValueError):
+    """A pair whose two sides no longer line up, column for column."""
+
+
+@dataclass(frozen=True)
+class Drift:
+    """A pair that cannot be compared tonight, and why."""
+
+    spec: TableSpec  # what is known without the catalogues: name, level, relations
+    reason: str
+
+
 def _spec(
     pair: PairConfig,
     level: Level,
@@ -61,17 +80,17 @@ def _spec(
 ) -> TableSpec:
     legacy = _postgres_columns(connection, source_schema, pair.source)
     if not legacy:
-        raise ValueError(f"{source_schema}.{pair.source} does not exist in Postgres")
+        raise SchemaDrift(f"{source_schema}.{pair.source} does not exist in Postgres")
     new = _clickhouse_columns(client, target_database, pair.target)
     if not new:
-        raise ValueError(f"{target_database}.{pair.target} does not exist in ClickHouse")
+        raise SchemaDrift(f"{target_database}.{pair.target} does not exist in ClickHouse")
     columns = []
     for name, data_type, pg_scale in legacy:
         if name in pair.skip:
             continue
         target = pair.rename.get(name, name)
         if target not in new:
-            raise ValueError(
+            raise SchemaDrift(
                 f"{pair.name}: column {name} has no counterpart {target} in ClickHouse"
             )
         kind = kind_from_postgres(data_type)
@@ -83,9 +102,9 @@ def _spec(
         columns.append(Column(name, kind, scale, "" if target == name else target, new[target]))
     missing = [k for k in pair.key if k not in {c.name for c in columns}]
     if missing:
-        raise ValueError(f"{pair.name}: key columns {missing} are not compared")
+        raise SchemaDrift(f"{pair.name}: key columns {missing} are not compared")
     if pair.changed_at and pair.changed_at not in {c.name for c in columns if c.kind == "ts"}:
-        raise ValueError(f"{pair.name}: changed_at {pair.changed_at} is not a compared timestamp")
+        raise SchemaDrift(f"{pair.name}: changed_at {pair.changed_at} is not a compared timestamp")
     return TableSpec(
         name=pair.name,
         level=level,
@@ -101,20 +120,44 @@ def _spec(
 
 def report_upstream(manifest_path: Path, mart: str) -> tuple[str, ...]:
     """The raw tables a mart is built from, through dbt's lineage."""
-    graph = build_graph(load_manifest(manifest_path))
+    return _raw_upstream(build_graph(load_manifest(manifest_path)), mart)
+
+
+def _raw_upstream(graph: Any, mart: str) -> tuple[str, ...]:
     found = upstream(graph, f"model.company.{mart}")
     return tuple(sorted(n.split(".")[-1] for n in found if n.startswith("source.company.raw.")))
 
 
-def load_specs(
+def _stub(
+    pair: PairConfig,
+    level: Level,
+    source_schema: str,
+    target_database: str,
+    upstream_tables: tuple[str, ...] = (),
+) -> TableSpec:
+    """A pair as the configuration names it, without its columns."""
+    return TableSpec(
+        name=pair.name,
+        level=level,
+        key=tuple(pair.key),
+        columns=(),
+        source=f'"{source_schema}"."{pair.source}"',
+        target=f"`{target_database}`.`{pair.target}`",
+        final=level == "table",
+        upstream=upstream_tables,
+        changed_at=pair.changed_at,
+    )
+
+
+def load_pairs(
     settings: Settings,
     connection: Any,
     client: Any,
     manifest_path: Path,
     config_path: Path,
     reports_schema: str | None = None,
-) -> list[TableSpec]:
-    """Every pair to reconcile, tables first, in the order the configuration lists them.
+) -> tuple[list[TableSpec], list[Drift]]:
+    """Every pair to reconcile tonight, tables first, and the ones that drifted.
 
     ``reports_schema`` is where the legacy reports are read: the reporting
     schema by default, the frozen one during the parallel run (``asof``).
@@ -125,8 +168,34 @@ def load_specs(
     reporting = company.name(reports_schema or company.reporting_schema)
     raw = company.name(company.raw_database)
     marts = company.name("marts")
-    specs = [_spec(p, "table", app, raw, connection, client) for p in config.tables]
-    for pair in config.reports:
-        lineage = report_upstream(manifest_path, pair.target)
-        specs.append(_spec(pair, "report", reporting, marts, connection, client, lineage))
+    graph = build_graph(load_manifest(manifest_path)) if config.reports else None
+    wanted: list[tuple[PairConfig, Level, str, str, tuple[str, ...]]]
+    wanted = [(p, "table", app, raw, ()) for p in config.tables]
+    wanted += [
+        (p, "report", reporting, marts, _raw_upstream(graph, p.target)) for p in config.reports
+    ]
+    specs: list[TableSpec] = []
+    drifted: list[Drift] = []
+    for pair, level, source, target, lineage in wanted:
+        try:
+            specs.append(_spec(pair, level, source, target, connection, client, lineage))
+        except SchemaDrift as drift:
+            drifted.append(Drift(_stub(pair, level, source, target, lineage), str(drift)))
+    return specs, drifted
+
+
+def load_specs(
+    settings: Settings,
+    connection: Any,
+    client: Any,
+    manifest_path: Path,
+    config_path: Path,
+    reports_schema: str | None = None,
+) -> list[TableSpec]:
+    """Every pair to reconcile, tables first; raises on the first pair that drifted."""
+    specs, drifted = load_pairs(
+        settings, connection, client, manifest_path, config_path, reports_schema
+    )
+    if drifted:
+        raise SchemaDrift(drifted[0].reason)
     return specs

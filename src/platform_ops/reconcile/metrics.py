@@ -144,9 +144,9 @@ def verdict(
 
 def neutralized_by_policy(cell: TruthCell, spec: TableSpec, rules: dict[str, Rule]) -> bool:
     """Whether the source's canonical policy says this planted difference is not one."""
-    if not cell.column:
+    rule = rules.get(cell.column)
+    if rule is None:  # a whole row, or a column not compared tonight
         return False
-    rule = rules[cell.column]
     return (cell.klass == "case_only" and rule.casefold) or (
         cell.klass == "whitespace" and rule.rtrim
     )

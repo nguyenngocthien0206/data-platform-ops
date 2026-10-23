@@ -375,3 +375,42 @@ def test_frozen_reports_keep_the_rows_they_were_frozen_with(
         pg.execute(f"DROP SCHEMA IF EXISTS {frozen} CASCADE")
         pg.execute(f"DROP VIEW {SCHEMA}.counted, {SCHEMA}.summed")
         pg.execute(f"DROP TABLE {SCHEMA}.written")
+
+
+@pytest.mark.integration
+def test_a_column_that_drifts_fails_its_pair_until_both_sides_have_it(
+    engines: tuple[Any, Any], golden_settings: Settings, tmp_path: Path
+) -> None:
+    """The catalogues are read every night: a column added to Postgres alone is drift for
+    that pair; once ClickHouse has it too, it is compared."""
+    from platform_ops.reconcile.specs import load_pairs
+
+    pg, ch = engines
+    company = golden_settings.company.model_copy(
+        update={"namespace": "", "legacy_schema": SCHEMA, "raw_database": SCHEMA}
+    )
+    settings = golden_settings.model_copy(update={"company": company})
+    config = tmp_path / "reconcile.yaml"
+    config.write_text(
+        "tables:\n  - {name: golden, source: golden, target: golden, key: [id]}\nreports: []\n",
+        encoding="utf-8",
+    )
+
+    def load() -> tuple[list[Any], list[Any]]:
+        return load_pairs(settings, pg, ch, tmp_path / "no-manifest.json", config)
+
+    specs, drifted = load()
+    assert [s.name for s in specs] == ["golden"] and drifted == []
+    try:
+        pg.execute(f"ALTER TABLE {SCHEMA}.golden ADD COLUMN note varchar")
+        specs, drifted = load()
+        assert specs == []
+        assert [(d.spec.name, d.reason) for d in drifted] == [
+            ("golden", "golden: column note has no counterpart note in ClickHouse")
+        ]
+        ch.command(f"ALTER TABLE {SCHEMA}.golden ADD COLUMN note Nullable(String)")
+        specs, drifted = load()
+        assert drifted == [] and specs[0].columns[-1].name == "note"
+    finally:
+        pg.execute(f"ALTER TABLE {SCHEMA}.golden DROP COLUMN IF EXISTS note")
+        ch.command(f"ALTER TABLE {SCHEMA}.golden DROP COLUMN IF EXISTS note")
