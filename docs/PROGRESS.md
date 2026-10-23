@@ -48,7 +48,7 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 
 Phase 15 is merged (PR #24), and the fix for the release (PR #25). `v2.0.0` was tagged again on `main` after the fix.
 
-The Backlog is being closed one gap at a time (owner, 2026-10-20). Reconcile gap 1 (duplicated rows) is merged (PR #27). Reconcile gap 2 (the "as of" point) is merged (PR #28). The rest is grouped into four PRs (owner, 2026-10-22): reconcile 3 to 5, incidents detection and resolution (1, 3), incidents triage (4 to 7), and dashboard cost by viewer. In progress: reconcile gaps 3 to 5, on branch `fix-reconcile-gaps-3-5`.
+The Backlog is being closed one gap at a time (owner, 2026-10-20). Reconcile gap 1 (duplicated rows) is merged (PR #27). Reconcile gap 2 (the "as of" point) is merged (PR #28). The rest is grouped into four PRs (owner, 2026-10-22): reconcile 3 to 5, incidents detection and resolution (1, 3), incidents triage (4 to 7), and dashboard cost by viewer. Reconcile gaps 3 to 5 are merged (PR #29). In progress: incidents gaps 1 and 3 (detection and resolution), on branch `fix-incidents-detect-resolve`.
 
 ## Decisions made
 
@@ -464,11 +464,11 @@ Any of them needs the simulation to model people opening dashboards, by team, so
 
 ### Incidents (owner, 2026-10-19)
 
-How the desk works today: it reads each dbt invocation's results as soon as that step of the pipeline finishes (after each of a production night's four invocations, after each Cosmos task, after Dagster's build), regroups the whole run, and pages at once; no second scan. The gaps:
+How the desk works today: it reads each dbt invocation's results as soon as that step of the pipeline finishes (after each of a production night's invocations, after each Cosmos task, after Dagster's build), regroups the whole run, and pages at once; no second scan. The gaps:
 
-1. **An incident resolves only at the next scheduled run.** Owners fix within hours, but the incident waits for the next night's run to show its root healthy, so none closes in less than 24 hours. There is no way to rerun the root's checks right after a fix.
+1. **Closed (branch `fix-incidents-detect-resolve`): an incident resolves only at the next scheduled run.** Each fix now starts a rerun of the incident's root and everything below it, which resolves the incident when the fix lands (mean time to resolve 36.0 hours to 22.3). A failure the rerun finds below another open incident's root that it did not check joins that incident.
 2. **Dropped (owner, 2026-10-22): the project runs only inside its simulation.** No acknowledgement or escalation in real use. A page goes to one person, the owner: no on-call rotation, no backup, no escalation when nobody acknowledges, and no acknowledgement recorded from the chat. The time to acknowledge and to fix is simulated (`incidents/lifecycle.py`).
-3. **Only what a test or a freshness check catches.** Wrong data no test checks is invisible, and a stopped feed is found only once the freshness rule's two days are over (64 hours in the release run).
+3. **Closed (same branch): a stopped feed is found late.** A volume test on every continuous feed, run with the sources before the models, catches a stopped feed the first night (16 hours instead of 64). Wrong values in a column no test checks are still invisible; that part stays open.
 4. **Grouping stays within one run.** Two unrelated faults failing the same downstream node in one run attach it to one of the two roots, by tie-break.
 5. **The routing exception is narrow.** Only a staging model reading exactly one source pages the source's owner; when broken source data first shows in an intermediate model or a mart, the page goes to that model's owner.
 6. **Severity comes from lineage alone.** The score weighs what sits downstream by tier, not the moment (a finance month-end close) or how long the data has been broken.
@@ -494,6 +494,5 @@ None open.
 1. Check that the second `v2.0.0` release published: the image `2.0.0` on GHCR and the GitHub Release with the changelog's notes.
 2. If a release job failed again, fix it on a branch, then delete and push the tag again (a failed release publishes nothing); the `orchestrators` workflow can be run by hand to look at an orchestrator job.
 3. Pilot rollout of the ownership check on a company dbt repository, with the 2.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
-4. Decide on dashboard cost by viewer (Backlog): A, B or C, then a phase to build it.
-5. Incidents gaps 1 and 3 (detection and resolution) in one PR, then 4 to 7 (triage) in another, a plan for each first.
-6. Dashboard cost by viewer: decide A, B or C, then a plan.
+4. Incidents gaps 4 to 7 (triage) in one PR, a plan first.
+5. Dashboard cost by viewer: decide A, B or C, then a plan.

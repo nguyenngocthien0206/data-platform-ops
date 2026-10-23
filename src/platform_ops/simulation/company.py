@@ -22,10 +22,12 @@ lives them:
    every night and the migration is reconciled every night (``nightly``).
 4. **Production** (Phase 14, ``company.production_weeks``), the last weeks:
    ClickHouse is what the business runs on. Every night runs ``dbt source
-   freshness``, ``dbt run``, ``dbt snapshot`` and ``dbt test`` as separate
-   invocations, the way a production schedule does, and hands each one's
-   artifacts to the incident desk (``desk``). Faults happen in operation
-   (``faults``), and the desk tells the company when each owner's fix lands.
+   freshness``, the sources' tests, ``dbt run``, ``dbt snapshot`` and the
+   other tests as separate invocations, the way a production schedule does,
+   and hands each one's artifacts to the incident desk (``desk``). Faults
+   happen in operation (``faults``); the desk tells the company when each
+   owner's fix lands, and the company reruns the incident's root and
+   everything below it then, which resolves the incident the same day.
 
 Everything is seeded and runs on the simulated clock, so two runs leave the same
 data in Postgres and ClickHouse. The cadence is a setting because a build per
@@ -86,6 +88,8 @@ class CompanySummary:
     builds: list[datetime] = field(default_factory=list)
     queries: dict[str, int] = field(default_factory=dict)
     production_nights: int = 0
+    # dbt reruns after an owner's fix, one per fix that covered a fault.
+    reruns: int = 0
     faults: list[str] = field(default_factory=list)
 
 
@@ -192,8 +196,16 @@ def build(settings: Settings, *, full_refresh: bool = False, at: datetime | None
 
 # A production night's schedule: separate invocations, not `dbt build`, so a
 # failing test does not stop the models below it and the alert storm a real
-# night produces is what the incident desk sees (ADR 0005).
-NIGHTLY = (["source", "freshness"], ["run"], ["snapshot"], ["test"])
+# night produces is what the incident desk sees (ADR 0005). The sources are
+# checked first, freshness and their own tests (the volume test), so a broken
+# feed is known before the models it breaks fail and page someone else.
+NIGHTLY = (
+    ["source", "freshness"],
+    ["test", "--select", "source:*"],
+    ["run"],
+    ["snapshot"],
+    ["test", "--exclude", "source:*"],
+)
 # Failing checks are expected here, so dbt's console would only be a wall of
 # red; its log file under the target's logs/ keeps the detail.
 QUIET = ["--log-level", "none", "--log-level-file", "info"]
@@ -207,24 +219,42 @@ def production_night(settings: Settings, at: datetime, desk: Desk | None, manife
     parse still applies and no night pays for a full re-parse (ADR 0005).
     """
     run_id = f"night-{at:%Y-%m-%d}"
-    comment = Tag(at, "dbt").comment() if current_run() else ""
     for command in NIGHTLY:
-        simulated = at if command[0] == "source" else None
-        invocation = invocation_from_settings(
-            settings, simulated_now=simulated, log_comment=comment
-        )
-        # Each invocation leaves only its own result file for the desk: a
-        # run_results.json from an earlier build is not part of tonight's run.
-        for stale in ("run_results.json", "sources.json"):
-            (invocation.target_path / stale).unlink(missing_ok=True)
         if command == ["snapshot"]:
             merge_snapshots(settings)
-        outcome = run_dbt(invocation, [*command, *QUIET], check=False, manifest=manifest)
-        if outcome.exception is not None:
-            raise DbtError(f"dbt {' '.join(command)} crashed on {at:%Y-%m-%d}: {outcome.exception}")
-        if desk is not None:
-            desk.ingest(run_id, at, invocation.target_path)
+        _invoke(settings, at, command, run_id, desk, manifest)
     return run_id
+
+
+def rerun(settings: Settings, fix: Fix, desk: Desk, manifest: Any) -> str:
+    """Right after a fix: the incident's root and everything below it, handed to the desk."""
+    run_id = f"rerun-{fix.incident_id}"  # incidents.report.RERUN_PREFIX
+    for command in fix.commands:
+        _invoke(settings, fix.at, list(command), run_id, desk, manifest)
+    return run_id
+
+
+def _invoke(
+    settings: Settings,
+    at: datetime,
+    command: list[str],
+    run_id: str,
+    desk: Desk | None,
+    manifest: Any,
+) -> None:
+    """One dbt invocation of a production run, at ``at``, handed to the desk when it finishes."""
+    comment = Tag(at, "dbt").comment() if current_run() else ""
+    simulated = at if command[0] == "source" else None
+    invocation = invocation_from_settings(settings, simulated_now=simulated, log_comment=comment)
+    # Each invocation leaves only its own result file for the desk: a
+    # run_results.json from an earlier build is not part of this run.
+    for stale in ("run_results.json", "sources.json"):
+        (invocation.target_path / stale).unlink(missing_ok=True)
+    outcome = run_dbt(invocation, [*command, *QUIET], check=False, manifest=manifest)
+    if outcome.exception is not None:
+        raise DbtError(f"dbt {' '.join(command)} crashed on {at:%Y-%m-%d}: {outcome.exception}")
+    if desk is not None:
+        desk.ingest(run_id, at, invocation.target_path)
 
 
 # What the company's run records about itself in the ops store, for the cost
@@ -309,11 +339,18 @@ class Night:
 
 @dataclass(frozen=True)
 class Fix:
-    """An owner's fix for an incident, landing at ``at``: the faulted sources it covers."""
+    """An owner's fix for an incident, landing at ``at``: the faulted sources it covers.
+
+    ``commands`` are the dbt invocations to run once it has landed, the
+    incident's root and everything below it: a team reruns the job after a
+    fix rather than waiting for the night, and the desk resolves the incident
+    as soon as that run finds the root healthy.
+    """
 
     incident_id: str
     tables: tuple[str, ...]
     at: datetime
+    commands: tuple[tuple[str, ...], ...] = ()
 
 
 class Reconciliation(Protocol):
@@ -391,7 +428,7 @@ def run_company(
     reads, the application keeps writing after it
     (``company.writes_after_ingest_minutes``), and ``nightly`` compares the
     night after its build. In production,
-    every night runs freshness, run, snapshot and test, each handed to ``desk``,
+    every night runs freshness, source tests, run, snapshot and test, each handed to ``desk``,
     and faults are planted and fixed on the desk's schedule. ``daily`` is called
     at the end of every day. Every query is tagged for the cost module.
     """
@@ -476,6 +513,9 @@ def run_company(
                     if table in active:
                         summary.rows_ingested += ingestion.resync(table, last_load)
                         faults.repaired(settings, active.pop(table), at)
+                if desk is not None and item.commands:
+                    rerun(settings, item, desk, manifest)
+                    summary.reruns += 1
             parallel = timeline.parallel(day_index)
             frozen_at = None
             if parallel and nightly is not None:

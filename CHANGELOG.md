@@ -13,6 +13,10 @@ All notable changes to data-platform-ops. The format follows [Keep a Changelog](
 - **A report difference is explained only through the columns it reads.** It counted as explained when any upstream table differed, so trimmed emails explained a revenue report that never reads an email. Each mart column is now traced to the raw columns it is computed from (`metadata.column_lineage`, from dbt's compiled SQL with sqlglot, filters, joins and groupings included), and a differing report column needs one of them, or a table it reads with rows missing or extra, to differ the same night. A mart that cannot be traced falls back to its tables, and the sign-off names it.
 - **A cause label needs the mechanism it names to reproduce the value.** Any difference within 0.01 was rounding and any whole number of hours a time zone shift, so a cent added on purpose passed under the rounding allowance. Rounding now means one side is the other rounded or truncated at the column's scale, directly or through a float, and a time zone shift that one side is the other read as local time in one of `reconcile.time_zones`; anything else is a value mismatch.
 - **The pairs are read again every night.** They were loaded on the first night and kept for the whole parallel run, so a column added mid-run was missed, and a column missing on one side stopped the run. A pair whose columns no longer line up now fails its night with the reason (`schema: ...`), and the others are compared as usual (`specs.load_pairs`).
+- **An incident resolves when its fix lands, not at the next night.** The desk waited for the next scheduled run to see the root healthy, so no incident closed in less than 24 hours. Each fix now starts a rerun of the incident's root and everything below it (`rerun-<incident>`), which the desk ingests like any run: the mean time to resolve fell from 36.0 hours to 22.3, and the dashboards are right again as soon as the fix lands.
+- **A stopped feed is caught the first night.** The freshness rule allows two days, so the stopped web sessions feed was found after 64 hours. A volume test (`recent_volume`) on every continuous feed fails the first night it delivers less than half its usual rows, on the data's own clock, and the sources' tests run before the models.
+- **A test on a source is about that source**, for routing and grouping (dbt attaches no node to it), and a source is healthy only when it is fresh and its tests pass.
+- **A failure a rerun finds below another open incident's root that it did not check joins that incident**, instead of opening a new one and paging again.
 
 ### Changed
 
@@ -22,6 +26,8 @@ All notable changes to data-platform-ops. The format follows [Keep a Changelog](
 - **`reconcile.time_zones`** lists the zones the legacy applications run in (`[America/New_York]` in the shipped config). Without it no difference is labelled a time zone shift.
 - **M6 and M7 are value mismatches in the ground truth:** a cent added and a two-hour shift are real errors that look like rounding and a time zone shift. The M6 night is no longer clean; the cutover night does not move.
 - **`int_campaign_performance_daily` spells out `union distinct`**, which ClickHouse already read a bare `union` as, so sqlglot can trace it.
+- **A production night runs five invocations:** source freshness, the sources' tests, run, snapshot and the other tests. `CompanyDesk` returns, with each fix, the dbt invocations to rerun (`Fix.commands`), and `company run` reports how many reruns it ran.
+- **The incident and cost numbers moved:** 39 failing checks for the same 8 incidents and pages; the reruns and the volume tests add 968 priced queries to dbt's share of the bill, which stays $1,197.24.
 
 ## [2.0.0] - 2026-10-15
 

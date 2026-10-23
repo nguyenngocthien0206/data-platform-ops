@@ -246,7 +246,8 @@ def company_run(days: int | None = DAYS_OPTION) -> None:
         f"{summary.rows_loaded:,} new and {summary.rows_changed:,} changed in Postgres, "
         f"{summary.rows_ingested:,} ingested into ClickHouse, {len(summary.builds)} dbt builds, "
         f"{sum(summary.queries.values()):,} dashboard and ad hoc queries, "
-        f"{summary.production_nights} nights in production with {len(summary.faults)} faults; "
+        f"{summary.production_nights} nights in production with {len(summary.faults)} faults "
+        f"and {summary.reruns} reruns after fixes; "
         f"lineage {edges:,} edges"
     )
 

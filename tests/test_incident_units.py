@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from platform_ops.common.config import SEVERITIES, Settings, Severity, Tier
 from platform_ops.incidents import ingest, lifecycle, notify
+from platform_ops.incidents.desk import _healthy
+from platform_ops.incidents.production import rerun_commands
 from platform_ops.incidents.routing import naive_route, route
 from platform_ops.incidents.severity import IncidentPolicy, score_incident, severity_for
 from platform_ops.metadata.lineage import build_graph
@@ -96,6 +100,47 @@ def test_a_test_across_two_models_is_its_own_subject() -> None:
     nodes = _nodes()
     assert ingest.test_subject(nodes["test.company.not_null_stg_orders_id"]) == STG
     assert ingest.test_subject(nodes[REL]) == REL
+
+
+VOLUME = "test.company.source_recent_volume_raw_orders_"
+
+
+def test_a_test_on_a_source_is_about_the_source() -> None:
+    """dbt attaches no node to a source's tests: the source is still the subject."""
+    volume = Node(VOLUME, "test", "source_recent_volume_raw_orders_", depends_on=(SRC,))
+    assert ingest.test_subject(volume) == SRC
+
+
+def _context(nodes: dict[str, Node]) -> Any:
+    tests: dict[str, set[str]] = {}
+    for unique_id, node in nodes.items():
+        if node.resource_type == "test":
+            subject = node.attached_node or ingest.test_subject(node)
+            if subject != unique_id:
+                tests.setdefault(subject, set()).add(unique_id)
+    return SimpleNamespace(nodes=nodes, tests_of={k: frozenset(v) for k, v in tests.items()})
+
+
+def test_a_source_is_healthy_when_fresh_and_its_tests_pass() -> None:
+    nodes = {**_nodes(), VOLUME: Node(VOLUME, "test", "v", depends_on=(SRC,))}
+    context = _context(nodes)
+    assert not _healthy(SRC, context, {SRC: "pass"}), "its volume test has not run yet"
+    assert not _healthy(SRC, context, {SRC: "pass", VOLUME: "fail"})
+    assert not _healthy(SRC, context, {SRC: "error", VOLUME: "pass"})
+    assert _healthy(SRC, context, {SRC: "warn", VOLUME: "pass"})
+
+
+def test_a_rerun_rebuilds_the_root_and_everything_below_it() -> None:
+    nodes = _nodes()
+    keep = ("--exclude", "resource_type:snapshot")
+    assert rerun_commands(nodes, SRC) == (
+        ("source", "freshness", "--select", "source:raw.orders"),
+        ("build", "--select", "source:raw.orders+", *keep),
+    )
+    assert rerun_commands(nodes, STG) == (("build", "--select", "stg_orders+", *keep),)
+    # A test root: the model it is attached to, which reruns the test too.
+    assert rerun_commands(nodes, REL) == (("build", "--select", "sales_fct_orders+", *keep),)
+    assert rerun_commands(nodes, "model.company.gone") == ()
 
 
 def test_freshness_warn_is_not_an_alert() -> None:

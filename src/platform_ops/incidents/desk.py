@@ -2,8 +2,8 @@
 
 ``platform-ops incidents ingest`` hands the desk one dbt target folder and the
 run it belongs to: the orchestrator's run id, so the invocations of one
-scheduled run (a production night's freshness, run, snapshot and test, or
-Cosmos's one invocation per model) form one run. Each ingest, in one
+scheduled run (a production night's freshness, source tests, run, snapshot
+and tests, or Cosmos's one invocation per model) form one run. Each ingest, in one
 transaction holding the store's lock:
 
 1. records the invocations it has not seen (by dbt's invocation id), with every
@@ -14,12 +14,14 @@ transaction holding the store's lock:
 3. opens an incident for a new root, appends the run to the open incident of a
    root that fails again, of a root now below a new failure, or of a root below
    the new failure's root (a stale feed whose staging model already has an
-   incident open is the same problem, seen from the source), and merges an
+   incident open is the same problem, seen from the source), or of a root above
+   the new failure that this run did not check (a rerun after one fix rebuilds
+   a model that also reads a source still broken by another), and merges an
    incident this run opened into another when a later invocation shows its root
    was not the root after all;
 4. resolves an open incident the run did not fail on once the run shows its
-   root healthy: the model ran, and every test on it that ran passed (at least
-   one must have, if it has tests), or the source is fresh again. A run that
+   root healthy: the model ran, or the source is fresh again, and every test
+   on it that ran passed (at least one must have, if it has tests). A run that
    did not cover the root resolves nothing;
 5. queues one page per new incident, one update per run on an open one, one
    message per resolution.
@@ -45,7 +47,7 @@ from psycopg import sql
 from platform_ops.common.config import Settings, Tier
 from platform_ops.incidents import ingest, store
 from platform_ops.incidents.grouping import Group, group_failures, roots_by_node
-from platform_ops.incidents.ingest import CheckEvent
+from platform_ops.incidents.ingest import CheckEvent, test_subject
 from platform_ops.incidents.notify import Channel, Notification, deliver
 from platform_ops.incidents.routing import naive_route, route
 from platform_ops.incidents.severity import IncidentPolicy, dataset_of, score_incident
@@ -81,8 +83,13 @@ class Context:
                 tier_of[unique_id] = rule.tier
         tests: dict[str, set[str]] = {}
         for unique_id, node in nodes.items():
-            if node.resource_type == "test" and node.attached_node:
-                tests.setdefault(node.attached_node, set()).add(unique_id)
+            if node.resource_type != "test":
+                continue
+            # A model's tests by the node dbt attaches them to; a source's
+            # tests (dbt attaches none) by the source they read.
+            subject = node.attached_node or test_subject(node)
+            if subject != unique_id:
+                tests.setdefault(subject, set()).add(unique_id)
         return cls(
             nodes,
             build_graph(nodes),
@@ -218,14 +225,21 @@ def _healthy(
     """Did this run cover ``root`` and find it healthy?"""
     dataset = dataset_of(root, context.nodes)
     if root.startswith("source."):
-        return statuses.get(root) in HEALTHY_FRESHNESS
-    if root.startswith("test."):
+        # Fresh again, and its own tests (the volume test) pass when they ran.
+        if statuses.get(root) not in HEALTHY_FRESHNESS:
+            return False
+    elif root.startswith("test."):
         return statuses.get(root) == "pass"
-    if statuses.get(dataset) != "success":
+    elif statuses.get(dataset) != "success":
         return False
     tests = context.tests_of.get(dataset, frozenset())
     ran = [statuses[t] for t in tests if t in statuses]
     return (not tests or bool(ran)) and all(status == "pass" for status in ran)
+
+
+def _covered(root: str, context: Context, statuses: Mapping[str, str]) -> bool:
+    """Did this run check ``root`` at all, whatever it found?"""
+    return root in statuses or dataset_of(root, context.nodes) in statuses
 
 
 def _regroup(
@@ -281,6 +295,15 @@ def _regroup(
             next((i for i in before if i.root == group.root), None)
             or next((i for i in before if i.root in group.failed_nodes), None)
             or next((i for i in before if group.root in _above(context.graph, i.root)), None)
+            or next(
+                (
+                    i
+                    for i in before
+                    if i.root in _above(context.graph, group.root)
+                    and not _covered(i.root, context, statuses)
+                ),
+                None,
+            )
             or next((i for i in mine if i.root == group.root), None)
         )
         if incident is None:
