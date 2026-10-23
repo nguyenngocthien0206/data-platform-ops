@@ -293,9 +293,24 @@ def render(settings: Settings) -> str:
 
     unexplained_rows = [x for x in nights if x["explained"] is False]
     out += ["## Reports the tables do not explain", ""]
+    out += [
+        "A report difference is explained only through the columns the report reads: each "
+        "report column that differs needs an upstream column it is computed from, or a "
+        "table it reads with rows missing or extra, to differ the same night (column "
+        "lineage from dbt's compiled SQL).",
+        "",
+    ]
+    untraced = sorted({x["name"] for x in nights if x["traced"] is False})
+    if untraced:
+        out += [
+            "Column lineage could not be traced for "
+            + ", ".join(untraced)
+            + ": their differences were explained by the tables their marts read, which is looser.",
+            "",
+        ]
     if unexplained_rows:
         out += [
-            "A report that differs while every table its mart reads matches is a difference "
+            "A report that differs while nothing it reads differs upstream is a difference "
             "between the legacy SQL and the dbt model. Each needs a decision before cutover.",
             "",
             table(
@@ -314,8 +329,9 @@ def render(settings: Settings) -> str:
         ]
     else:
         out += [
-            "None. On every night, every report that differed had an upstream table that "
-            "differed too: the new marts reproduce the legacy reports' logic.",
+            "None. On every night, every report column that differed was computed from an "
+            "upstream column or table that differed too: the new marts reproduce the legacy "
+            "reports' logic.",
             "",
         ]
 

@@ -87,6 +87,12 @@ def test_every_report_difference_is_explained_by_an_upstream_table(
     )
     assert rows, "the delivered job reaches at least one report"
     assert all(explained for _, _, explained, _ in rows)
+    traced = _rows(
+        company_warehouse,
+        "reconcile_nights",
+        "SELECT DISTINCT traced FROM {} WHERE level = 'report'",
+    )
+    assert traced == [(True,)], "every mart is traced column by column"
     assert {night for night, *_ in rows} <= {7, 8}
     assert any("payments" in upstream for *_, upstream in rows)
 

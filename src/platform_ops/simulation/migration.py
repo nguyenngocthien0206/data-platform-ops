@@ -195,13 +195,16 @@ CATALOGUE: tuple[OneOffFault, ...] = (
         "concat({c}, ' ')",
         "M5 product names padded",
     ),
+    # Errors that look like rounding and a time zone shift but are neither: a
+    # cent added is no rounding of the amount, and two hours is not the offset
+    # of a zone the company runs in. The reconciliation must not excuse them.
     OneOffFault(
-        "M6", "payments", "rounding", "amount", 6, "{c} + 0.01", "M6 amounts off by a cent"
+        "M6", "payments", "value_mismatch", "amount", 6, "{c} + 0.01", "M6 amounts off by a cent"
     ),
     OneOffFault(
         "M7",
         "support_tickets",
-        "timezone_shift",
+        "value_mismatch",
         "created_at",
         5,
         "{c} + INTERVAL 2 HOUR",

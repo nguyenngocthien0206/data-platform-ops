@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -337,16 +338,24 @@ def test_a_legacy_side_too_far_behind_fails_the_pair(repo_settings: Settings) ->
 TEXT = Column("t", "text")
 DEC = Column("d", "decimal", scale=2)
 TS = Column("ts", "ts")
+ZONES = ("America/New_York",)
 
 
 @pytest.mark.parametrize(
     ("column", "source", "target", "expected"),
     [
-        (DEC, "10.00", "10.01", "rounding"),
+        # 4.35 through a float is 4.34: the delivered job's truncation.
+        (DEC, "4.35", "4.34", "rounding"),
+        # A cent added is within the tolerance, but no rounding of 10.00 gives it.
+        (DEC, "10.00", "10.01", "value_mismatch"),
         (DEC, "10.00", "10.02", "value_mismatch"),
         (DEC, "10.00", NULL, "value_mismatch"),
+        # New York in July is UTC-4: the wall clock read as local time moves 4 hours on.
         (TS, "2025-07-01T14:00:00.000000Z", "2025-07-01T18:00:00.000000Z", "timezone_shift"),
-        (TS, "2025-07-01T14:00:00.000000Z", "2025-07-01T09:00:00.000000Z", "timezone_shift"),
+        (TS, "2025-07-01T18:00:00.000000Z", "2025-07-01T14:00:00.000000Z", "timezone_shift"),
+        # Five hours in July, or two at any time, is no offset New York has then.
+        (TS, "2025-07-01T14:00:00.000000Z", "2025-07-01T19:00:00.000000Z", "value_mismatch"),
+        (TS, "2025-07-01T14:00:00.000000Z", "2025-07-01T16:00:00.000000Z", "value_mismatch"),
         (TS, "2025-07-01T14:00:00.000000Z", "2025-07-01T14:30:00.000000Z", "value_mismatch"),
         (TEXT, "a@b.com ", "a@b.com", "whitespace"),
         (TEXT, "a@b.com", "A@B.COM", "case_only"),
@@ -355,7 +364,36 @@ TS = Column("ts", "ts")
     ],
 )
 def test_classification(column: Column, source: str, target: str, expected: str) -> None:
-    assert classify(column, source, target, TOLERANCE) == expected
+    assert classify(column, source, target, TOLERANCE, ZONES) == expected
+
+
+def test_without_a_configured_zone_no_shift_is_a_time_zone_shift() -> None:
+    later = "2025-07-01T18:00:00.000000Z"
+    assert classify(TS, "2025-07-01T14:00:00.000000Z", later, TOLERANCE) == "value_mismatch"
+
+
+def _ts(value: datetime) -> str:
+    return canonical_value(TS, value, Rule())
+
+
+def test_every_delivered_time_zone_shift_keeps_its_label() -> None:
+    """D1 over a whole year, every hour, both clock changes included."""
+    zone = ZoneInfo("America/New_York")
+    hour = datetime(2025, 1, 1)
+    while hour < datetime(2026, 1, 1):
+        if _shifted(hour, "America/New_York"):
+            read = hour.replace(tzinfo=zone).astimezone(UTC).replace(tzinfo=None)
+            assert classify(TS, _ts(hour), _ts(read), TOLERANCE, ZONES) == "timezone_shift", hour
+        hour += timedelta(hours=1)
+
+
+def test_every_delivered_truncation_keeps_its_label() -> None:
+    """D2 over every amount from 0.01 to 200.00."""
+    for cents in range(1, 20_001):
+        amount = Decimal(cents).scaleb(-2)
+        copied = _through_float(amount)
+        if copied != amount:
+            assert classify(DEC, str(amount), str(copied), TOLERANCE) == "rounding", amount
 
 
 @pytest.mark.parametrize(

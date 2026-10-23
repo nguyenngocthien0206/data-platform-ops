@@ -11,9 +11,10 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DEFAULT_CONFIG_PATH = Path("config/settings.yaml")
 CONFIG_PATH_ENV_VAR = "PLATFORM_OPS_CONFIG"
@@ -272,6 +273,10 @@ class ReconcileSettings(_Strict):
     workers: Annotated[int, Field(ge=1, le=32)] = 6
     leaf_width: Annotated[int, Field(ge=1)]
     rounding_tolerance: Annotated[float, Field(ge=0)]
+    # The time zones the legacy system's applications run in. A difference is
+    # a time zone shift only when one side is the other read as local time in
+    # one of these; any other whole-hour difference is a value mismatch.
+    time_zones: list[str] = Field(default_factory=list)
     # Consecutive nights with every table and report within the thresholds
     # before the cutover is recommended.
     clean_nights_for_cutover: Annotated[int, Field(ge=1)]
@@ -280,6 +285,16 @@ class ReconcileSettings(_Strict):
     examples_per_class: Annotated[int, Field(ge=0)] = 20
     canonical: CanonicalSettings
     thresholds: Thresholds
+
+    @field_validator("time_zones")
+    @classmethod
+    def _known_zones(cls, zones: list[str]) -> list[str]:
+        for zone in zones:
+            try:
+                ZoneInfo(zone)
+            except (ZoneInfoNotFoundError, ValueError) as error:
+                raise ValueError(f"reconcile.time_zones: unknown time zone {zone!r}") from error
+        return zones
 
 
 class DeliveredJob(_Strict):

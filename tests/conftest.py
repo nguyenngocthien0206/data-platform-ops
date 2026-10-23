@@ -78,6 +78,7 @@ SETTINGS_YAML = textwrap.dedent(
       workers: 4
       leaf_width: 256
       rounding_tolerance: 0.01
+      time_zones: [America/New_York]
       clean_nights_for_cutover: 3
       examples_per_class: 5
       canonical:
