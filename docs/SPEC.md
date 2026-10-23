@@ -268,7 +268,7 @@ Per column type, a canonical rendering rule applied identically on both sides: d
 
 ### Root-cause classification
 
-For each mismatched key, compare column by column and classify: `missing_in_target`, `extra_in_target`, `duplicate_key` (the key appears more than once on either side; its cells are not compared), `rounding` (difference within tolerance), `timezone_shift` (difference equal to a whole number of hours), `whitespace`, `case_only`, `value_mismatch`.
+For each mismatched key, compare column by column and classify: `missing_in_target`, `extra_in_target`, `duplicate_key` (the key appears more than once on either side; its cells are not compared), `rounding` (within tolerance, and one side is the other rounded or truncated at the column's scale, directly or through a float), `timezone_shift` (one side is the other read as local time in one of `reconcile.time_zones`), `whitespace`, `case_only`, `value_mismatch`.
 
 ### Sign-off report
 

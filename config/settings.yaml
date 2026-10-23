@@ -161,6 +161,10 @@ reconcile:
   leaf_width: 256
   # A decimal difference up to this size is classified as rounding.
   rounding_tolerance: 0.01
+  # The time zones the legacy system's applications run in. A whole-hour
+  # difference is labelled a time zone shift only when one side is the other
+  # read as local time in one of these; otherwise it is a value mismatch.
+  time_zones: [America/New_York]
   # The cutover is recommended after this many consecutive nights with every
   # table and every report within the thresholds below.
   clean_nights_for_cutover: 14

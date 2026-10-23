@@ -27,11 +27,13 @@ orders as (
     group by 1, 2
 ),
 
+-- union distinct, spelled out: ClickHouse reads a bare union as distinct by
+-- default, but the reconciliation's column lineage (sqlglot) needs it said.
 keys as (
     select campaign_id, activity_date from spend
-    union
+    union distinct
     select campaign_id, activity_date from sessions
-    union
+    union distinct
     select campaign_id, activity_date from orders
 )
 
