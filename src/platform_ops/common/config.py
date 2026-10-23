@@ -363,8 +363,9 @@ class CompanySettings(_Strict):
     parallel_run_weeks: Annotated[int, Field(ge=0)] = 0
     # Production (Phase 14): the last weeks of the window, after the parallel
     # run, when ClickHouse is what the business runs on. Every night runs source
-    # freshness, run, snapshot and test, faults happen in operation, and the
-    # incident desk ingests what dbt reports. Zero means no production weeks.
+    # freshness, the sources' tests, run, snapshot and the other tests, faults
+    # happen in operation, and the incident desk ingests what dbt reports. Zero
+    # means no production weeks.
     production_weeks: Annotated[int, Field(ge=0)] = 0
     # Nights into the parallel run when the migration team ships the fixed job
     # and backfills. Until then the job runs as delivered.

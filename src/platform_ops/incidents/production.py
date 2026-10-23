@@ -4,10 +4,12 @@ The company run (``simulation.company``) hands every production invocation to
 :class:`CompanyDesk`, which ingests it exactly as ``platform-ops incidents
 ingest`` would, as the night's run. For each incident a night opens, the desk
 then plays the owner: it acknowledges and fixes on the modelled schedule
-(``lifecycle``), and tells the company when the fix lands and which faulted
-sources it covers, everything upstream of the incident's root. The company
-resyncs those raw tables then, and the next night's run shows the root healthy
-and resolves the incident.
+(``lifecycle``), and tells the company when the fix lands, which faulted
+sources it covers (everything upstream of the incident's root), and what to
+rerun then: the root and everything below it (``rerun_commands``). The company
+resyncs those raw tables and reruns at the time of the fix, and that run,
+handed back to the desk, shows the root healthy and resolves the incident the
+same day instead of at the next night's run.
 
 The company's own notifications stay local: the simulated people are not on a
 real Slack. A real ingest (``incidents ingest``) uses the configured channels.
@@ -15,6 +17,7 @@ real Slack. A real ingest (``incidents ingest``) uses the configured channels.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +28,7 @@ from platform_ops.incidents import store
 from platform_ops.incidents.desk import Context, ingest_target
 from platform_ops.incidents.lifecycle import respond
 from platform_ops.metadata.lineage import upstream
+from platform_ops.metadata.manifest import Node
 from platform_ops.simulation.company import Fix
 
 
@@ -94,4 +98,36 @@ class CompanyDesk:
                 if node in context.nodes and context.nodes[node].resource_type == "source"
             )
         )
-        self._fixes.append(Fix(incident_id, tables, response.fixed_at))
+        commands = rerun_commands(context.nodes, root)
+        self._fixes.append(Fix(incident_id, tables, response.fixed_at, commands))
+
+
+# Snapshots record history at the night's run; a rerun after a fix must not add
+# a version of its own in the middle of the day.
+RERUN_EXCLUDE = ("--exclude", "resource_type:snapshot")
+
+
+def rerun_commands(nodes: Mapping[str, Node], root: str) -> tuple[tuple[str, ...], ...]:
+    """The dbt invocations that check ``root`` again after a fix, and rebuild what it feeds.
+
+    A source: its freshness, then a build of the source and everything below
+    it (its tests included). A model: a build of it and everything below. A
+    test: a build of the model it is attached to and everything below, which
+    runs the test again.
+    """
+    node = nodes.get(root)
+    if node is None:
+        return ()
+    if node.resource_type == "source":
+        _, _, source, table = root.split(".", 3)
+        selector = f"source:{source}.{table}"
+        return (
+            ("source", "freshness", "--select", selector),
+            ("build", "--select", f"{selector}+", *RERUN_EXCLUDE),
+        )
+    if node.resource_type == "test":
+        attached = nodes.get(node.attached_node or "")
+        if attached is None:
+            return (("build", "--select", node.name, *RERUN_EXCLUDE),)
+        node = attached
+    return (("build", "--select", f"{node.name}+", *RERUN_EXCLUDE),)
