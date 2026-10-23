@@ -48,7 +48,7 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 
 Phase 15 is merged (PR #24), and the fix for the release (PR #25). `v2.0.0` was tagged again on `main` after the fix.
 
-The Backlog is being closed one gap at a time (owner, 2026-10-20). Reconcile gap 1 (duplicated rows) is merged (PR #27). Reconcile gap 2 (the "as of" point) is merged (PR #28). The rest is grouped into four PRs (owner, 2026-10-22): reconcile 3 to 5, incidents detection and resolution (1, 3), incidents triage (4 to 7), and dashboard cost by viewer. Reconcile gaps 3 to 5 are merged (PR #29). In progress: incidents gaps 1 and 3 (detection and resolution), on branch `fix-incidents-detect-resolve`.
+The Backlog is being closed one gap at a time (owner, 2026-10-20). Reconcile gap 1 (duplicated rows) is merged (PR #27). Reconcile gap 2 (the "as of" point) is merged (PR #28). The rest is grouped into four PRs (owner, 2026-10-22): reconcile 3 to 5, incidents detection and resolution (1, 3), incidents triage (4 to 7), and dashboard cost by viewer. Reconcile gaps 3 to 5 are merged (PR #29). Incidents gaps 1 and 3 are merged (PR #30). Dashboard cost by viewer was done before incidents 4 to 7 (owner, 2026-10-23), which is the larger PR. In progress: dashboard cost by viewer, on branch `feat-dashboard-cost-by-viewer`.
 
 ## Decisions made
 
@@ -448,19 +448,7 @@ Improvements the owner asked to note after 2.0.0, not planned yet.
 
 ### Dashboard cost by viewer (owner, 2026-10-19)
 
-The cost module charges a dashboard today, but not the way its viewers use it:
-
-1. **The simulation only has scheduled refreshes, no one opening a dashboard.** Each dashboard is refreshed every 12 or 24 hours after the 02:00 run (`simulation/workload.py`), so a dashboard's cost today is the cost of keeping it fresh, not the cost of the views it gets.
-2. **The owner pays, not the viewer.** A refresh is consumption charged to the team that owns the dashboard (`cost/attribution.py`): a finance dashboard that sales opens all day is paid by finance alone.
-3. **In real life it is harder.** Every query the BI tool sends runs as its one service user, so the warehouse's query log sees the BI tool, not the person viewing; and a view served from the BI tool's cache sends no query at all, so there is nothing to charge.
-
-Directions discussed, none decided:
-
-- **A. Keep the owner paying** (today): simple, and the owner has a reason to tune the dashboard.
-- **B. Share each dashboard's measured cost across teams by views**, from the BI tool's own view log (who opened which dashboard, when), mapped from BI users to teams; scheduled refreshes shared the same way, since they exist for the viewers. Totals still add up to the bill. The assistant's recommendation.
-- **C. Charge each query to the person who triggered it**, where the BI tool writes the user's id into the query it sends; exact, and cache hits cost nothing, but it depends on the driver keeping that comment (to check first), and scheduled refreshes still need A or B.
-
-Any of them needs the simulation to model people opening dashboards, by team, so the demo shows the difference.
+**Closed (branch `feat-dashboard-cost-by-viewer`, direction B, owner 2026-10-23).** People open the company's dashboards on working days, recorded like Metabase's view log; each month a dashboard's refreshes are shared by the teams that opened it, by views, and a dashboard nobody opened is paid by its owner. Shared by month (the bill's period), and adopters get the SQL to export Metabase's `view_log`, not a live collector (owner, 2026-10-23). A view runs no query, so the bill and ClickHouse are unchanged. In the demo, owners pay about half of their dashboards, and three dashboards were opened by nobody in 112 days.
 
 ### Incidents (owner, 2026-10-19)
 
@@ -494,5 +482,4 @@ None open.
 1. Check that the second `v2.0.0` release published: the image `2.0.0` on GHCR and the GitHub Release with the changelog's notes.
 2. If a release job failed again, fix it on a branch, then delete and push the tag again (a failed release publishes nothing); the `orchestrators` workflow can be run by hand to look at an orchestrator job.
 3. Pilot rollout of the ownership check on a company dbt repository, with the 2.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
-4. Incidents gaps 4 to 7 (triage) in one PR, a plan first.
-5. Dashboard cost by viewer: decide A, B or C, then a plan.
+4. Incidents gaps 4 to 7 (triage) in one PR, a plan first: the last of the Backlog.

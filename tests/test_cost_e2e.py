@@ -90,13 +90,33 @@ def test_billable_queries_are_priced_three_ways_and_attributed_once(
     # A query that read nothing gets no share of the cluster; it still has a price elsewhere.
     assert priced["scan"] == priced["compute"] == billable > 0
     assert 0 < priced["cluster"] <= billable
-    ((attributed, unattributed),) = _rows(
+    ((attributed, unattributed, worst),) = _rows(
         settings,
         "query_attribution",
-        "SELECT count(*), count(*) FILTER (WHERE team = 'unattributed') FROM {}",
+        "SELECT count(DISTINCT query_id), count(*) FILTER (WHERE team = 'unattributed'), "
+        "max(abs(total - 1)) FROM (SELECT query_id, team, sum(share) OVER "
+        "(PARTITION BY query_id) AS total FROM {}) shares",
     )
     assert attributed == everything
     assert unattributed == 0
+    # A query shared among its dashboard's viewers still adds up to one query.
+    assert worst < Decimal("1e-9")
+
+
+def test_a_dashboards_refreshes_are_paid_by_the_teams_that_open_it(
+    costed: tuple[Settings, bytes],
+) -> None:
+    settings, report = costed
+    ((views,),) = _rows(settings, "dashboard_views", "SELECT count(*) FROM {}")
+    assert views > 0
+    # Some of what dashboards cost is paid by a team other than the owner.
+    shared = _rows(
+        settings,
+        "query_attribution",
+        "SELECT count(DISTINCT query_id) FROM {} a WHERE cost_kind = 'consumption' AND share < 1",
+    )
+    assert shared[0][0] > 0
+    assert b"## Dashboards and who reads them" in report
 
 
 def test_the_cluster_shares_add_up_to_the_stated_cost(costed: tuple[Settings, bytes]) -> None:

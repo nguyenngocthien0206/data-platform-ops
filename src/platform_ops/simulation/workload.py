@@ -8,7 +8,12 @@ did what:
   ``high`` maturity exposure, 24 otherwise, staggered after the 02:00 run),
   running exactly the cards ``bi.py`` generates, as the ``metabase`` user;
 - **a few people** run ad hoc SQL during office hours, from careful to
-  careless, as their team's user.
+  careless, as their team's user;
+- **everyone opens dashboards** on working days, their own team's often and
+  other teams' now and then (``views``). A view is served from the latest
+  refresh, as Metabase's cache does, so it runs no query: the views decide who
+  pays for the refreshes, not what they cost. They are recorded the way
+  Metabase's own view log records them: when, which dashboard, who.
 
 Every query is tagged with its simulated time (``common.tagging``), run to
 completion, and its rows discarded (``FORMAT Null``): what a query costs is
@@ -112,6 +117,9 @@ class Workload:
 
     def __post_init__(self) -> None:
         registry = Registry.from_config_dir(self.settings.root / "config")
+        self.member_team = {
+            person: team.id for team in registry.teams.values() for person in team.members
+        }
         self.person_team = {
             person: team.id
             for team in registry.teams.values()
@@ -158,6 +166,31 @@ class Workload:
             f"{sql} FORMAT Null", settings={**_QUERY_SETTINGS, **tag.settings()}
         )
         self.summary.queries[tag.actor] += 1
+
+    def views(self, day: datetime) -> list[tuple[datetime, str, str]]:
+        """Who opened which dashboard that day, and when: (viewed_at, exposure, person).
+
+        Working days only, office hours, at most one view per person and
+        dashboard a day. The chance is the team's (own or other) times the
+        dashboard's popularity, from the seed: none, half, normal or one and a
+        half, so a few dashboards are opened by nobody.
+        """
+        if day.weekday() >= 5:
+            return []
+        seed = self.settings.seed
+        chance = self.settings.workload.dashboard_views
+        found: list[tuple[datetime, str, str]] = []
+        for board in self._dashboards():
+            popularity = stable_hash(seed, "popularity", board.exposure) % 4
+            for person in sorted(self.member_team):
+                own = self.member_team[person] == board.team
+                percent = chance.own_team_percent if own else chance.other_team_percent
+                draw = stable_hash(seed, "view", board.exposure, person, day.date().isoformat())
+                # Popularity counts in halves: compare against twice the percent.
+                if draw % 200 < percent * popularity:
+                    minute = 9 * 60 + stable_hash(seed, "view_at", draw) % (9 * 60)
+                    found.append((day + timedelta(minutes=minute), board.exposure, person))
+        return sorted(found)
 
     def run_day(self, day_index: int, day: datetime) -> None:
         """One simulated day: dashboard refreshes, then ad hoc SQL, in time order."""

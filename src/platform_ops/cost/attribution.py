@@ -8,9 +8,11 @@ bill (ADR 0004):
   model it tests, the ingestion and the nightly merge of a raw table to the
   owner of that source. dbt's own bookkeeping, outside any model, goes to the
   platform team, which runs dbt.
-- **Consumption cost** goes to the reader: a dashboard refresh to the owner of
-  the dashboard (the ``metabase`` user only runs it for them), ad hoc SQL to
-  the team of the person who typed it.
+- **Consumption cost** goes to the reader: ad hoc SQL to the team of the
+  person who typed it, and a dashboard refresh to the teams who opened that
+  dashboard that month, shared by their views (``viewer_weights``, ``split``).
+  The ``metabase`` user runs the refresh for whoever reads it; a dashboard
+  nobody opened that month is paid by its owner, who keeps it refreshing.
 - **Migration cost**: the parallel run's reconciliation, carried by the
   platform team, which runs the migration, and reported on its own.
 
@@ -21,8 +23,11 @@ the platform team quietly absorbing everyone's ``SELECT *``.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
+from decimal import ROUND_DOWN, Decimal
 
 from platform_ops.cost.collect import QueryRecord
 from platform_ops.metadata.manifest import Node
@@ -100,3 +105,49 @@ def attribute(records: Iterable[QueryRecord], owners: Owners) -> dict[str, Attri
             team = owners.registry.team_of(r.actor) or UNATTRIBUTED
             out[r.query_id] = Attribution(r.query_id, "consumption", team, r.actor, None)
     return out
+
+
+# The ops store keeps costs at 12 decimals; a split is cut there, so its parts
+# add up to the query's cost exactly once stored.
+QUANTUM = Decimal("1e-12")
+
+
+def viewer_weights(
+    records: Iterable[QueryRecord],
+    views: Iterable[tuple[datetime, str, str]],
+    registry: Registry,
+) -> dict[str, tuple[tuple[str, int], ...]]:
+    """Each dashboard refresh's viewers: the teams that opened it that month, with their views.
+
+    ``views`` are (viewed_at, exposure, person), as a BI tool's view log
+    records them; a person outside the registry counts for nobody. A refresh
+    of a dashboard nobody opened that month has no entry, and stays with the
+    dashboard's owner.
+    """
+    counts: dict[tuple[str, str], Counter[str]] = {}
+    for viewed_at, exposure, person in views:
+        team = registry.team_of(person)
+        if team is not None:
+            counts.setdefault((exposure, f"{viewed_at:%Y-%m}"), Counter())[team] += 1
+    found: dict[str, tuple[tuple[str, int], ...]] = {}
+    for r in records:
+        if r.actor_type != "dashboard":
+            continue
+        seen = counts.get((r.node_id or "", f"{r.started_at:%Y-%m}"))
+        if seen:
+            found[r.query_id] = tuple(sorted(seen.items()))
+    return found
+
+
+def split(usd: Decimal, weights: tuple[tuple[str, int], ...]) -> dict[str, Decimal]:
+    """``usd`` shared by ``weights``, exactly.
+
+    Each share is cut down to 12 decimals, and what is left goes to the team
+    with the most views (the first by name on a tie), so the parts add up to
+    ``usd`` to the last digit.
+    """
+    total = sum(n for _, n in weights)
+    parts = {team: (usd * n / total).quantize(QUANTUM, ROUND_DOWN) for team, n in weights}
+    largest = min(weights, key=lambda w: (-w[1], w[0]))[0]
+    parts[largest] += usd - sum(parts.values())
+    return parts

@@ -6,6 +6,7 @@ import dataclasses
 import itertools
 from datetime import datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -167,10 +168,70 @@ def test_each_query_is_charged_once_to_the_right_team() -> None:
     assert view["q3"] == ("production", "platform", "priya")
     assert view["q4"] == view["q5"] == ("production", "platform", "priya")
     assert view["q6"] == ("migration", "platform", "priya")
-    # The metabase user runs the dashboard; its owner pays.
+    # The metabase user runs the dashboard; without views, its owner pays.
     assert view["q7"] == ("consumption", "sales", "sam")
     assert view["q8"] == ("consumption", "sales", "sam")
     assert view["q9"][1] == attribution.UNATTRIBUTED
+
+
+BOARD = "exposure.company.sales_board"
+
+
+def test_a_dashboard_refresh_is_shared_by_who_opened_it_that_month() -> None:
+    records = [
+        record("jan", "dashboard", node_id=BOARD, at=datetime(2026, 1, 20, 7)),
+        record("feb", "dashboard", node_id=BOARD, at=datetime(2026, 2, 3, 7)),
+        record("mar", "dashboard", node_id=BOARD, at=datetime(2026, 3, 3, 7)),
+        record("adhoc", "adhoc", actor="sam"),
+    ]
+    views = [
+        (datetime(2026, 1, 5, 10), BOARD, "sam"),
+        (datetime(2026, 1, 6, 10), BOARD, "priya"),
+        (datetime(2026, 1, 7, 10), BOARD, "priya"),
+        (datetime(2026, 1, 8, 10), BOARD, "stranger"),  # in no team: counts for nobody
+        (datetime(2026, 2, 9, 10), BOARD, "sam"),
+        (datetime(2026, 3, 1, 10), "exposure.company.other", "priya"),
+    ]
+    weights = attribution.viewer_weights(records, views, REGISTRY)
+    # January's views share January's refreshes; nobody opened it in March.
+    assert weights == {"jan": (("platform", 2), ("sales", 1)), "feb": (("sales", 1),)}
+
+
+def test_a_split_adds_up_to_the_cost_exactly() -> None:
+    usd = Decimal("0.100000000001")
+    parts = attribution.split(usd, (("finance", 1), ("platform", 1), ("sales", 1)))
+    assert sum(parts.values()) == usd
+    # Each third is cut to 0.033333333333; the 2e-12 left goes to the team with
+    # the most views, the first by name on a tie.
+    assert parts == {
+        "finance": Decimal("0.033333333335"),
+        "platform": Decimal("0.033333333333"),
+        "sales": Decimal("0.033333333333"),
+    }
+    assert attribution.split(Decimal("3"), (("a", 2), ("b", 1))) == {
+        "a": Decimal("2"),
+        "b": Decimal("1"),
+    }
+
+
+def test_views_are_working_hours_on_working_days_and_repeat() -> None:
+    board = workload.bi.Dashboard(BOARD, "Sales", "", "sales", "sam", ())
+    settings = SimpleNamespace(
+        seed=42,
+        workload=SimpleNamespace(
+            dashboard_views=SimpleNamespace(own_team_percent=100, other_team_percent=0)
+        ),
+    )
+    load = SimpleNamespace(settings=settings, member_team={"sam": "sales", "priya": "platform"})
+    load._dashboards = lambda: [board]
+    monday, saturday = datetime(2026, 1, 5), datetime(2026, 1, 10)
+    first = workload.Workload.views(load, monday)  # type: ignore[arg-type]
+    assert first == workload.Workload.views(load, monday)  # type: ignore[arg-type]
+    assert workload.Workload.views(load, saturday) == []  # type: ignore[arg-type]
+    # Only the owning team at 100% and 0% for the others; the board's
+    # popularity from the seed may be none.
+    assert {person for _, _, person in first} <= {"sam"}
+    assert all(9 <= at.hour < 18 for at, _, _ in first)
 
 
 # --- collection --------------------------------------------------------------------------

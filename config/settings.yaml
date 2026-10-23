@@ -118,6 +118,13 @@ workload:
     high: 12
     medium: 24
     low: 24
+  # People open dashboards on working days: everyone in config/teams.yaml, a
+  # dashboard of their own team with this chance a day, another team's with
+  # this one, times the dashboard's own popularity. Views are served from the
+  # latest refresh and run no query; they decide who pays for the refreshes.
+  dashboard_views:
+    own_team_percent: 40
+    other_team_percent: 8
   # People from config/teams.yaml who query the warehouse by hand.
   adhoc_users: [sam, maya, bruno, olivia, lena]
   adhoc_max_queries_per_day: 3

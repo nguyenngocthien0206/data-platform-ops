@@ -192,7 +192,16 @@ Reports are views over the live tables, and Postgres cannot read a view as it wa
 **Step 5: charge each query once, to the right team.**
 
 - Building, testing, loading or merging a table is **production** cost, charged to the table's owner.
-- Reading a table is **consumption** cost, charged to the reader: an ad hoc query to the person's team, a dashboard refresh to the team that owns the dashboard (the BI user only runs it for them).
+- Reading a table is **consumption** cost, charged to the reader: an ad hoc query to the person's team, a dashboard refresh to the teams that open the dashboard (the BI user only runs it for them).
+
+A dashboard is the hard case. Its refreshes run on a schedule, as the BI tool's user, and the people who open it are served from the latest refresh without any query: the warehouse never sees who reads it. The BI tool does, in its view log. So each month, a dashboard's refreshes are shared by the teams that opened it, in proportion to their views:
+
+```
+finance_cash_reconciliation, one month:  finance 50 views, sales 10, product 10
+refreshes that month cost $7.00  ->  finance $5.00, sales $1.00, product $1.00
+```
+
+A dashboard nobody opened that month stays with its owner, and one nobody opened at all is a refresh to turn off.
 - The migration's reconciliation is **migration** cost, carried by the platform team and shown on its own.
 
 **Step 6: price the same work elsewhere.** The same measured queries are also priced as if on BigQuery (per byte scanned, with a minimum per table) and on Snowflake (per second a warehouse is awake, including the idle minutes after each query). The two models reward opposite habits, which is the point of showing both.
@@ -201,9 +210,9 @@ Reports are views over the live tables, and Postgres cannot read a view as it wa
 
 **Step 8: the business case.** The old reporting system's monthly cost against the new cluster's, both running until the cutover date reconcile recommends, and how long the saving takes to pay that back.
 
-**The result.** The 112 days cost $1,197.24, split exactly. 844 ad hoc queries took $148.51 of it and 12,544 dashboard refreshes $3.34; on Snowflake the dashboards would be the expensive part. The migration pays for itself in 3.5 months.
+**The result.** The 112 days cost $1,197.24, split exactly. 844 ad hoc queries took $143.76 of it and 12,544 dashboard refreshes $3.24; on Snowflake the dashboards would be the expensive part. Shared by their views, the dashboards cost their owners about half; three were refreshed every day and opened by nobody. The migration pays for itself in 3.5 months.
 
-**In three lines.** A user per team says who, a tag on every query says what for. The fixed invoice is shared by bytes read and stored, to the cent. Building is charged to the owner, reading to the reader.
+**In three lines.** A user per team says who, a tag on every query says what for. The fixed invoice is shared by bytes read and stored, to the cent. Building is charged to the owner, reading to the reader, a dashboard to the teams that open it.
 
 **Where to look.** `src/platform_ops/simulation/access.py` (step 1), `common/tagging.py` (step 2), `cost/collect.py` (step 3), `cost/cluster.py` (step 4), `cost/attribution.py` (step 5), `cost/pricing.py` (step 6), `cost/recommend.py` (step 7), `cost/business.py` (step 8), [ADR 0013](adr/0013-users-per-team-and-bi-from-exposures.md), [ADR 0015](adr/0015-finops-on-a-self-managed-clickhouse.md).
 

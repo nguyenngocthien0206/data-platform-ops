@@ -264,6 +264,9 @@ COMPANY_RUN_DDL = "run_id text NOT NULL, window_start timestamp NOT NULL, days i
 MAINTENANCE_DDL = """
     sim_at timestamp NOT NULL, table_name text NOT NULL,
     rows_rewritten bigint NOT NULL, bytes_rewritten bigint NOT NULL"""
+# Who opened which dashboard, when: the shape of Metabase's own view log, which
+# the cost module reads to share a dashboard's refreshes among its viewers.
+DASHBOARD_VIEWS_DDL = "viewed_at timestamp NOT NULL, exposure text NOT NULL, person text NOT NULL"
 SOURCE_CHANGES_DDL = (
     "sim_at timestamp NOT NULL, table_name text NOT NULL, changed_rows bigint NOT NULL"
 )
@@ -459,6 +462,7 @@ def run_company(
             )
             replace_ops_table(store, settings, "raw_maintenance", MAINTENANCE_DDL, [], [])
             replace_ops_table(store, settings, "source_changes", SOURCE_CHANGES_DDL, [], [])
+            replace_ops_table(store, settings, "dashboard_views", DASHBOARD_VIEWS_DDL, [], [])
         faults.reset_ground_truth(settings)
         loaded_until = window.start
         active: dict[str, Fault] = {}
@@ -555,6 +559,12 @@ def run_company(
                 build(settings, full_refresh=not summary.builds or backfill, at=run_at)
                 summary.builds.append(run_at)
             workload.run_day(day_index, day)
+            _record(
+                settings,
+                "dashboard_views",
+                ["viewed_at", "exposure", "person"],
+                workload.views(day),
+            )
             if parallel and nightly is not None:
                 truth: list[TruthCell] = []
                 if ingestion.delivered:
