@@ -30,7 +30,7 @@ from platform_ops.common.dbt_invoke import invocation_from_settings
 from platform_ops.common.servers import clickhouse_client
 from platform_ops.common.store import open_store, ops_table, replace_ops_table
 from platform_ops.cost import cluster, recommend, report
-from platform_ops.cost.attribution import Attribution, Owners, attribute
+from platform_ops.cost.attribution import Attribution, Owners, attribute, split, viewer_weights
 from platform_ops.cost.business import BusinessCase, business_case
 from platform_ops.cost.collect import (
     ACTOR_USERS,
@@ -69,6 +69,17 @@ class CostData:
     hotspots: list[recommend.Hotspot] = field(default_factory=list)
     incremental: list[recommend.IncrementalCandidate] = field(default_factory=list)
     quotas: list[recommend.QuotaSuggestion] = field(default_factory=list)
+    # A dashboard refresh's viewers that month: query_id -> ((team, views), ...).
+    viewers: dict[str, tuple[tuple[str, int], ...]] = field(default_factory=dict)
+    # Each dashboard's views over the window, by team: exposure -> team -> views.
+    dashboard_views: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    def shares(self, query_id: str, usd: Decimal) -> dict[str, Decimal]:
+        """Who pays ``usd`` of this query: its viewers by views, else its one team."""
+        weights = self.viewers.get(query_id)
+        if weights:
+            return split(usd, weights)
+        return {self.attributions[query_id].team: usd}
 
 
 @dataclass(frozen=True)
@@ -175,6 +186,21 @@ def gather(settings: Settings) -> CostData:
     relations = {rel.removeprefix(namespace): uid for rel, uid in owners.by_relation().items()}
     storage_owner = {table: owners.of(relations.get(table)) for _, table in storage}
     attributions = attribute(log.records, owners)
+    views = [
+        (at, exposure, person)
+        for at, exposure, person in _rows(
+            settings,
+            "dashboard_views",
+            "viewed_at, exposure, person",
+            "viewed_at, exposure, person",
+        )
+    ]
+    viewers = viewer_weights(log.records, views, registry)
+    dashboard_views: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for _, exposure, person in views:
+        team = registry.team_of(person)
+        if team is not None:
+            dashboard_views[exposure][team] += 1
 
     production: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
     for model, by_query in costs.items():
@@ -211,6 +237,8 @@ def gather(settings: Settings) -> CostData:
         records=log.records,
         costs=costs,
         attributions=attributions,
+        viewers=viewers,
+        dashboard_views={e: dict(teams) for e, teams in dashboard_views.items()},
         storage=storage,
         storage_owner=storage_owner,
         pools=month_pools,
@@ -478,16 +506,25 @@ def _persist(data: CostData) -> None:
         for query_id, usd in by_query.items():
             record = by_id[query_id]
             a = data.attributions[query_id]
-            showback[
-                (f"{record.started_at:%Y-%m}", a.team, model, a.cost_kind, record.actor_type)
-            ] += usd
+            for team, part in data.shares(query_id, usd).items():
+                showback[
+                    (f"{record.started_at:%Y-%m}", team, model, a.cost_kind, record.actor_type)
+                ] += part
     for (month, table), usd in data.storage.items():
         team, _ = data.storage_owner[table]
         showback[(month, team, "cluster", "storage", "storage")] += usd
-    attributions = [
-        (a.query_id, a.cost_kind, a.team, a.owner, a.subject)
-        for a in sorted(data.attributions.values(), key=lambda a: a.query_id)
-    ]
+    # One row per query and team that pays for it, with its share of the query.
+    attributions: list[tuple[str, str, str, str, str | None, Decimal]] = []
+    for a in sorted(data.attributions.values(), key=lambda a: a.query_id):
+        weights = data.viewers.get(a.query_id)
+        if not weights:
+            attributions.append((a.query_id, a.cost_kind, a.team, a.owner, a.subject, Decimal(1)))
+            continue
+        total = sum(n for _, n in weights)
+        attributions += [
+            (a.query_id, a.cost_kind, team, a.owner, a.subject, Decimal(n) / total)
+            for team, n in weights
+        ]
     with open_store(settings) as connection:
         replace_ops_table(
             connection,
@@ -501,9 +538,10 @@ def _persist(data: CostData) -> None:
             connection,
             settings,
             "query_attribution",
-            "query_id text PRIMARY KEY, cost_kind text NOT NULL, team text NOT NULL, "
-            "owner text NOT NULL, subject text",
-            ["query_id", "cost_kind", "team", "owner", "subject"],
+            "query_id text NOT NULL, cost_kind text NOT NULL, team text NOT NULL, "
+            "owner text NOT NULL, subject text, share numeric(20, 12) NOT NULL, "
+            "PRIMARY KEY (query_id, team)",
+            ["query_id", "cost_kind", "team", "owner", "subject", "share"],
             attributions,
         )
         replace_ops_table(

@@ -17,6 +17,7 @@ from platform_ops.common.config import ACTOR_TYPES
 from platform_ops.common.markdown import table
 
 if TYPE_CHECKING:
+    from platform_ops.cost.collect import QueryRecord
     from platform_ops.cost.run import CostData
 
 MODEL_LABEL = {
@@ -164,7 +165,8 @@ def render(data: CostData) -> str:
     for model, by_query in data.costs.items():
         for query_id, value in by_query.items():
             key = "cluster compute" if model == "cluster" else model
-            teams[data.attributions[query_id].team][key] += value
+            for team, part in data.shares(query_id, value).items():
+                teams[team][key] += part
     for (_, table_name), value in data.storage.items():
         teams[data.storage_owner[table_name][0]]["cluster storage"] += value
     rows = []
@@ -200,8 +202,9 @@ def render(data: CostData) -> str:
         "## Showback by team",
         "",
         "Production cost (builds, loads, the nightly merge, storage) goes to the owner of "
-        "the table; consumption (dashboards, ad hoc SQL) to the reader; the parallel run's "
-        "reconciliation to the platform team, which runs the migration.",
+        "the table; consumption to the reader: ad hoc SQL to the person's team, a "
+        "dashboard's refreshes to the teams that opened it, by their views; the parallel "
+        "run's reconciliation to the platform team, which runs the migration.",
         "",
         table(
             [
@@ -254,6 +257,8 @@ def render(data: CostData) -> str:
         ),
         "",
     ]
+
+    out += _dashboards(data, billable)
 
     case = data.case
     out += ["## The migration's business case", ""]
@@ -436,3 +441,75 @@ def render(data: CostData) -> str:
         "",
     ]
     return "\n".join(out)
+
+
+def _dashboards(data: CostData, billable: list[QueryRecord]) -> list[str]:
+    """Each dashboard's refreshes, who opened it, and how much its owner pays."""
+    cost: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+    owner_pays: dict[str, Decimal] = defaultdict(Decimal)
+    owner: dict[str, str] = {}
+    for r in billable:
+        if r.actor_type != "dashboard" or not r.node_id:
+            continue
+        team = data.attributions[r.query_id].team
+        owner[r.node_id] = team
+        for model in data.costs:
+            cost[r.node_id][model] += data.costs[model].get(r.query_id, Decimal(0))
+        usd_cluster = data.costs["cluster"].get(r.query_id, Decimal(0))
+        owner_pays[r.node_id] += data.shares(r.query_id, usd_cluster).get(team, Decimal(0))
+    if not cost:
+        return []
+    rows = []
+    unopened = []
+    for exposure in sorted(cost, key=lambda e: (-cost[e]["compute"], e)):
+        views = data.dashboard_views.get(exposure, {})
+        total = sum(views.values())
+        name = exposure.rsplit(".", 1)[-1]
+        if not total:
+            unopened.append(f"`{name}` ({owner[exposure]}, {usd(cost[exposure]['compute'])})")
+        by_team = ", ".join(
+            f"{team} {n:,}" for team, n in sorted(views.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        paid = owner_pays[exposure] / cost[exposure]["cluster"] if cost[exposure]["cluster"] else 1
+        rows.append(
+            (
+                name,
+                owner[exposure],
+                f"{total:,}",
+                by_team or "nobody",
+                f"{paid:.0%}",
+                usd(cost[exposure]["cluster"]),
+                usd(cost[exposure]["compute"]),
+            )
+        )
+    out = [
+        "## Dashboards and who reads them",
+        "",
+        "A view is served from the latest refresh and runs no query, so the views do not "
+        "change what a dashboard costs, only who pays for it: each month, a dashboard's "
+        "refreshes are shared by the teams that opened it, in proportion to their views. "
+        "A dashboard nobody opened that month is paid by its owner.",
+        "",
+        table(
+            [
+                "Dashboard",
+                "Owner",
+                "Views",
+                "Views by team",
+                "Owner pays",
+                "ClickHouse compute",
+                MODEL_LABEL["compute"],
+            ],
+            rows,
+            right=(2, 4, 5, 6),
+        ),
+        "",
+    ]
+    if unopened:
+        out += [
+            "Refreshed but never opened in the window, so refreshed for nobody: "
+            + "; ".join(unopened)
+            + ". Each is a candidate to refresh less often, or to retire.",
+            "",
+        ]
+    return out
