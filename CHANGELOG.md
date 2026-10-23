@@ -18,6 +18,10 @@ All notable changes to data-platform-ops. The format follows [Keep a Changelog](
 - **A test on a source is about that source**, for routing and grouping (dbt attaches no node to it), and a source is healthy only when it is fresh and its tests pass.
 - **A failure a rerun finds below another open incident's root that it did not check joins that incident**, instead of opening a new one and paging again.
 
+### Added
+
+- **Dashboard cost by viewer.** People open the company's dashboards on working days, recorded like Metabase's view log (`ops.dashboard_views`). Each month, a dashboard's refreshes are shared by the teams that opened it, in proportion to their views (`attribution.viewer_weights`, `split`, exact to 12 decimals); a dashboard nobody opened that month is paid by its owner. The cost report gains "Dashboards and who reads them", with each dashboard's views by team, the share its owner pays, and the dashboards nobody opened.
+
 ### Changed
 
 - **`reconcile.thresholds.max_discrepancies` needs a `duplicate_key` entry.** The thresholds still name every class, so a settings file from 2.0.0 fails to load until the line is added (`duplicate_key: 0` in the shipped config). The sign-off's criteria table gains a line for it.
@@ -28,6 +32,7 @@ All notable changes to data-platform-ops. The format follows [Keep a Changelog](
 - **`int_campaign_performance_daily` spells out `union distinct`**, which ClickHouse already read a bare `union` as, so sqlglot can trace it.
 - **A production night runs five invocations:** source freshness, the sources' tests, run, snapshot and the other tests. `CompanyDesk` returns, with each fix, the dbt invocations to rerun (`Fix.commands`), and `company run` reports how many reruns it ran.
 - **The incident and cost numbers moved:** 39 failing checks for the same 8 incidents and pages; the reruns and the volume tests add 968 priced queries to dbt's share of the bill, which stays $1,197.24.
+- **`query_attribution` has one row per query and paying team, with its `share`**; `workload.dashboard_views` (`own_team_percent`, `other_team_percent`) is required in the settings. A view runs no query, so the bill, the query log and ClickHouse do not change; the per-team showback does.
 
 ## [2.0.0] - 2026-10-15
 

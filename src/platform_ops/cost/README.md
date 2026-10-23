@@ -13,7 +13,7 @@ A self-managed cluster sends no bill per query. The company pays for machines an
 | Measure storage | `storage.py`: every table's rows and uncompressed bytes from `system.parts`, at each month's end and the window's | `ops.storage_snapshots` |
 | Share the bill | `cluster.py`: the stated monthly cost prorated to the window, compute shared by bytes read, storage by table size, exact | `ops.query_costs` |
 | Price elsewhere | `pricing.py`: BigQuery on demand and Snowflake warehouses on the same measured bytes | `ops.query_costs` |
-| Attribute | `attribution.py`: production to the table's owner, consumption to the reader, the migration to the platform team | `ops.query_attribution`, `ops.cost_showback` |
+| Attribute | `attribution.py`: production to the table's owner, consumption to the reader (a dashboard's refreshes to its viewers, by views), the migration to the platform team | `ops.query_attribution`, `ops.cost_showback` |
 | Business case | `business.py`: the legacy reporting replica until the cutover the reconciliation recommends, ClickHouse throughout, the overlap and its payback | in the report |
 | Recommend | `recommend.py`: unused tables, full-scan hotspots, incremental candidates, quotas | in the report |
 | Report | `report.py` | `reports/cost.md` |
@@ -26,7 +26,9 @@ A self-managed cluster sends no bill per query. The company pays for machines an
 
 **The bill is stated, with its sources.** `cost.clickhouse` in `config/settings.yaml` is one `m6i.2xlarge` node with 500 GB of gp3 at public us-east-1 list prices, $320.32 a month; `cost.legacy_reporting` is the reporting replica it replaces, one `db.m6i.2xlarge` RDS instance with 500 GB, $577.50 a month. The sizing is an assumption and is printed first in the report. Compute is shared by bytes read, storage by uncompressed bytes at the month's end, both to 1e-12 dollars with the remainder on the largest share, so the shares add up to the stated cost exactly and can be handed to finance as they are.
 
-**Each query is charged once** ([ADR 0004](../../../docs/adr/0004-pricing-models-and-attribution.md)). Building, testing, loading and merging a table is production cost for its owner. Reading it, through a dashboard or by hand, is consumption cost for the reader: a dashboard refresh goes to the dashboard's owner, not to the `metabase` user that runs it. The parallel run's reconciliation is migration cost, carried by the platform team and shown on its own, because that is the cost the business case has to pay back.
+**Each query is charged once** ([ADR 0004](../../../docs/adr/0004-pricing-models-and-attribution.md)). Building, testing, loading and merging a table is production cost for its owner. Reading it, through a dashboard or by hand, is consumption cost for the reader: ad hoc SQL to the person's team, and a dashboard refresh to the teams that opened the dashboard that month, by their views, not to the `metabase` user that runs it. The parallel run's reconciliation is migration cost, carried by the platform team and shown on its own, because that is the cost the business case has to pay back.
+
+**A dashboard is paid by who reads it.** A refresh exists for the people who open the dashboard, so its cost is shared each month by the teams that opened it, in proportion to their views, from the BI tool's view log (`ops.dashboard_views`: when, which dashboard, who). A view is served from the latest refresh, as Metabase's cache serves it, and runs no query: the views change who pays, not what anything costs, and the shares still add up to the bill to the last digit (each cut at 12 decimals, the rest to the team with the most views). A dashboard nobody opened that month is paid by its owner, who keeps it refreshing, and the report lists the ones nobody opened at all. Everyone in the registry opens dashboards in the simulation, the platform team included, which opens other teams' dashboards as often as they open each other's.
 
 **Unused means unused all the way down.** A table is unused when neither it nor anything downstream of it was read by a dashboard or a person in the lookback window. dbt reading a table to build another does not count, so a staging model that feeds a live dashboard is never flagged, and one that only feeds dead tables is.
 
@@ -42,11 +44,11 @@ The cluster's stated cost over the window is $1,197.24 ($1,047.73 compute, $149.
 
 | Team | ClickHouse compute | ClickHouse storage | ClickHouse total | BigQuery on demand | Snowflake warehouses |
 |---|---:|---:|---:|---:|---:|
-| platform | $555.75 | $87.61 | $643.36 | $1.75 | $41.51 |
-| sales | 80 | 348.0 MB | 253.3 MB | 700.0 MB | 510.0 MB |
-| finance | 88 | 159.0 MB | 81.5 MB | 320.0 MB | 170.0 MB |
-| marketing | 79 | 51.3 MB | 27.4 MB | 110.0 MB | 55.0 MB |
-| product | 86 | 339.5 MB | 221.8 MB | 680.0 MB | 450.0 MB |
+| platform | $556.26 | $87.61 | $643.87 | $1.86 | $68.97 |
+| sales | $154.38 | $21.97 | $176.36 | $0.7018 | $88.58 |
+| finance | $132.62 | $15.08 | $147.70 | $0.6310 | $82.79 |
+| marketing | $117.98 | $13.95 | $131.93 | $0.6524 | $61.32 |
+| product | $86.49 | $10.89 | $97.38 | $0.5598 | $63.54 |
 | **total** | $1,047.73 | $149.51 | $1,197.24 | $4.40 | $365.21 |
 
 | Workload | Queries | Read | ClickHouse compute | BigQuery on demand | Snowflake warehouses |
@@ -61,8 +63,9 @@ The cluster's stated cost over the window is $1,197.24 ($1,047.73 compute, $149.
 What the numbers say:
 
 - **On a fixed cluster, a few careless queries cost more than all the dashboards.** 844 ad hoc queries read 30.58 GB and took $143.76 of the cluster; 12,544 dashboard refreshes read 602.6 MB and took $3.24. On Snowflake the picture flips: the dashboards cost $206.64, because every refresh wakes a warehouse for seconds of work and five minutes of idling. Which habit to change first depends on how the warehouse is billed, and the report shows both.
-- **The platform team carries more than half the bill, and most of it is honest.** It owns the shared layers dbt rebuilds every night, and the reruns after each incident fix ($643.36 of $1,197.24). Two lines in it are choices rather than necessities: the nightly merge of raw ($221.37, about a fifth of the compute), which buys repeatable reads and is the first thing to make cheaper (merge less often, or deduplicate in staging with `argMax` instead of `FINAL`), and the parallel run's reconciliation ($76.25), which ends with the parallel run.
+- **The platform team carries more than half the bill, and most of it is honest.** It owns the shared layers dbt rebuilds every night, and the reruns after each incident fix ($643.87 of $1,197.24). Two lines in it are choices rather than necessities: the nightly merge of raw ($221.37, about a fifth of the compute), which buys repeatable reads and is the first thing to make cheaper (merge less often, or deduplicate in staging with `argMax` instead of `FINAL`), and the parallel run's reconciliation ($76.25), which ends with the parallel run.
 - **The migration pays for itself in 3.5 months.** The reporting replica costs $577.50 a month, ClickHouse $320.32, a saving of $257.18. Running ClickHouse alongside the replica until the cutover on 2026-03-30 cost $909.30, paid back in 3.5 months. The comparison is infrastructure only; the people who run a self-managed cluster are not in a list price, and the report says so.
+- **On Snowflake, the dashboard nobody opens is the second most expensive.** `sales_executive_dashboard` was opened by nobody in 112 days and would cost $28.12 in warehouse time, against $0.0217 of the cluster. Two others were never opened either. On the dashboards people do open, their owners pay about half: `finance_cash_reconciliation`, the most expensive, was opened 179 times, 86 of them by four other teams, so finance pays 51% of it. A view log turns "who uses this dashboard" from an opinion into a number, and "never opened" into a refresh to turn off.
 - **At this size, BigQuery on demand would cost $4.40.** The company's data is a few gigabytes, so a fixed cluster sized for growth is mostly idle. That is the cost argument for a serverless warehouse at small scale, and the one a platform lead should be ready to answer before the data grows into the cluster.
 - **The 12 abandoned models are exactly the unused list** at both 30 and 90 days; the largest, `marts.product_fct_sessions_v1`, takes $6.22 a month of the cluster.
 - **Two full-scan hotspots.** `marts.finance_fct_payments_reconciliation` is filtered on `order_date` 12 times and read in full, because it is sorted by `order_id`; the report suggests `(order_date, order_id)`. `raw.orders` is filtered on `_loaded_at` 10 times by the platform team, where the sort key is also what `ReplacingMergeTree` deduplicates on, so the report suggests a skip index instead of a new key.
@@ -78,7 +81,7 @@ On a real platform the pricing, the bill split and the attribution are the parts
 - **Runs as is, as a library:**
   - `pricing.py` prices any list of `QueryRecord`s on BigQuery on demand (`ScanPricing`) and on Snowflake warehouses (`ComputePricing`).
   - `cluster.py` shares a stated monthly cost out exactly: `pools` prorates it per month, `compute_shares` splits compute by bytes read, `storage_shares` storage by table size.
-  - `attribution.py` (`attribute`, `Owners`) charges production to the table's owner and consumption to the reader, from a dbt manifest and an ownership registry.
+  - `attribution.py` (`attribute`, `Owners`) charges production to the table's owner and consumption to the reader, from a dbt manifest and an ownership registry; `viewer_weights` and `split` share a dashboard's refreshes by a view log, exactly.
   - `collectors/` reads BigQuery's `INFORMATION_SCHEMA.JOBS` and Snowflake's `ACCOUNT_USAGE.QUERY_HISTORY` into the same records, pinned by contract tests. It never connects itself: you hand it the rows.
 - **Belongs to the simulated company:**
   - `cost report` (`run.py`) reads the company's run (`ops.company_run`), its nightly merge (`ops.raw_maintenance`), its in-place changes (`ops.source_changes`) and the cutover the parallel run recommended.
@@ -87,6 +90,16 @@ On a real platform the pricing, the bill split and the attribution are the parts
 - **What you replace:**
   - **Collection on ClickHouse:** read `system.query_log` (`type = 'QueryFinish'`) into `QueryRecord`s. The actor is the query's `user`, one per team and service ([ADR 0013](../../../docs/adr/0013-users-per-team-and-bi-from-exposures.md)). The dbt node is the `unique_id` in the comment dbt puts in front of every statement (`query-comment` in `dbt_project.yml`). The dashboard is the tag your BI sets in `log_comment`.
   - **The stated cost** (`cost.clickhouse` in the settings) with your own invoice.
+  - **The view log:** Metabase records every view in its application database. Export it into the `(viewed_at, exposure, person)` shape, mapping each dashboard to its dbt exposure and each user to a person in your registry:
+
+    ```sql
+    SELECT v."timestamp" AS viewed_at, d.name AS dashboard, u.email AS person
+    FROM view_log v
+    JOIN core_user u ON u.id = v.user_id
+    JOIN report_dashboard d ON d.id = v.model_id
+    WHERE v.model = 'dashboard'
+    ```
+
   - **The report:** yours, over the shares and the attribution.
   - **On BigQuery or Snowflake:** a `Principals` mapping that says which service account is dbt and which is the BI tool.
 - **In order:**
@@ -100,6 +113,7 @@ On a real platform the pricing, the bill split and the attribution are the parts
   - **A `LIMIT` reads the same rows only on one thread**, so workload queries run with `max_threads = 1`.
   - **`written_bytes` changes with how ClickHouse cuts blocks**, so only rows written are kept.
   - **Catalogue-only statements are dropped:** dbt sends a different number of `CREATE` and `DROP` statements from run to run.
-  - **A dashboard refresh must land on the dashboard's owner,** not on the BI tool's user, or the bill tells every team that "metabase" is expensive.
+  - **A dashboard refresh must never land on the BI tool's user,** or the bill tells every team that "metabase" is expensive. Share it by the view log; without one, charge the dashboard's owner.
+  - **A view from the BI tool's cache sends no query,** so the warehouse's log cannot say who reads a dashboard. Only the BI tool's own view log can.
 
 The two cloud collectors make no network call; their contract tests (`tests/test_collectors.py`) use a few hundred recorded rows per vendor in `tests/fixtures/`, in the documented column names and types.
