@@ -138,9 +138,21 @@ class Recommendations(_Strict):
     incremental_top_n: Annotated[int, Field(gt=0)]
 
 
+class DashboardViews(_Strict):
+    """How often people open a dashboard on a working day, in percent.
+
+    Each dashboard also has a popularity of its own (none, half, normal or one
+    and a half), from the seed, so some are opened by nobody.
+    """
+
+    own_team_percent: Annotated[int, Field(ge=0, le=100)]
+    other_team_percent: Annotated[int, Field(ge=0, le=100)]
+
+
 class WorkloadSettings(_Strict):
     real_build_every_days: Annotated[int, Field(ge=1)]
     dashboard_refresh_hours: dict[str, Annotated[int, Field(ge=1, le=24)]]
+    dashboard_views: DashboardViews
     adhoc_users: list[str]
     adhoc_max_queries_per_day: Annotated[int, Field(ge=0)]
     adhoc_result_page_rows: Annotated[int, Field(gt=0)]

@@ -61,6 +61,7 @@ SETTINGS_YAML = textwrap.dedent(
     workload:
       real_build_every_days: 7
       dashboard_refresh_hours: {high: 6, medium: 12, low: 24}
+      dashboard_views: {own_team_percent: 40, other_team_percent: 8}
       adhoc_users: [sam, maya]
       adhoc_max_queries_per_day: 3
       adhoc_result_page_rows: 500
