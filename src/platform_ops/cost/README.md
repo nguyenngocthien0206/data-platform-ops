@@ -42,29 +42,29 @@ The cluster's stated cost over the window is $1,197.24 ($1,047.73 compute, $149.
 
 | Team | ClickHouse compute | ClickHouse storage | ClickHouse total | BigQuery on demand | Snowflake warehouses |
 |---|---:|---:|---:|---:|---:|
-| platform | $535.55 | $87.61 | $623.16 | $1.49 | $40.77 |
-| sales | $161.27 | $21.97 | $183.24 | $0.6986 | $91.53 |
-| finance | $138.54 | $15.08 | $153.62 | $0.6475 | $100.07 |
-| marketing | $122.44 | $13.95 | $136.39 | $0.6559 | $61.27 |
-| product | $89.93 | $10.89 | $100.82 | $0.5891 | $70.06 |
-| **total** | $1,047.73 | $149.51 | $1,197.24 | $4.08 | $363.71 |
+| platform | $555.75 | $87.61 | $643.36 | $1.75 | $41.51 |
+| sales | 80 | 348.0 MB | 253.3 MB | 700.0 MB | 510.0 MB |
+| finance | 88 | 159.0 MB | 81.5 MB | 320.0 MB | 170.0 MB |
+| marketing | 79 | 51.3 MB | 27.4 MB | 110.0 MB | 55.0 MB |
+| product | 86 | 339.5 MB | 221.8 MB | 680.0 MB | 450.0 MB |
+| **total** | $1,047.73 | $149.51 | $1,197.24 | $4.40 | $365.21 |
 
 | Workload | Queries | Read | ClickHouse compute | BigQuery on demand | Snowflake warehouses |
 |---|---:|---:|---:|---:|---:|
-| dbt builds and tests | 17,779 | 254.72 GB | $581.03 | $2.53 | $11.59 |
-| ingestion from Postgres | 1,018 | 1.29 GB | $6.51 | $0.1259 | $2.88 |
-| nightly merge of raw | 1,008 | 45.48 GB | $228.57 | $0.2830 | $6.22 |
-| parallel run reconciliation | 1,014 | 27.21 GB | $79.77 | $0.1933 | $0.8248 |
-| dashboards (Metabase) | 12,544 | 602.6 MB | $3.34 | $0.7477 | $206.64 |
-| ad hoc SQL | 844 | 30.58 GB | $148.51 | $0.2012 | $135.56 |
+| dbt builds and tests | 18,746 | 283.00 GB | $596.81 | $2.85 | $13.13 |
+| ingestion from Postgres | 1,019 | 1.29 GB | $6.30 | $0.1260 | $2.87 |
+| nightly merge of raw | 1,008 | 45.48 GB | $221.37 | $0.2830 | $6.20 |
+| parallel run reconciliation | 1,014 | 27.21 GB | $76.25 | $0.1933 | $0.8047 |
+| dashboards (Metabase) | 12,544 | 602.6 MB | $3.24 | $0.7477 | $206.64 |
+| ad hoc SQL | 844 | 30.58 GB | $143.76 | $0.2012 | $135.56 |
 
 What the numbers say:
 
-- **On a fixed cluster, a few careless queries cost more than all the dashboards.** 844 ad hoc queries read 30.58 GB and took $148.51 of the cluster; 12,544 dashboard refreshes read 602.6 MB and took $3.34. On Snowflake the picture flips: the dashboards cost $206.64, because every refresh wakes a warehouse for seconds of work and five minutes of idling. Which habit to change first depends on how the warehouse is billed, and the report shows both.
-- **The platform team carries more than half the bill, and most of it is honest.** It owns the shared layers dbt rebuilds every night ($623.16 of $1,197.24). Two lines in it are choices rather than necessities: the nightly merge of raw ($228.57, about a fifth of the compute), which buys repeatable reads and is the first thing to make cheaper (merge less often, or deduplicate in staging with `argMax` instead of `FINAL`), and the parallel run's reconciliation ($79.77), which ends with the parallel run.
+- **On a fixed cluster, a few careless queries cost more than all the dashboards.** 844 ad hoc queries read 30.58 GB and took $143.76 of the cluster; 12,544 dashboard refreshes read 602.6 MB and took $3.24. On Snowflake the picture flips: the dashboards cost $206.64, because every refresh wakes a warehouse for seconds of work and five minutes of idling. Which habit to change first depends on how the warehouse is billed, and the report shows both.
+- **The platform team carries more than half the bill, and most of it is honest.** It owns the shared layers dbt rebuilds every night, and the reruns after each incident fix ($643.36 of $1,197.24). Two lines in it are choices rather than necessities: the nightly merge of raw ($221.37, about a fifth of the compute), which buys repeatable reads and is the first thing to make cheaper (merge less often, or deduplicate in staging with `argMax` instead of `FINAL`), and the parallel run's reconciliation ($76.25), which ends with the parallel run.
 - **The migration pays for itself in 3.5 months.** The reporting replica costs $577.50 a month, ClickHouse $320.32, a saving of $257.18. Running ClickHouse alongside the replica until the cutover on 2026-03-30 cost $909.30, paid back in 3.5 months. The comparison is infrastructure only; the people who run a self-managed cluster are not in a list price, and the report says so.
-- **At this size, BigQuery on demand would cost $4.08.** The company's data is a few gigabytes, so a fixed cluster sized for growth is mostly idle. That is the cost argument for a serverless warehouse at small scale, and the one a platform lead should be ready to answer before the data grows into the cluster.
-- **The 12 abandoned models are exactly the unused list** at both 30 and 90 days; the largest, `marts.product_fct_sessions_v1`, takes $6.47 a month of the cluster.
+- **At this size, BigQuery on demand would cost $4.40.** The company's data is a few gigabytes, so a fixed cluster sized for growth is mostly idle. That is the cost argument for a serverless warehouse at small scale, and the one a platform lead should be ready to answer before the data grows into the cluster.
+- **The 12 abandoned models are exactly the unused list** at both 30 and 90 days; the largest, `marts.product_fct_sessions_v1`, takes $6.22 a month of the cluster.
 - **Two full-scan hotspots.** `marts.finance_fct_payments_reconciliation` is filtered on `order_date` 12 times and read in full, because it is sorted by `order_id`; the report suggests `(order_date, order_id)`. `raw.orders` is filtered on `_loaded_at` 10 times by the platform team, where the sort key is also what `ReplacingMergeTree` deduplicates on, so the report suggests a skip index instead of a new key.
 - **No incremental candidate.** The 15 most expensive full rebuilds all join customers or products, which the legacy database updates in place.
 - **Quotas** at twice the busiest days: from 12.0 MB a day for Metabase to 700.0 MB for sales.

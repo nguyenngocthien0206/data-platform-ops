@@ -238,11 +238,13 @@ raw orders (bad)  →  stg_orders  ✗ not_null fails      ← root
 
 **Step 7: write first, send after.** The page, every update and the resolution are written in the same transaction as the incident and sent only after it commits, so no page is ever sent for an incident the store does not hold. A chat that is down is recorded, never allowed to break the desk.
 
-**Step 8: resolve only on evidence.** An open incident resolves when a later run covered its root and found it healthy: the model built and every test on it that ran passed, or the source is fresh again. A run that never touched the root cannot close it.
+**Step 8: resolve only on evidence, and start the evidence with the fix.** An open incident resolves when a later run covered its root and found it healthy: the model built or the source is fresh again, and every test on it that ran passed. A run that never touched the root cannot close it. Waiting for the next night made every incident last at least a day, so as soon as the owner's fix lands, the root and everything below it are rebuilt and that run is handed to the desk: the incident closes then, and the dashboards are right again then.
 
-**The result.** 34 failing checks became 8 incidents and 8 pages, each to the right person. The numbers also showed what tools cannot fix: 6 of the 8 pages went to the one person who owns most feeds, and nothing closed in under 24 hours because resolution waits for the next nightly run.
+**Step 9: catch a feed that stops.** A freshness rule tolerates a quiet day, so a stopped feed showed up only after 64 hours. Each continuous feed also has a volume test: yesterday's rows must be at least half of a usual day's (the median of the seven before). It runs with the sources' freshness, before any model is built, so the source is known as the root before the models below it fail.
 
-**In three lines.** Group failures by their root on the lineage graph, regrouping the whole run on every piece. Page the root's owner once, the source's owner when a staging model breaks. Close only when a later run shows the root healthy.
+**The result.** 39 failing checks became 8 incidents and 8 pages, each to the right person. Every fault was caught by the first nightly run after it happened, the stopped feed too (16 hours instead of 64), and the mean time to resolve fell from 36.0 to 22.3 hours. The numbers also showed what tools cannot fix: 6 of the 8 pages went to the one person who owns most feeds.
+
+**In three lines.** Group failures by their root on the lineage graph, regrouping the whole run on every piece. Page the root's owner once, the source's owner when a staging model breaks. Close only when a later run shows the root healthy, and start that run with the fix.
 
 **Where to look.** `src/platform_ops/incidents/desk.py` (`ingest_target`, `_regroup`), `grouping.py` (step 2), `severity.py` (step 5), `routing.py` (step 6), `notify.py` (step 7), `lifecycle.py` (the simulated owners), [ADR 0005](adr/0005-incident-grouping-severity-and-routing.md), [ADR 0016](adr/0016-incidents-on-the-companys-production-runs.md).
 
