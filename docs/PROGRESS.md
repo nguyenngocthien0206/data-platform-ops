@@ -48,7 +48,7 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 
 Phase 15 is merged (PR #24), and the fix for the release (PR #25). `v2.0.0` was tagged again on `main` after the fix.
 
-The Backlog is being closed one gap at a time (owner, 2026-10-20). Reconcile gap 1 (duplicated rows) is merged (PR #27). In progress: reconcile gap 2, the "as of" point, on branch `fix-reconcile-as-of`.
+The Backlog is being closed one gap at a time (owner, 2026-10-20). Reconcile gap 1 (duplicated rows) is merged (PR #27). Reconcile gap 2 (the "as of" point) is merged (PR #28). The rest is grouped into four PRs (owner, 2026-10-22): reconcile 3 to 5, incidents detection and resolution (1, 3), incidents triage (4 to 7), and dashboard cost by viewer. In progress: reconcile gaps 3 to 5, on branch `fix-reconcile-gaps-3-5`.
 
 ## Decisions made
 
@@ -467,7 +467,7 @@ Any of them needs the simulation to model people opening dashboards, by team, so
 How the desk works today: it reads each dbt invocation's results as soon as that step of the pipeline finishes (after each of a production night's four invocations, after each Cosmos task, after Dagster's build), regroups the whole run, and pages at once; no second scan. The gaps:
 
 1. **An incident resolves only at the next scheduled run.** Owners fix within hours, but the incident waits for the next night's run to show its root healthy, so none closes in less than 24 hours. There is no way to rerun the root's checks right after a fix.
-2. **No acknowledgement or escalation in real use.** A page goes to one person, the owner: no on-call rotation, no backup, no escalation when nobody acknowledges, and no acknowledgement recorded from the chat. The time to acknowledge and to fix is simulated (`incidents/lifecycle.py`).
+2. **Dropped (owner, 2026-10-22): the project runs only inside its simulation.** No acknowledgement or escalation in real use. A page goes to one person, the owner: no on-call rotation, no backup, no escalation when nobody acknowledges, and no acknowledgement recorded from the chat. The time to acknowledge and to fix is simulated (`incidents/lifecycle.py`).
 3. **Only what a test or a freshness check catches.** Wrong data no test checks is invisible, and a stopped feed is found only once the freshness rule's two days are over (64 hours in the release run).
 4. **Grouping stays within one run.** Two unrelated faults failing the same downstream node in one run attach it to one of the two roots, by tie-break.
 5. **The routing exception is narrow.** Only a staging model reading exactly one source pages the source's owner; when broken source data first shows in an intermediate model or a mart, the page goes to that model's owner.
@@ -480,10 +480,10 @@ The comparison works as designed on the simulated company, which never writes wh
 
 1. **Closed (branch `fix-reconcile-duplicate-keys`): a duplicated row can slip through.** A differing leaf's rows were kept as key to row on each side, so two identical rows with the same key on one side became one, and the verdict did not compare row counts. Now every row is kept, a key seen more than once on either side is `duplicate_key` (threshold 0), and a pair whose row counts differ beyond the missing, extra and duplicated rows fails. Tested with fake connectors and on both engines; the demo's numbers are unchanged, its criteria table has one more line.
 2. **Closed (branch `fix-reconcile-as-of`): no "as of" point.** A night compared the legacy tables as they were when it ran, so on a live system every row written since the copy showed as missing, every night. Now each table is compared up to the copy's watermark (`changed_at` in `reconcile.yaml`), a row changed in place after it is in flight, the reports are frozen in one snapshot just before the copy reads, and a pair whose legacy side lags more than 26 hours fails. The simulated company now writes the next hour of new rows between the copy and the comparison. The fix 1 leftover (no `duplicate_key` in `reconcile_nights`) is closed in the same branch.
-3. **"Explained" is loose.** A differing report counts as explained when any upstream table differs that night (`reconcile/parallel.py`), even an unrelated one: trimmed emails would explain a revenue report with a wrong formula. Such a night is not clean anyway, so the logic error shows once the copy is fixed, but the explained count can mislead.
-4. **Columns are read once.** The pairs' columns and types are loaded on the first night and kept for the whole parallel run; a column added or changed during six weeks breaks the comparison or is missed.
-5. **The cause labels are guesses.** A difference of a whole number of hours is labelled a time zone shift, and one of at most 0.01 rounding, even when it is a real error that happens to look like one.
-6. **It runs only inside the simulation**, and the grading needs the planted ground truth (see "Adopting it" in the reconcile README).
+3. **Closed (branch `fix-reconcile-gaps-3-5`): "explained" is loose.** A report difference is now explained only through the columns it reads: column lineage from dbt's compiled SQL (sqlglot), with the columns of filters, joins and groupings, a left join counting only for the columns it brings in. All 12 marts are traced; one bare `union` in the dbt project is spelled out for sqlglot.
+4. **Closed (same branch): columns are read once.** The pairs are read again every night; a pair whose columns no longer line up fails its night with the reason, and the others are compared.
+5. **Closed (same branch): the cause labels are guesses.** A label is given only when its mechanism reproduces the value (rounding or truncation at the column's scale, directly or through a float; local time in one of `reconcile.time_zones`). M6 and M7 are now value mismatches in the ground truth.
+6. **Dropped (owner, 2026-10-22): the project runs only inside its simulation.** It runs only inside the simulation, and the grading needs the planted ground truth (see "Adopting it" in the reconcile README).
 
 ## Open questions for the owner
 
@@ -495,5 +495,5 @@ None open.
 2. If a release job failed again, fix it on a branch, then delete and push the tag again (a failed release publishes nothing); the `orchestrators` workflow can be run by hand to look at an orchestrator job.
 3. Pilot rollout of the ownership check on a company dbt repository, with the 2.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
 4. Decide on dashboard cost by viewer (Backlog): A, B or C, then a phase to build it.
-5. Decide which incident gaps to close (Backlog), then a phase to build them.
-6. Close the other reconcile gaps (Backlog) one at a time, a plan for each first; "explained" is loose (gap 3) next.
+5. Incidents gaps 1 and 3 (detection and resolution) in one PR, then 4 to 7 (triage) in another, a plan for each first.
+6. Dashboard cost by viewer: decide A, B or C, then a plan.

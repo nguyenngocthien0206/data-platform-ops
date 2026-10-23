@@ -129,21 +129,29 @@ level 3:  "7a0" to "7af"    → only "7a3" differs, about 230 rows: pull them
 
 Why two hash numbers per row (`h1`, `h2`) in the code: two different groups could, by a tiny chance, have the same sum. Comparing two independent sums makes that chance negligible.
 
-**Step 6: label each difference with a likely cause.** Finding a difference is not enough; the team needs to know who fixes it.
+**Step 6: label each difference with its cause, only when the cause reproduces it.** Finding a difference is not enough; the team needs to know who fixes it. A label is a claim about what happened, so it is given only when that mechanism, applied to one side, gives the other. A cent added on purpose is within 0.01 but is no rounding of the amount, so it is a value mismatch, not something the rounding allowance excuses.
 
 | Rule | Label | Real example (first night) |
 |---|---|---|
 | key only on the legacy side | missing | 74 web sessions lost at page boundaries |
 | key more than once on either side | duplicate key | a join that doubles a report's row (never in the simulated company) |
-| decimals within 0.01 | rounding | `149.92` became `149.91` |
-| times a whole number of hours apart | time zone shift | `13:11:49` became `17:11:49` |
+| within 0.01, and one side is the other rounded or truncated, directly or through a float | rounding | `149.92` became `149.91` |
+| one side is the other read as local time in a zone the company runs in | time zone shift | `13:11:49` became `17:11:49` (New York, summer) |
 | equal once spaces are trimmed | whitespace | `"grace.novak53426@post.test "` lost its trailing space |
 | equal once lower-cased | case only | |
 | anything else | value mismatch | |
 
 **Step 7: judge each pair against rules fixed in advance.** The data owner signs the rules before the run: whether trailing spaces count, the rounding tolerance, the minimum match rates, how many of each label are allowed. A pair passes or fails against them; the rules are printed first in the sign-off.
 
-**Step 8: a report that differs needs a reason.** If the new revenue report differs from the old one, either a table it is built from differs too (a copy problem, fixed upstream), or nothing upstream differs and the new report computes differently (a logic problem). The lineage graph says which tables feed each report. A difference with no upstream cause blocks the night, because it is exactly what a finance user finds after the cutover.
+**Step 8: a report that differs needs a reason.** If the new revenue report differs from the old one, either something it is built from differs too (a copy problem, fixed upstream), or nothing upstream differs and the new report computes differently (a logic problem). "Built from" has to mean the columns, not only the tables: trimmed emails are in the customers table, but the revenue report never reads an email. So each model's compiled SQL is traced column by column, down to the raw columns, counting the columns of filters, joins and groupings too:
+
+```
+revenue_monthly.recognized_revenue  <-  order_items.unit_price, .quantity, orders.discount_code,
+                                        orders.status (filter), orders.ordered_at (grouping), join keys
+sales_daily.customers               <-  customers.email (accounts merged by email), orders.customer_id, ...
+```
+
+A differing report column is explained only by a differing column it reads, or by a table it reads that lost or gained rows. A difference with no upstream cause blocks the night, because it is exactly what a finance user finds after the cutover.
 
 **Step 9: compare what the copy has read, not what the legacy has now.** The application does not stop for the comparison. The copy reads up to 02:00, the comparison runs later, and by then new orders have arrived in the legacy database. Compared as they are, those rows would show as missing every night, and no night would ever be clean.
 
