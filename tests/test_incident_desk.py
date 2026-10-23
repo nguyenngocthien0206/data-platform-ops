@@ -193,6 +193,35 @@ def test_a_later_run_resolves_only_a_root_it_covered_and_found_healthy(
     assert _live(settings)[0][3] == "night-3"
 
 
+def test_a_rerun_failing_below_a_root_it_did_not_check_joins_that_incident(
+    desk: tuple[Settings, Context], tmp_path: Path
+) -> None:
+    """stg_orders is still broken; a rerun after another fix rebuilds fct_revenue,
+    which reads it, without running stg_orders. Same problem, not a new one."""
+    settings, context = desk
+    night = _target(
+        tmp_path,
+        "n1",
+        ("run_results.json", _invocation("n-1", (STG_ORDERS, "success"), (NOT_NULL, "fail"))),
+    )
+    ingest_target(settings, night, "night-1", at=AT, context=context)
+    rerun = _target(tmp_path, "rr", ("run_results.json", _invocation("rr-1", (FCT, "error"))))
+    result = ingest_target(settings, rerun, "rerun-INC-009", at=AT.replace(hour=9), context=context)
+    assert result.opened == () and result.appended == ("INC-001",)
+    assert [root for root, *_ in _live(settings)] == [STG_ORDERS]
+    # A run that checked stg_orders and found it healthy: a failure below is its own.
+    checked = _target(
+        tmp_path,
+        "n2",
+        (
+            "run_results.json",
+            _invocation("n-2", (STG_ORDERS, "success"), (NOT_NULL, "pass"), (FCT, "error")),
+        ),
+    )
+    later = ingest_target(settings, checked, "night-2", at=AT.replace(day=3), context=context)
+    assert later.opened == ("INC-002",) and later.resolved == ("INC-001",)
+
+
 def test_concurrent_ingests_of_one_run_end_as_one_after_the_other(
     desk: tuple[Settings, Context], tmp_path: Path
 ) -> None:

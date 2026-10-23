@@ -57,13 +57,17 @@ class RunOutcome:
 def test_subject(test: Node) -> str:
     """The node a failing test is about.
 
-    A test with one parent is about that parent. A test with several parents
-    checks how they fit together, so it is about neither alone; the test itself
-    is the subject, and lineage places it below every model it reads.
+    A test with one parent is about that parent: the model it is attached to,
+    or the source it reads (dbt attaches no node to a source's tests). A test
+    with several parents checks how they fit together, so it is about neither
+    alone; the test itself is the subject, and lineage places it below every
+    model it reads.
     """
     parents = [p for p in test.depends_on if not p.startswith("macro.")]
     if len(parents) <= 1 and test.attached_node:
         return test.attached_node
+    if len(parents) == 1 and parents[0].startswith("source."):
+        return parents[0]
     return test.unique_id
 
 
