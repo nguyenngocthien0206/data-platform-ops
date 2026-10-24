@@ -87,7 +87,8 @@ paused: ## List any 1.x module still paused in version 2.0 (none since Phase 14)
 
 # Not part of `demo`: the README numbers come from the reference run, and a
 # first `make demo` on another machine should not fail on a documentation check.
-# The README's results are the 2.0.0 release run's, at scale 1.0.
+# The README's results are from scale 1.0 runs: the 2.0.0 release run's, then each
+# fix of 3.0.0's, rerun where the fix moved them.
 readme-check: ## Check every README results number against reports/ (after make demo)
 	$(RUN) python scripts/check_readme.py
 
