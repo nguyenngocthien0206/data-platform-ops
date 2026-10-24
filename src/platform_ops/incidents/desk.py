@@ -18,7 +18,8 @@ transaction holding the store's lock:
    the new failure that this run did not check (a rerun after one fix rebuilds
    a model that also reads a source still broken by another), and merges an
    incident this run opened into another when a later invocation shows its root
-   was not the root after all;
+   was not the root after all. A failed node below more than one root is
+   linked to each of their incidents (``incident_shared_nodes``);
 4. resolves an open incident the run did not fail on once the run shows its
    root healthy: the model ran, or the source is fresh again, and every test
    on it that ran passed (at least one must have, if it has tests). A run that
@@ -49,8 +50,16 @@ from platform_ops.incidents import ingest, store
 from platform_ops.incidents.grouping import Group, group_failures, roots_by_node
 from platform_ops.incidents.ingest import CheckEvent, test_subject
 from platform_ops.incidents.notify import Channel, Notification, deliver
-from platform_ops.incidents.routing import naive_route, route
-from platform_ops.incidents.severity import IncidentPolicy, dataset_of, score_incident
+from platform_ops.incidents.routing import naive_route, paged, route
+from platform_ops.incidents.severity import (
+    IncidentPolicy,
+    dataset_of,
+    open_windows,
+    overdue,
+    raised,
+    score_incident,
+)
+from platform_ops.metadata.column_lineage import Catalogue, ColumnLineage, catalogue_from_dbt
 from platform_ops.metadata.lineage import build_graph
 from platform_ops.metadata.manifest import Node, load_manifest
 from platform_ops.metadata.registry import Registry
@@ -68,10 +77,17 @@ class Context:
     policy: IncidentPolicy
     tier_of: dict[str, Tier]
     tests_of: dict[str, frozenset[str]]
+    # Column lineage, when the warehouse's columns are known: from dbt's
+    # catalog.json next to the manifest, or given. Routing uses it.
+    lineage: ColumnLineage | None = None
 
     @classmethod
     def load(
-        cls, settings: Settings, manifest_path: Path, registry_dir: Path | None = None
+        cls,
+        settings: Settings,
+        manifest_path: Path,
+        registry_dir: Path | None = None,
+        catalogue: Catalogue | None = None,
     ) -> Context:
         nodes = load_manifest(manifest_path)
         folder = registry_dir or settings.root / "config"
@@ -97,7 +113,21 @@ class Context:
             IncidentPolicy.load(settings, folder),
             tier_of,
             {k: frozenset(v) for k, v in tests.items()},
+            _lineage(manifest_path, catalogue),
         )
+
+
+def _lineage(manifest_path: Path, catalogue: Catalogue | None) -> ColumnLineage | None:
+    """Column lineage over the project in a target folder, when its columns are known."""
+    if catalogue is None:
+        catalog_path = manifest_path.parent / "catalog.json"
+        if not catalog_path.is_file():
+            return None
+        catalogue = catalogue_from_dbt(json.loads(catalog_path.read_text(encoding="utf-8")))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    project = (manifest.get("metadata") or {}).get("project_name", "")
+    compiled = manifest_path.parent / "compiled" / str(project)
+    return ColumnLineage(manifest, compiled, catalogue, raw_source="source.")
 
 
 @dataclass(frozen=True)
@@ -122,6 +152,7 @@ class _Incident:
     resolved_at: datetime | None
     resolved_by_run: str | None
     merged_into: str | None
+    paged: str  # the owner, or the backup paged instead
 
 
 def ingest_target(
@@ -211,7 +242,7 @@ def _incidents(connection: psycopg.Connection[Any], settings: Settings) -> list[
     rows = connection.execute(
         sql.SQL(
             "SELECT incident_id, seq, root, owner, opened_at, opened_by_run, resolved_at, "
-            "resolved_by_run, merged_into FROM {} ORDER BY seq"
+            "resolved_by_run, merged_into, coalesce(paged, owner) FROM {} ORDER BY seq"
         ).format(store.table(settings, "incidents"))
     ).fetchall()
     return [_Incident(*row) for row in rows]
@@ -235,6 +266,73 @@ def _healthy(
     tests = context.tests_of.get(dataset, frozenset())
     ran = [statuses[t] for t in tests if t in statuses]
     return (not tests or bool(ran)) and all(status == "pass" for status in ran)
+
+
+def _escalate(
+    connection: psycopg.Connection[Any],
+    settings: Settings,
+    context: Context,
+    run_id: str,
+    at: datetime,
+) -> list[tuple[str, str]]:
+    """Raise every open incident that stayed too long, or that a calendar window now covers.
+
+    Returns (incident, message) for each raise, for the person paged.
+    """
+    table = store.table
+    policy = context.policy
+    raises: list[tuple[str, str]] = []
+    rows = connection.execute(
+        sql.SQL(
+            "SELECT incident_id, root, severity, opened_at FROM {} "
+            "WHERE resolved_at IS NULL AND merged_into IS NULL AND opened_at <= %s ORDER BY seq"
+        ).format(table(settings, "incidents")),
+        [at],
+    ).fetchall()
+    for incident_id, root, severity, opened_at in rows:
+        done = {
+            str(reason): changed
+            for reason, changed in connection.execute(
+                sql.SQL("SELECT reason, at FROM {} WHERE incident_id = %s").format(
+                    table(settings, "incident_escalations")
+                ),
+                [incident_id],
+            ).fetchall()
+        }
+        since = max([opened_at, *done.values()])
+        reasons: list[str] = []
+        if overdue(severity, since, at, policy):
+            hours = int((at - since).total_seconds() // 3600)
+            reasons.append(f"open {hours} hours at {severity}")
+        consumers = score_incident(
+            context.graph, str(root), context.nodes, context.tier_of, policy
+        ).consumers
+        team_of = context.registry.team_of_dataset
+        for window in open_windows(consumers, at, policy, team_of):
+            reason = f"{window.name}, {at:%Y-%m}"
+            if reason not in done:
+                reasons.append(reason)
+        current = severity
+        for reason in reasons:
+            to = raised(current)
+            if to == current:
+                break
+            connection.execute(
+                sql.SQL("INSERT INTO {} VALUES (%s, %s, %s, %s, %s, %s)").format(
+                    table(settings, "incident_escalations")
+                ),
+                [incident_id, run_id, at, current, to, reason],
+            )
+            raises.append((str(incident_id), f"raised to {to}: {reason}"))
+            current = to
+        if current != severity:
+            connection.execute(
+                sql.SQL("UPDATE {} SET severity = %s WHERE incident_id = %s").format(
+                    table(settings, "incidents")
+                ),
+                [current, incident_id],
+            )
+    return raises
 
 
 def _covered(root: str, context: Context, statuses: Mapping[str, str]) -> bool:
@@ -351,6 +449,21 @@ def _regroup(
             ),
             [incident_id, run_id, at, n],
         )
+    # A failed node below several roots is shown under each of their incidents.
+    connection.execute(
+        sql.SQL("DELETE FROM {} WHERE run_id = %s").format(
+            table(settings, "incident_shared_nodes")
+        ),
+        [run_id],
+    )
+    for group in groups:
+        for node in group.shared:
+            connection.execute(
+                sql.SQL("INSERT INTO {} VALUES (%s, %s, %s) ON CONFLICT DO NOTHING").format(
+                    table(settings, "incident_shared_nodes")
+                ),
+                [assignment[group.root], run_id, node],
+            )
 
     resolved: list[str] = []
     for incident in before:
@@ -362,6 +475,8 @@ def _regroup(
             resolved.append(incident.incident_id)
         elif not healthy and incident.resolved_by_run == run_id:
             _set_resolution(connection, settings, incident, None, None)
+
+    escalated = _escalate(connection, settings, context, run_id, at)
 
     by_id = {i.incident_id: i for i in incidents}
     for incident_id in opened:
@@ -398,6 +513,8 @@ def _regroup(
             at,
             f"resolved: {root} healthy in {run_id}",
         )
+    for incident_id, text in escalated:
+        _queue(connection, settings, incident_id, "escalation", run_id, at, text)
     return opened, appended, resolved, len(events)
 
 
@@ -439,15 +556,21 @@ def _open(
     scored = score_incident(
         context.graph, group.root, context.nodes, context.tier_of, context.policy
     )
-    page = route(group.root, context.nodes, context.registry)
+    page = route(group.root, context.nodes, context.registry, group.events, context.lineage)
     naive = naive_route(group.root, context.nodes, context.registry)
     previous = [i.incident_id for i in incidents if i.root == group.root]
+    # How many incidents each person is already handling, to spare a busy owner.
+    busy: dict[str, int] = {}
+    for other in incidents:
+        if other.merged_into is None and (other.resolved_at is None or other.resolved_at > at):
+            busy[other.paged] = busy.get(other.paged, 0) + 1
+    who = paged(page, busy, settings.incidents.paging.max_open_per_person)
     connection.execute(
         sql.SQL(
             "INSERT INTO {} (incident_id, seq, root, dataset, severity, score, root_tier, owner, "
             "team, naive_owner, naive_team, routed_via, opened_at, opened_by_run, "
-            "previous_incident_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-            "%s, %s)"
+            "previous_incident_id, paged) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+            "%s, %s, %s, %s, %s)"
         ).format(store.table(settings, "incidents")),
         [
             incident_id,
@@ -465,9 +588,10 @@ def _open(
             at,
             run_id,
             previous[-1] if previous else None,
+            who,
         ],
     )
-    return _Incident(incident_id, seq, group.root, page.owner, at, run_id, None, None, None)
+    return _Incident(incident_id, seq, group.root, page.owner, at, run_id, None, None, None, who)
 
 
 def _queue(
@@ -482,7 +606,7 @@ def _queue(
     connection.execute(
         sql.SQL(
             "INSERT INTO {} (incident_id, kind, run_id, recipient, team, severity, text, sent_at) "
-            "SELECT incident_id, %s, %s, owner, team, severity, %s, %s FROM {} "
+            "SELECT incident_id, %s, %s, coalesce(paged, owner), team, severity, %s, %s FROM {} "
             "WHERE incident_id = %s ON CONFLICT DO NOTHING"
         ).format(
             store.table(settings, "incident_notifications"), store.table(settings, "incidents")

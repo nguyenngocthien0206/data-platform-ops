@@ -10,19 +10,37 @@ The thresholds and the tier weights default to ``settings.yaml``; a team can
 set its own in an optional ``incidents.yaml`` next to its ownership registry
 (:class:`IncidentPolicy`), so the repository that owns the datasets also owns
 what counts as a SEV1 there.
+
+Lineage says how much an incident reaches, not when. Two things raise it a
+level later (``escalation``): staying at a severity longer than
+``escalation.after_hours`` allows, and reaching a team's datasets while one of
+the team's calendar windows is open (``windows`` in ``incidents.yaml``: a
+finance month-end close makes a broken revenue feed more urgent than the same
+fault mid-month). Severity only goes up.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import calendar
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Annotated
 
 import networkx as nx
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from platform_ops.common.config import Settings, Severity, SeveritySettings, Tier, TierWeights
+from platform_ops.common.config import (
+    SEVERITIES,
+    EscalationSettings,
+    Settings,
+    Severity,
+    SeveritySettings,
+    Tier,
+    TierWeights,
+)
 from platform_ops.metadata.lineage import Consumer, consumer_weight, downstream_consumers
 from platform_ops.metadata.manifest import Node
 
@@ -32,16 +50,35 @@ DEFAULT_TIER: Tier = "best_effort"
 POLICY_FILE = "incidents.yaml"
 
 
+class Window(BaseModel):
+    """A stretch of every month when a team's data matters more: its close, say."""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    team: str
+    # The window spans the month's last ``last_days`` and first ``first_days``.
+    last_days: Annotated[int, Field(ge=0)] = 0
+    first_days: Annotated[int, Field(ge=0)] = 0
+
+    def open_on(self, day: date) -> bool:
+        days_in_month = calendar.monthrange(day.year, day.month)[1]
+        return day.day <= self.first_days or day.day > days_in_month - self.last_days
+
+
 class _PolicyFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: SeveritySettings | None = None
     tier_weights: TierWeights | None = None
+    escalation: EscalationSettings | None = None
+    windows: list[Window] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class IncidentPolicy:
     severity: SeveritySettings
     tier_weights: TierWeights
+    escalation: EscalationSettings
+    windows: tuple[Window, ...] = ()
 
     @classmethod
     def load(cls, settings: Settings, registry_dir: Path | None = None) -> IncidentPolicy:
@@ -54,6 +91,8 @@ class IncidentPolicy:
         return cls(
             found.severity or settings.incidents.severity,
             found.tier_weights or settings.metadata.tier_weights,
+            found.escalation or settings.incidents.escalation,
+            tuple(found.windows),
         )
 
 
@@ -104,3 +143,25 @@ def score_incident(
     score = policy.severity.root_tier_multiplier * weights.weight(root_tier)
     score += consumer_weight(consumers)
     return Scored(score, severity_for(score, policy), root_tier, consumers)
+
+
+def raised(severity: Severity) -> Severity:
+    """One level up, SEV1 staying SEV1."""
+    return SEVERITIES[max(0, SEVERITIES.index(severity) - 1)]
+
+
+def overdue(severity: Severity, since: datetime, at: datetime, policy: IncidentPolicy) -> bool:
+    """Has an incident stayed at ``severity`` since ``since`` longer than the policy allows?"""
+    hours = policy.escalation.after_hours.get(severity)
+    return hours is not None and at - since >= timedelta(hours=hours)
+
+
+def open_windows(
+    consumers: Sequence[Consumer],
+    at: datetime,
+    policy: IncidentPolicy,
+    team_of: Callable[[str], str | None],
+) -> list[Window]:
+    """The calendar windows open at ``at`` for a team whose datasets the incident reaches."""
+    teams = {team_of(c.unique_id) for c in consumers}
+    return [w for w in policy.windows if w.team in teams and w.open_on(at.date())]

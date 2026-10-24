@@ -1,7 +1,9 @@
 # Dataset ownership registry: CODEOWNERS for data.
 #
 # Each rule globs on a dbt unique_id and names an owner, their team, and a tier
-# (critical | important | best_effort). The most specific matching rule wins:
+# (critical | important | best_effort), and optionally a backup on the same team,
+# paged instead when the owner is already busy with other incidents
+# (incidents.paging.max_open_per_person). The most specific matching rule wins:
 # the one with the most literal characters, then the fewest wildcards. Two rules
 # that tie are an error, not a coin toss. See docs/adr/0001.
 #
@@ -12,11 +14,12 @@
 datasets:
   # --- Data platform: raw sources, staging, intermediate --------------------
   # The platform team owns everything upstream of the marts. Most root causes
-  # surface here, so most incidents will route here too.
-  - {match: "source.company.raw.*", owner: priya, team: platform, tier: important}
-  - {match: "source.company.raw.orders", owner: priya, team: platform, tier: critical}
-  - {match: "source.company.raw.payments", owner: marco, team: platform, tier: critical}
-  - {match: "source.company.raw.customers", owner: priya, team: platform, tier: critical}
+  # surface here, so most incidents will route here too: priya owns most of
+  # the feeds, and lena backs her up.
+  - {match: "source.company.raw.*", owner: priya, team: platform, tier: important, backup: lena}
+  - {match: "source.company.raw.orders", owner: priya, team: platform, tier: critical, backup: lena}
+  - {match: "source.company.raw.payments", owner: marco, team: platform, tier: critical, backup: priya}
+  - {match: "source.company.raw.customers", owner: priya, team: platform, tier: critical, backup: lena}
   # Reference data maintained by hand, and the customer history snapshot.
   - {match: "seed.company.*", owner: lena, team: platform, tier: important}
   - {match: "snapshot.company.*", owner: priya, team: platform, tier: important}

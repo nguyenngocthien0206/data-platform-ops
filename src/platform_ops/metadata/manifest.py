@@ -31,9 +31,11 @@ class Node:
     package: str = ""
     schema: str = ""
     alias: str = ""
-    # For tests: the generated file name, and the model the test belongs to.
+    # For tests: the generated file name, the model the test belongs to, and
+    # the columns it checks (none for a test on the whole table).
     test_file: str = ""
     attached_node: str | None = None
+    test_columns: tuple[str, ...] = ()
     # For exposures: dbt's maturity label, which sets how often a dashboard refreshes.
     maturity: str | None = None
 
@@ -75,8 +77,19 @@ def _node_from(raw: dict[str, Any]) -> Node:
         alias=str(alias or ""),
         test_file=str(raw.get("path", "")).replace("\\", "/") if resource_type == "test" else "",
         attached_node=raw.get("attached_node"),
+        test_columns=_test_columns(raw) if resource_type == "test" else (),
         maturity=raw.get("maturity"),
     )
+
+
+def _test_columns(raw: dict[str, Any]) -> tuple[str, ...]:
+    """The columns a test checks: its column, or the columns of a combination."""
+    kwargs = (raw.get("test_metadata") or {}).get("kwargs") or {}
+    column = raw.get("column_name") or kwargs.get("column_name")
+    if column:
+        return (str(column),)
+    combination = kwargs.get("combination_of_columns") or ()
+    return tuple(str(c) for c in combination)
 
 
 def _read(path: Path) -> dict[str, Any]:

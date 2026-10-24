@@ -24,6 +24,7 @@ FAULT_TYPE_LABEL = {
     "schema_drop": "schema change (column dropped)",
     "schema_rename": "schema change (column renamed)",
     "volume_drop": "volume drop",
+    "loader_nulls": "loader writing NULLs (no test on the column)",
 }
 
 
@@ -81,7 +82,7 @@ def render(result: History, metrics: IncidentMetrics, days: int) -> str:
             short(i.root),
             i.severity,
             i.score,
-            i.owner,
+            i.handled_by,
             when(i.opened_at),
             when(i.acknowledged_at),
             when(i.fixed_at),
@@ -200,14 +201,16 @@ def render(result: History, metrics: IncidentMetrics, days: int) -> str:
         "",
         "## Routing accuracy",
         "",
-        "Graded against the owner of the faulted source. The rule pages the source owner when the "
-        "root is a staging model; the naive rule pages whoever owns the root node.",
+        "Graded against the owner of the faulted source, the person the rule chose (a backup "
+        "may answer for them when they are busy). The rule pages the source owner when the data "
+        "arrived broken: a staging root, or a root whose failing columns all come from one "
+        "source; the naive rule pages whoever owns the root node.",
         "",
         table(
             ["Rule", "Right person", "Right team"],
             [
                 (
-                    "Staging roots page the source owner",
+                    "Data that arrived broken pages the source owner",
                     pct(metrics.routing_person),
                     pct(metrics.routing_team),
                 ),
@@ -279,6 +282,32 @@ def render(result: History, metrics: IncidentMetrics, days: int) -> str:
     ]
     if metrics.unresolved:
         lines += ["Still open at the end of the window: " + ", ".join(metrics.unresolved), ""]
+    raised_rows = [
+        f"{i.incident_id} {before} to {after} on {when(at)} ({reason})"
+        for i in result.incidents
+        for at, before, after, reason in i.escalations
+    ]
+    if raised_rows:
+        lines += [
+            "Raised a level while open, by age or by a team's calendar: "
+            + "; ".join(raised_rows)
+            + ". The severity above is the last one.",
+            "",
+        ]
+    sharing: dict[str, list[str]] = {}
+    for incident in result.incidents:
+        for node in sorted(incident.shared):
+            sharing.setdefault(node, []).append(incident.incident_id)
+    if sharing:
+        lines += [
+            "Shared by several incidents, a failure below more than one broken root: "
+            + "; ".join(
+                f"{short(node)} ({', '.join(ids)})" for node, ids in sorted(sharing.items())
+            )
+            + ". Its checks count once, under one root; each incident still resolves on "
+            "its own root.",
+            "",
+        ]
     if result.merged:
         lines += [
             "Merged into another incident when a later invocation found the real root: "
@@ -298,8 +327,8 @@ def postmortem(incident: Incident, metrics: IncidentMetrics, events: Sequence[st
     tiers = ", ".join(f"{n} {tier}" for tier, n in sorted(by_tier.items()))
     timeline = [
         (when(truth.injected_at) if truth else "", "Fault enters the raw data"),
-        (when(incident.opened_at), f"Detected by the 02:00 run; {incident.owner} paged"),
-        (when(incident.acknowledged_at), f"Acknowledged by {incident.owner}"),
+        (when(incident.opened_at), f"Detected by the 02:00 run; {incident.handled_by} paged"),
+        (when(incident.acknowledged_at), f"Acknowledged by {incident.paged or incident.owner}"),
         (when(incident.fixed_at), "Fix landed: the raw table resynced from Postgres"),
         (when(incident.resolved_at) or "open", "Resolved: the next run found the root healthy"),
     ]

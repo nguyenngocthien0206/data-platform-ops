@@ -208,6 +208,18 @@ class LifecycleSettings(_Strict):
         return self
 
 
+class EscalationSettings(_Strict):
+    # An incident that stays at a severity this long is raised a level (SEV1 is
+    # the top, so it has no entry).
+    after_hours: dict[Severity, Annotated[int, Field(gt=0)]]
+
+
+class PagingSettings(_Strict):
+    # An owner who already has this many incidents open is busy: the next page
+    # goes to the rule's backup, when it names one.
+    max_open_per_person: Annotated[int, Field(ge=1)]
+
+
 class IncidentSettings(_Strict):
     # Days into the production weeks on which faults happen, two at a time
     # (simulation.faults.CATALOGUE, in order); days past the window are dropped.
@@ -215,6 +227,8 @@ class IncidentSettings(_Strict):
     fault_hour: Annotated[int, Field(ge=0, le=23)]
     severity: SeveritySettings
     lifecycle: LifecycleSettings
+    paging: PagingSettings
+    escalation: EscalationSettings
 
 
 # The legacy engine whose policy decides what counts as equal (ADR 0006).
