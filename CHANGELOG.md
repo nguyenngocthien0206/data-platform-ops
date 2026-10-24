@@ -21,6 +21,12 @@ All notable changes to data-platform-ops. The format follows [Keep a Changelog](
 ### Added
 
 - **Dashboard cost by viewer.** People open the company's dashboards on working days, recorded like Metabase's view log (`ops.dashboard_views`). Each month, a dashboard's refreshes are shared by the teams that opened it, in proportion to their views (`attribution.viewer_weights`, `split`, exact to 12 decimals); a dashboard nobody opened that month is paid by its owner. The cost report gains "Dashboards and who reads them", with each dashboard's views by team, the share its owner pays, and the dashboards nobody opened.
+- **A failure below two broken roots is shared by both incidents**, instead of going to one of them by tie-break (`incident_shared_nodes`).
+- **Data that arrived broken pages the source owner at any layer**, through column lineage: when every failing check on a model is a test on columns traced to one source. The desk reads the columns from dbt's `catalog.json` next to the manifest, or from the warehouse in the company.
+- **A busy owner's next page goes to a backup** named on the ownership rule (`backup`, on the same team), when the owner already has `incidents.paging.max_open_per_person` incidents open; the person paged answers.
+- **Severity goes up while an incident stays open**, by age (`incidents.escalation.after_hours`) and by a team's calendar window in `config/incidents.yaml` (finance's month-end close), each raise recorded and sent.
+- **Wrong values no test checks are profiled**: a `column_profile` test on every continuous feed fails on a rise in NULLs beyond chance, or a burst of unseen values in a text column. A ninth fault (F9, NULLs in `web_sessions.device`) is caught by it alone.
+- **The two feed tests turn off ClickHouse's query condition cache**, which made their reads, and the bill's shares, depend on which test ran first.
 
 ### Changed
 
@@ -33,6 +39,8 @@ All notable changes to data-platform-ops. The format follows [Keep a Changelog](
 - **A production night runs five invocations:** source freshness, the sources' tests, run, snapshot and the other tests. `CompanyDesk` returns, with each fix, the dbt invocations to rerun (`Fix.commands`), and `company run` reports how many reruns it ran.
 - **The incident and cost numbers moved:** 39 failing checks for the same 8 incidents and pages; the reruns and the volume tests add 968 priced queries to dbt's share of the bill, which stays $1,197.24.
 - **`query_attribution` has one row per query and paying team, with its `share`**; `workload.dashboard_views` (`own_team_percent`, `other_team_percent`) is required in the settings. A view runs no query, so the bill, the query log and ClickHouse do not change; the per-team showback does.
+- **The incident store is at version 2**: `incident_shared_nodes`, `incident_escalations` and `incidents.paged`, migrated on the first ingest. `incidents.paging` and `incidents.escalation` are required in the settings; `ownership.yaml` rules may name a `backup`.
+- **Nine faults in operation**, on five days (`incidents.fault_days: [2, 5, 9, 14, 17]`), and the incident numbers moved accordingly.
 
 ## [2.0.0] - 2026-10-15
 

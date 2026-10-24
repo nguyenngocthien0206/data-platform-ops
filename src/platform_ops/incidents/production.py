@@ -24,11 +24,14 @@ from pathlib import Path
 from psycopg import sql
 
 from platform_ops.common.config import Settings
+from platform_ops.common.servers import clickhouse_client
 from platform_ops.incidents import store
 from platform_ops.incidents.desk import Context, ingest_target
 from platform_ops.incidents.lifecycle import respond
+from platform_ops.metadata.column_lineage import clickhouse_catalogue
 from platform_ops.metadata.lineage import upstream
 from platform_ops.metadata.manifest import Node
+from platform_ops.simulation.access import DBT_LAYERS
 from platform_ops.simulation.company import Fix
 
 
@@ -45,7 +48,17 @@ class CompanyDesk:
             store.reset(self.settings)
             self._started = True
         if self._context is None:
-            self._context = Context.load(self.settings, target / "manifest.json")
+            # The company's warehouse is at hand, so routing can follow column lineage.
+            client = clickhouse_client(self.settings)
+            try:
+                company = self.settings.company
+                databases = [company.name(d) for d in (company.raw_database, *DBT_LAYERS)]
+                catalogue = clickhouse_catalogue(client, databases)
+            finally:
+                client.close()
+            self._context = Context.load(
+                self.settings, target / "manifest.json", catalogue=catalogue
+            )
         result = ingest_target(self.settings, target, run_id, at=at, context=self._context)
         for incident_id in result.opened:
             self._respond(incident_id)
@@ -61,20 +74,22 @@ class CompanyDesk:
         with store.transaction(settings) as connection:
             row = connection.execute(
                 sql.SQL(
-                    "SELECT root, owner, severity, opened_at FROM {} WHERE incident_id = %s"
+                    "SELECT root, coalesce(paged, owner), severity, opened_at FROM {} "
+                    "WHERE incident_id = %s"
                 ).format(store.table(settings, "incidents")),
                 [incident_id],
             ).fetchone()
             assert row is not None
-            root, owner, severity, opened_at = row
-            # How many other incidents the owner already has open slows them down.
+            # The person paged answers: the owner, or the backup when the owner was busy.
+            root, person, severity, opened_at = row
+            # How many other incidents that person already has open slows them down.
             (busy,) = connection.execute(
                 sql.SQL(
-                    "SELECT count(*) FROM {} WHERE owner = %s AND incident_id <> %s "
-                    "AND merged_into IS NULL AND opened_at <= %s "
+                    "SELECT count(*) FROM {} WHERE coalesce(paged, owner) = %s "
+                    "AND incident_id <> %s AND merged_into IS NULL AND opened_at <= %s "
                     "AND (resolved_at IS NULL OR resolved_at > %s)"
                 ).format(store.table(settings, "incidents")),
-                [owner, incident_id, opened_at, opened_at],
+                [person, incident_id, opened_at, opened_at],
             ).fetchone() or (0,)
             response = respond(
                 incident_id,

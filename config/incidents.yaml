@@ -1,0 +1,15 @@
+# The incident desk's policy, next to the ownership registry, so the repository
+# that owns the datasets also owns what counts as urgent there. Anything left
+# out comes from `incidents:` in config/settings.yaml.
+#
+# Validated by platform_ops.incidents.severity.IncidentPolicy.
+
+# Calendar windows: while one is open, an incident that reaches the team's
+# datasets is raised a level, once per window. A broken revenue feed during
+# finance's month-end close blocks the books; the same fault mid-month waits a
+# morning.
+windows:
+  - name: finance month-end close
+    team: finance
+    last_days: 2
+    first_days: 3

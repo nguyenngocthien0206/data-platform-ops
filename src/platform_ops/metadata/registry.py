@@ -59,6 +59,9 @@ class DatasetRule(_Strict):
     owner: str
     team: str
     tier: Tier
+    # Who is paged instead when the owner is already busy with other incidents:
+    # someone else on the same team.
+    backup: str | None = None
 
 
 class OwnershipFile(_Strict):
@@ -154,7 +157,22 @@ class Registry:
                         f"who is not a member of team '{rule.team}'",
                     )
                 )
+            elif rule.backup is not None and (
+                rule.backup not in team.members or rule.backup == rule.owner
+            ):
+                found.append(
+                    (
+                        rule,
+                        f"rule '{rule.match}' names backup '{rule.backup}', "
+                        f"who is not another member of team '{rule.team}'",
+                    )
+                )
         return found
+
+    def team_of_dataset(self, unique_id: str) -> str | None:
+        """The team that owns a dataset, by its most specific rule."""
+        rule = self.resolve(unique_id).rule
+        return rule.team if rule is not None else None
 
     def team_of(self, person: str) -> str | None:
         """The team a person belongs to, used later to attribute ad hoc queries."""

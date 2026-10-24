@@ -40,6 +40,19 @@ class Incident:
     run_ids: list[str] = field(default_factory=list)
     checks: int = 0
     skipped: set[str] = field(default_factory=set)
+    # Failed nodes this incident shares with another incident's root above them.
+    shared: set[str] = field(default_factory=set)
+    # Who was paged: the owner, or the rule's backup when the owner was busy.
+    paged: str = ""
+    # Each raise: (at, from severity, to severity, reason), in order.
+    escalations: list[tuple[datetime, str, str, str]] = field(default_factory=list)
+
+    @property
+    def handled_by(self) -> str:
+        """The person paged, and on whose behalf when it was the backup."""
+        if self.paged and self.paged != self.owner:
+            return f"{self.paged} (backup for {self.owner})"
+        return self.owner
 
 
 @dataclass(frozen=True)
@@ -77,7 +90,7 @@ def load_history(settings: Settings, context: Context) -> History:
             "incidents",
             "SELECT incident_id, root, dataset, severity, score, root_tier, owner, team, "
             "naive_owner, naive_team, routed_via, opened_at, resolved_at, previous_incident_id, "
-            "merged_into FROM {} ORDER BY seq",
+            "merged_into, coalesce(paged, owner) FROM {} ORDER BY seq",
         )
         responses = {
             str(r[0]): (r[1], r[2])
@@ -115,6 +128,19 @@ def load_history(settings: Settings, context: Context) -> History:
             "SELECT run_id, min(detected_at), count(*), sum(checks_run) FROM {} "
             "GROUP BY run_id ORDER BY min(detected_at), run_id",
         )
+        raises = _rows(
+            c,
+            settings,
+            "incident_escalations",
+            "SELECT incident_id, at, from_severity, to_severity, reason FROM {} "
+            "ORDER BY at, incident_id, reason",
+        )
+        shared = _rows(
+            c,
+            settings,
+            "incident_shared_nodes",
+            "SELECT incident_id, node FROM {} ORDER BY incident_id, node",
+        )
         notes = _rows(
             c,
             settings,
@@ -128,7 +154,7 @@ def load_history(settings: Settings, context: Context) -> History:
     by_id: dict[str, Incident] = {}
     for row in incidents:
         (incident_id, root, dataset, severity, score, tier, owner, team, n_owner, n_team, via,
-         opened, resolved, previous, merged) = row  # fmt: skip
+         opened, resolved, previous, merged, who) = row  # fmt: skip
         if merged is not None:
             history.merged.append(str(incident_id))
             continue
@@ -139,7 +165,7 @@ def load_history(settings: Settings, context: Context) -> History:
         incident = Incident(
             str(incident_id), str(root), str(dataset), severity, int(score), tier,
             str(owner), str(team), str(n_owner), str(n_team), str(via),
-            opened, resolved, previous, ack, fixed, scored.consumers,
+            opened, resolved, previous, ack, fixed, scored.consumers, paged=str(who),
         )  # fmt: skip
         by_id[incident.incident_id] = incident
         history.incidents.append(incident)
@@ -150,6 +176,14 @@ def load_history(settings: Settings, context: Context) -> History:
             linked_to.checks += int(checks)
             below = downstream(context.graph, linked_to.dataset) | {linked_to.dataset}
             linked_to.skipped |= skipped_by_run[str(run_id)] & below
+    for incident_id, at, before, after, reason in raises:
+        raised_one = by_id.get(str(incident_id))
+        if raised_one is not None:
+            raised_one.escalations.append((at, str(before), str(after), str(reason)))
+    for incident_id, node in shared:
+        sharing = by_id.get(str(incident_id))
+        if sharing is not None:
+            sharing.shared.add(str(node))
     for run_id, check_id, kind, subject, status, message, detected_at, incident_id in events:
         event = CheckEvent(
             str(run_id),

@@ -13,7 +13,7 @@ import json
 import shutil
 import threading
 from collections.abc import Callable, Iterator
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, ClassVar
@@ -26,6 +26,7 @@ from platform_ops.common.servers import connect_postgres
 from platform_ops.incidents import store
 from platform_ops.incidents.desk import Context, ingest_target
 from platform_ops.incidents.notify import SlackChannel
+from platform_ops.incidents.severity import raised
 
 pytestmark = pytest.mark.integration
 
@@ -220,6 +221,28 @@ def test_a_rerun_failing_below_a_root_it_did_not_check_joins_that_incident(
     )
     later = ingest_target(settings, checked, "night-2", at=AT.replace(day=3), context=context)
     assert later.opened == ("INC-002",) and later.resolved == ("INC-001",)
+
+
+def test_an_incident_still_failing_after_its_time_is_raised_once(
+    desk: tuple[Settings, Context], tmp_path: Path
+) -> None:
+    settings, context = desk
+    failing = ("run_results.json", _invocation("e-1", (STG_ORDERS, "success"), (NOT_NULL, "fail")))
+    ingest_target(settings, _target(tmp_path, "e1", failing), "night-1", at=AT, context=context)
+    ((before,),) = _rows(settings, "incidents", "SELECT severity FROM {}")
+    hours = settings.incidents.escalation.after_hours[before]
+    again = ("run_results.json", _invocation("e-2", (STG_ORDERS, "success"), (NOT_NULL, "fail")))
+    later = AT + timedelta(hours=hours)
+    ingest_target(settings, _target(tmp_path, "e2", again), "night-2", at=later, context=context)
+    ((after,),) = _rows(settings, "incidents", "SELECT severity FROM {}")
+    assert before != "SEV1" and after == raised(before)
+    raises = _rows(settings, "incident_escalations", "SELECT from_severity, to_severity FROM {}")
+    assert raises == [(before, after)]
+    kinds = _rows(settings, "incident_notifications", "SELECT kind FROM {} ORDER BY sent_at, kind")
+    assert ("escalation",) in kinds
+    # The same run ingested again raises nothing more.
+    ingest_target(settings, _target(tmp_path, "e3", again), "night-2", at=later, context=context)
+    assert len(_rows(settings, "incident_escalations", "SELECT * FROM {}")) == 1
 
 
 def test_concurrent_ingests_of_one_run_end_as_one_after_the_other(

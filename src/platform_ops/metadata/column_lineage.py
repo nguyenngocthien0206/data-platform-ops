@@ -184,4 +184,36 @@ def _fold_row_shaping(tree: exp.Query) -> None:
                 )
 
 
-__all__ = ["Catalogue", "ColumnLineage", "LineageUnavailable", "RawColumn"]
+def catalogue_from_dbt(catalog: Mapping[str, Any]) -> dict[str, dict[str, dict[str, str]]]:
+    """The warehouse's columns from dbt's ``catalog.json`` (``dbt docs generate``), any adapter."""
+    found: dict[str, dict[str, dict[str, str]]] = {}
+    for section in ("nodes", "sources"):
+        for entry in (catalog.get(section) or {}).values():
+            meta = entry.get("metadata") or {}
+            columns = {
+                str(name): str((column or {}).get("type") or "")
+                for name, column in (entry.get("columns") or {}).items()
+            }
+            found.setdefault(str(meta.get("schema", "")), {})[str(meta.get("name", ""))] = columns
+    return found
+
+
+def clickhouse_catalogue(client: Any, databases: list[str]) -> dict[str, dict[str, dict[str, str]]]:
+    """The columns of every table and view in ``databases``, from ClickHouse's catalogue."""
+    found: dict[str, dict[str, dict[str, str]]] = {}
+    for database, table, column, kind in client.query(
+        "SELECT database, table, name, type FROM system.columns WHERE database IN %(dbs)s",
+        parameters={"dbs": databases},
+    ).result_rows:
+        found.setdefault(database, {}).setdefault(table, {})[column] = kind
+    return found
+
+
+__all__ = [
+    "Catalogue",
+    "ColumnLineage",
+    "LineageUnavailable",
+    "RawColumn",
+    "catalogue_from_dbt",
+    "clickhouse_catalogue",
+]

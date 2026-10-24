@@ -20,7 +20,7 @@ sources:
       # volume test fails the first night it delivers far fewer rows.
       - name: customers
         description: Customer accounts, including some that registered twice.
-        data_tests: [recent_volume]
+        data_tests: [recent_volume, column_profile]
       - name: products
         description: >
           Product catalogue. Loaded as a snapshot and rarely changes, so a
@@ -29,16 +29,16 @@ sources:
           freshness: null
       - name: orders
         description: One row per order.
-        data_tests: [recent_volume]
+        data_tests: [recent_volume, column_profile]
       - name: order_items
         description: One row per order line.
-        data_tests: [recent_volume]
+        data_tests: [recent_volume, column_profile]
       - name: payments
         description: Payment events. Some arrive days after the payment happened.
-        data_tests: [recent_volume]
+        data_tests: [recent_volume, column_profile]
       - name: web_sessions
         description: Clickstream sessions, mostly anonymous.
-        data_tests: [recent_volume]
+        data_tests: [recent_volume, column_profile]
       - name: marketing_campaigns
         description: >
           Campaign setup records, created a few days before launch. Weeks can
@@ -47,7 +47,7 @@ sources:
           freshness: null
       - name: marketing_spend
         description: Daily ad spend per campaign, delivered in a morning batch.
-        data_tests: [recent_volume]
+        data_tests: [recent_volume, column_profile]
       - name: support_tickets
         description: >
           Support tickets, exported when opened or when closed. They come in

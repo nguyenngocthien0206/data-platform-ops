@@ -531,7 +531,12 @@ def run_company(
                 summary.rows_ingested += sum(ingestion.backfill(run_at).values())
             else:
                 stopped = {table for table, f in active.items() if f.stops_loader}
-                summary.rows_ingested += sum(ingestion.load(run_at, skip=stopped).values())
+                nulled = {
+                    (table, f.column) for table, f in active.items() if f.loads_nulls and f.column
+                }
+                summary.rows_ingested += sum(
+                    ingestion.load(run_at, skip=stopped, nulled=nulled).values()
+                )
             fault = timeline.faults.get(day_index)
             if fault is not None:
                 planted = plant(settings, admin, fault)

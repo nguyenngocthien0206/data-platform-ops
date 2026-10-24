@@ -75,6 +75,8 @@ SETTINGS_YAML = textwrap.dedent(
         ack_minutes: {SEV1: 20, SEV2: 90, SEV3: 480}
         resolve_hours: {SEV1: 6, SEV2: 18, SEV3: 40}
         load_factor: 0.5
+      paging: {max_open_per_person: 1}
+      escalation: {after_hours: {SEV2: 24, SEV3: 48}}
     reconcile:
       workers: 4
       leaf_width: 256

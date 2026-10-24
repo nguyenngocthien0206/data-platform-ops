@@ -21,7 +21,11 @@ The tables:
 - ``incident_notifications``: every page, update and resolution, and how each
   was delivered;
 - ``incident_responses``: when an owner acknowledged and fixed an incident
-  (simulated in the company, entered by people elsewhere).
+  (simulated in the company, entered by people elsewhere);
+- ``incident_shared_nodes``: failed nodes below more than one root, linked to
+  each incident whose root is above them (version 2);
+- ``incident_escalations``: every time an incident was raised a level, and why
+  (version 2).
 """
 
 from __future__ import annotations
@@ -48,6 +52,8 @@ TABLES = (
     "incident_run_links",
     "incident_notifications",
     "incident_responses",
+    "incident_shared_nodes",
+    "incident_escalations",
 )
 
 # Version -> the statements that bring the store from the version before to it.
@@ -92,6 +98,22 @@ MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             """CREATE TABLE {s}.incident_responses (
                 incident_id text PRIMARY KEY, acknowledged_at timestamp,
                 fixed_at timestamp)""",
+        ),
+    ),
+    (
+        2,
+        (
+            # A failed node below several roots, shared by each of their incidents.
+            """CREATE TABLE {s}.incident_shared_nodes (
+                incident_id text NOT NULL, run_id text NOT NULL, node text NOT NULL,
+                PRIMARY KEY (incident_id, run_id, node))""",
+            # Who was paged: the owner, or the rule's backup when the owner was busy.
+            "ALTER TABLE {s}.incidents ADD COLUMN paged text",
+            # Every time an incident was raised a level, and why.
+            """CREATE TABLE {s}.incident_escalations (
+                incident_id text NOT NULL, run_id text NOT NULL, at timestamp NOT NULL,
+                from_severity text NOT NULL, to_severity text NOT NULL, reason text NOT NULL,
+                PRIMARY KEY (incident_id, reason))""",
         ),
     ),
 )

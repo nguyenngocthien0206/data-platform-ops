@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,10 +12,18 @@ import pytest
 from platform_ops.common.config import SEVERITIES, Settings, Severity, Tier
 from platform_ops.incidents import ingest, lifecycle, notify
 from platform_ops.incidents.desk import _healthy
+from platform_ops.incidents.grouping import group_failures
 from platform_ops.incidents.production import rerun_commands
-from platform_ops.incidents.routing import naive_route, route
-from platform_ops.incidents.severity import IncidentPolicy, score_incident, severity_for
-from platform_ops.metadata.lineage import build_graph
+from platform_ops.incidents.routing import Route, naive_route, paged, route
+from platform_ops.incidents.severity import (
+    IncidentPolicy,
+    open_windows,
+    overdue,
+    raised,
+    score_incident,
+    severity_for,
+)
+from platform_ops.metadata.lineage import Consumer, build_graph
 from platform_ops.metadata.manifest import Node
 from platform_ops.metadata.registry import DatasetRule, Registry, Team
 
@@ -100,6 +108,27 @@ def test_a_test_across_two_models_is_its_own_subject() -> None:
     nodes = _nodes()
     assert ingest.test_subject(nodes["test.company.not_null_stg_orders_id"]) == STG
     assert ingest.test_subject(nodes[REL]) == REL
+
+
+def test_a_node_below_two_broken_roots_is_shared_by_both_incidents() -> None:
+    """Orders and tickets break the same night; a mart reads both."""
+    tickets_src, tickets_stg = "source.company.raw.tickets", "model.company.stg_tickets"
+    both = "model.company.sales_fct_orders_and_tickets"
+    nodes = {
+        **_nodes(),
+        tickets_src: Node(tickets_src, "source", "tickets"),
+        tickets_stg: Node(tickets_stg, "model", "stg_tickets", depends_on=(tickets_src,)),
+        both: Node(both, "model", "sales_fct_orders_and_tickets", depends_on=(STG, tickets_stg)),
+    }
+    events = [
+        ingest.CheckEvent("r1", f"t-{node}", "model", node, "error", "", AT)
+        for node in (STG, tickets_stg, both)
+    ]
+    groups = {g.root: g for g in group_failures(build_graph(nodes), events)}
+    assert set(groups) == {STG, tickets_stg}
+    # Its checks are counted once, under the tie-break's root; both incidents show it.
+    assert both in groups[STG].failed_nodes and both not in groups[tickets_stg].failed_nodes
+    assert groups[STG].shared == groups[tickets_stg].shared == (both,)
 
 
 VOLUME = "test.company.source_recent_volume_raw_orders_"
@@ -250,6 +279,114 @@ def test_other_roots_page_their_own_owner() -> None:
     assert route(MART, nodes, registry).owner == "sam"
     assert route(SRC, nodes, registry).owner == "priya"
     assert route(REL, nodes, registry).owner == "sam"
+
+
+MART_TEST = "test.company.not_null_sales_fct_orders_amount"
+
+
+def _lineage(columns: dict[str, set[tuple[str, str]]]) -> Any:
+    """A column lineage that knows one mart: its columns and the raw columns each reads."""
+    return SimpleNamespace(
+        raw_source="source.company.raw.",
+        model=lambda uid: {c: frozenset(r) for c, r in columns.items()},
+    )
+
+
+def _mart_test(column: str | None) -> dict[str, Node]:
+    test = Node(
+        MART_TEST,
+        "test",
+        "not_null_sales_fct_orders_amount",
+        depends_on=(MART,),
+        attached_node=MART,
+        test_columns=(column,) if column else (),
+    )
+    return {**_nodes(), MART_TEST: test}
+
+
+def _failing(check_id: str, kind: str = "test") -> list[ingest.CheckEvent]:
+    return [ingest.CheckEvent("r1", check_id, kind, MART, "fail", "", AT)]  # type: ignore[arg-type]
+
+
+def test_a_mart_whose_failing_column_comes_from_one_source_pages_its_owner() -> None:
+    nodes, registry = _mart_test("amount"), _registry()
+    one = _lineage({"amount": {("orders", "amount"), ("orders", "status")}})
+    page = route(MART, nodes, registry, _failing(MART_TEST), one)
+    # The data arrived broken: the owner of raw.orders, not the mart's owner.
+    assert (page.owner, page.routed_via) == ("priya", SRC)
+    assert naive_route(MART, nodes, registry).owner == "sam"
+
+
+def test_a_mart_keeps_its_owner_when_the_cause_could_be_its_own() -> None:
+    registry = _registry()
+    two = _lineage({"amount": {("orders", "amount"), ("customers", "country")}})
+    one = _lineage({"amount": {("orders", "amount")}})
+    # A column built from two sources, a test on the whole table, a model that
+    # failed to build, or no lineage to go by: the model's owner.
+    assert route(MART, _mart_test("amount"), registry, _failing(MART_TEST), two).owner == "sam"
+    assert route(MART, _mart_test(None), registry, _failing(MART_TEST), one).owner == "sam"
+    assert route(MART, _mart_test("amount"), registry, _failing(MART, "model"), one).owner == "sam"
+    assert route(MART, _mart_test("amount"), registry, _failing(MART_TEST)).owner == "sam"
+
+
+def test_a_busy_owner_hands_the_page_to_the_backup() -> None:
+    page = Route("priya", "platform", SRC, backup="marco")
+    assert paged(page, {"priya": 1}, max_open_per_person=2) == "priya"
+    assert paged(page, {"priya": 2}, max_open_per_person=2) == "marco"
+    # No backup named: the owner, however busy.
+    assert paged(Route("priya", "platform", SRC), {"priya": 9}, 2) == "priya"
+
+
+def test_a_backup_must_be_another_member_of_the_team() -> None:
+    teams = _registry().teams
+    rules = (
+        DatasetRule(match="source.company.raw.*", owner="priya", team="platform", tier="critical",
+                    backup="marco"),
+        DatasetRule(match="model.company.stg_*", owner="marco", team="platform", tier="important",
+                    backup="sam"),
+        DatasetRule(match="model.company.sales_*", owner="sam", team="sales", tier="critical",
+                    backup="sam"),
+    )  # fmt: skip
+    problems = Registry(teams=teams, rules=rules).problems()
+    assert problems == [
+        "rule 'model.company.stg_*' names backup 'sam', who is not another member of team "
+        "'platform'",
+        "rule 'model.company.sales_*' names backup 'sam', who is not another member of team "
+        "'sales'",
+    ]
+
+
+def _policy(repo_settings: Settings) -> IncidentPolicy:
+    return IncidentPolicy.load(repo_settings)
+
+
+def test_an_incident_left_too_long_is_overdue_for_a_raise(repo_settings: Settings) -> None:
+    policy = _policy(repo_settings)
+    assert raised("SEV3") == "SEV2" and raised("SEV2") == "SEV1" and raised("SEV1") == "SEV1"
+    assert not overdue("SEV3", AT, AT + timedelta(hours=47), policy)
+    assert overdue("SEV3", AT, AT + timedelta(hours=48), policy)
+    assert overdue("SEV2", AT, AT + timedelta(hours=24), policy)
+    # SEV1 is the top: it is never overdue.
+    assert not overdue("SEV1", AT, AT + timedelta(days=30), policy)
+
+
+def test_finance_close_raises_what_reaches_finance_and_only_then(repo_settings: Settings) -> None:
+    policy = _policy(repo_settings)
+    (close,) = policy.windows
+    assert close.team == "finance"
+    assert close.open_on(date(2026, 4, 29)) and close.open_on(date(2026, 5, 3))
+    assert not close.open_on(date(2026, 4, 28)) and not close.open_on(date(2026, 5, 4))
+    teams = {"model.company.finance_fct_revenue": "finance", MART: "sales"}
+    finance = [lineage_consumer("model.company.finance_fct_revenue")]
+    sales = [lineage_consumer(MART)]
+    month_end = datetime(2026, 4, 30, 2)
+    assert open_windows(finance, month_end, policy, teams.get) == [close]
+    assert open_windows(sales, month_end, policy, teams.get) == []
+    assert open_windows(finance, datetime(2026, 4, 15, 2), policy, teams.get) == []
+
+
+def lineage_consumer(unique_id: str) -> Consumer:
+    return Consumer(unique_id, "model", "critical", 3)
 
 
 # -- lifecycle -------------------------------------------------------------------------

@@ -42,7 +42,12 @@ from platform_ops.common.logging import get_logger
 from platform_ops.common.servers import clickhouse_client, connect_postgres
 from platform_ops.common.store import open_store, replace_ops_table
 from platform_ops.common.tagging import Tag
-from platform_ops.metadata.column_lineage import ColumnLineage, LineageUnavailable, RawColumn
+from platform_ops.metadata.column_lineage import (
+    ColumnLineage,
+    LineageUnavailable,
+    RawColumn,
+    clickhouse_catalogue,
+)
 from platform_ops.reconcile.asof import freeze_reports
 from platform_ops.reconcile.canonical import Rule, rules_for
 from platform_ops.reconcile.classify import classify
@@ -293,12 +298,7 @@ class ParallelRun:
         """Each report's column lineage, from tonight's compiled SQL and catalogue."""
         company = self.settings.company
         databases = [company.name(d) for d in (company.raw_database, *DBT_LAYERS)]
-        catalogue: dict[str, dict[str, dict[str, str]]] = {}
-        for database, table, column, kind in client.query(
-            "SELECT database, table, name, type FROM system.columns WHERE database IN %(dbs)s",
-            parameters={"dbs": databases},
-        ).result_rows:
-            catalogue.setdefault(database, {}).setdefault(table, {})[column] = kind
+        catalogue = clickhouse_catalogue(client, databases)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         project = manifest["metadata"]["project_name"]
         traced = ColumnLineage(manifest, manifest_path.parent / "compiled" / project, catalogue)

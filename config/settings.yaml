@@ -138,8 +138,9 @@ workload:
 
 incidents:
   # Faults happen in operation, during the production weeks after the parallel
-  # run (company.production_weeks): two on each of these days into production.
-  fault_days: [2, 5, 9, 14]
+  # run (company.production_weeks): two on each of these days into production,
+  # and the ninth, a loader writing NULLs into a column no test checks, alone.
+  fault_days: [2, 5, 9, 14, 17]
   # Faults happen during the working day; the next 02:00 run is the first
   # chance to catch them.
   fault_hour: 10
@@ -155,6 +156,16 @@ incidents:
     ack_minutes: {SEV1: 20, SEV2: 90, SEV3: 480}
     resolve_hours: {SEV1: 6, SEV2: 18, SEV3: 40}
     load_factor: 0.5
+  # An owner with this many incidents already open is busy, and the page goes
+  # to the backup the ownership rule names (config/ownership.yaml): one person
+  # works one incident at a time, the next goes to someone free.
+  paging:
+    max_open_per_person: 1
+  # An incident that stays at a severity this long is raised a level, and the
+  # person paged is told. A team's calendar (month-end close) is in
+  # config/incidents.yaml, next to the registry.
+  escalation:
+    after_hours: {SEV2: 24, SEV3: 48}
 
 reconcile:
   # The parallel run's nightly reconciliation (Phase 12, ADR 0014): the
