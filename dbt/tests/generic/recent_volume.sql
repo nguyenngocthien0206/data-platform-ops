@@ -64,4 +64,8 @@ from (
     from filled
 )
 where usual >= {{ min_usual }} and today < {{ min_share }} * usual
+-- ClickHouse's query condition cache remembers which granules a filter let
+-- through, and this test and its sibling share the filter on the clock: with it
+-- on, what one reads depends on which ran first. The cost report must not.
+settings use_query_condition_cache = 0
 {% endtest %}

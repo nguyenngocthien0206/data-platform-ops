@@ -194,27 +194,39 @@ class Ingestion:
         return {str(name): until for name, until in rows}
 
     def load(
-        self, until: datetime, *, full: bool = False, skip: Collection[str] = ()
+        self,
+        until: datetime,
+        *,
+        full: bool = False,
+        skip: Collection[str] = (),
+        nulled: Collection[tuple[str, str]] = (),
     ) -> dict[str, int]:
         """Pull every table up to ``until`` from its watermark, minus the overlap, as ``loader``.
 
         ``full`` ignores the watermarks and reads everything up to ``until``.
         ``skip`` names tables the loader cannot load tonight (a stopped feed, a
         changed raw table): their watermark stays put, so the first load after
-        the fix catches up on everything they missed.
+        the fix catches up on everything they missed. ``nulled`` names
+        (table, column) pairs the loader writes as NULL tonight, a fault in
+        operation that breaks one field and nothing else.
         """
         marks = {} if full else self.watermarks()
         tables = [t for t in raw_data.TABLES if t not in skip]
         loader = clickhouse_client(self.settings, "loader")
         try:
-            moved, records = self._pull(loader, marks, until, tables)
+            moved, records = self._pull(loader, marks, until, tables, nulled)
         finally:
             loader.close()
         self._record(records)
         return moved
 
     def _pull(
-        self, loader: Any, marks: dict[str, datetime], until: datetime, tables: Sequence[str]
+        self,
+        loader: Any,
+        marks: dict[str, datetime],
+        until: datetime,
+        tables: Sequence[str],
+        nulled: Collection[tuple[str, str]] = (),
     ) -> tuple[dict[str, int], list[tuple[Any, ...]]]:
         pg = postgres_params(self.settings)
         schema = self.settings.company.name(self.settings.company.legacy_schema)
@@ -226,7 +238,9 @@ class Ingestion:
             since = None if mark is None else mark - self.overlap
             names = [name for name, _ in raw_columns(table) if name != LOADED_AT]
             selected = ", ".join(f"`{n}`" for n in names)
-            read = ", ".join(self._expression(table, n) for n in names)
+            read = ", ".join(
+                "NULL" if (table, n) in nulled else self._expression(table, n) for n in names
+            )
             where = f"{UPDATED_AT} <= {_ts(until)}"
             if since is not None:
                 where = f"{UPDATED_AT} > {_ts(since)} AND {where}"

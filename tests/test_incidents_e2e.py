@@ -152,3 +152,23 @@ def test_production_nights_ran_every_invocation(company_warehouse: Settings) -> 
     reruns = {run_id: kinds for run_id, _, kinds in runs if run_id.startswith("rerun-")}
     assert len(reruns) == 4 and len(runs) == len(nights) + len(reruns)
     assert set(reruns.values()) <= {"run_results", "run_results,sources"}
+
+
+def test_triage_shares_a_node_two_faults_break_and_raises_what_stays_open(
+    company_warehouse: Settings,
+) -> None:
+    """F1 and F2 land the same day, and a support model reads both orders and tickets."""
+    shared = _rows(
+        company_warehouse,
+        store.table(company_warehouse, "incident_shared_nodes"),
+        "SELECT node, count(DISTINCT incident_id) FROM {} GROUP BY node ORDER BY node",
+    )
+    assert shared and all(incidents >= 2 for _, incidents in shared)
+    raised = _rows(
+        company_warehouse,
+        store.table(company_warehouse, "incident_escalations"),
+        "SELECT from_severity, to_severity, reason FROM {} ORDER BY at",
+    )
+    assert raised, "an incident left open past its severity's hours is raised"
+    assert all(reason.startswith("open ") for *_, reason in raised)
+    # Nothing in the window is a finance close: the suite's production week is mid-January.

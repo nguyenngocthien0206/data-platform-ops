@@ -39,11 +39,15 @@ FaultType = Literal[
     "schema_drop",
     "schema_rename",
     "volume_drop",
+    "loader_nulls",
 ]
 
 # Faults that stop the loader for their table until the fix: a stale feed, and
 # a raw table the loader can no longer write because its columns changed.
 STOPS_LOADER: frozenset[FaultType] = frozenset({"stale_source", "schema_drop", "schema_rename"})
+# Faults the loader carries into every load until the fix: it writes NULL into
+# the column, the way an upstream format change breaks one field and no other.
+LOADS_NULLS: frozenset[FaultType] = frozenset({"loader_nulls"})
 RENAMED_SUFFIX = "_renamed"
 # One row in this many is hit by a null spike, a bad category or an orphan copy.
 SHARE = 50
@@ -66,6 +70,10 @@ class Fault:
     def stops_loader(self) -> bool:
         return self.fault_type in STOPS_LOADER
 
+    @property
+    def loads_nulls(self) -> bool:
+        return self.fault_type in LOADS_NULLS
+
 
 # Two faults a day, on different tables, in this order over incidents.fault_days.
 # fmt: off
@@ -86,12 +94,16 @@ CATALOGUE: tuple[Fault, ...] = (
           expected_check="model error on stg_marketing_campaigns"),
     Fault("F8", "invalid_category", "payments", "status", "chargeback",
           expected_check="accepted_values on stg_payments.payment_status"),
+    # A column no dbt test checks: only the column profile on the source sees it.
+    Fault("F9", "loader_nulls", "web_sessions", "device",
+          expected_check="column_profile on raw.web_sessions (device NULLs)"),
 )
 # fmt: on
 
 
 def schedule(fault_days: list[int], production_days: int) -> dict[int, tuple[Fault, ...]]:
-    """Production day -> the faults that happen on it: two per listed day, in order.
+    """Production day -> the faults that happen on it: two per listed day, in order
+    (the last day has one when the catalogue runs out).
 
     A day too late to be caught and fixed inside the window is dropped.
     """
@@ -182,7 +194,8 @@ def plant(settings: Settings, client: Any, fault: Fault, at: datetime) -> int:
         client.command(
             f"ALTER TABLE {raw} RENAME COLUMN `{fault.column}` TO `{fault.column}{RENAMED_SUFFIX}`"
         )
-    # A stale source changes nothing now: the loader stops reading it.
+    # A stale source changes nothing now: the loader stops reading it. A loader
+    # writing NULLs changes nothing now either: the next load carries it.
     with (
         open_store(settings) as store,
         store.cursor().copy(_copy(settings, "incident_faults", GROUND_TRUTH_COLUMNS)) as copy,

@@ -48,6 +48,13 @@ def test_every_fault_aims_at_a_check_the_project_has() -> None:
     }
     for fault_id, (model, check) in expected.items():
         assert check in tests[model], fault_id
+    # F9 is the exception on purpose: no test on any model checks its column,
+    # so only the column profile on the source can catch it.
+    (f9,) = [f for f in CATALOGUE if f.fault_id == "F9"]
+    assert f9.loads_nulls and not any(f9.column in str(t) for t in tests["stg_web_sessions"])
+    sources = yaml.safe_load((REPO_ROOT / "dbt/models/sources.yml").read_text("utf-8"))
+    (feed,) = [t for t in sources["sources"][0]["tables"] if t["name"] == f9.table]
+    assert "column_profile" in feed["data_tests"]
 
 
 def test_duplicate_keys_are_gone_because_raw_deduplicates() -> None:
@@ -57,12 +64,13 @@ def test_duplicate_keys_are_gone_because_raw_deduplicates() -> None:
 
 
 def test_faults_come_two_a_day_and_none_too_late_to_fix() -> None:
-    planned = schedule([2, 5, 9, 14], 21)
+    planned = schedule([2, 5, 9, 14, 17], 21)
     assert {day: [f.fault_id for f in pair] for day, pair in planned.items()} == {
         2: ["F1", "F2"],
         5: ["F3", "F4"],
         9: ["F5", "F6"],
         14: ["F7", "F8"],
+        17: ["F9"],
     }
     # A fault on the last day could not be caught and fixed inside the window.
     assert list(schedule([2, 6], 7)) == [2]
