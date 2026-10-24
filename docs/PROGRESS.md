@@ -48,7 +48,9 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 
 Phase 15 is merged (PR #24), and the fix for the release (PR #25). `v2.0.0` was tagged again on `main` after the fix.
 
-The Backlog is being closed one gap at a time (owner, 2026-10-20). Reconcile gap 1 (duplicated rows) is merged (PR #27). Reconcile gap 2 (the "as of" point) is merged (PR #28). The rest is grouped into four PRs (owner, 2026-10-22): reconcile 3 to 5, incidents detection and resolution (1, 3), incidents triage (4 to 7), and dashboard cost by viewer. Reconcile gaps 3 to 5 are merged (PR #29). Incidents gaps 1 and 3 are merged (PR #30). Dashboard cost by viewer was done before incidents 4 to 7 (owner, 2026-10-23), which is the larger PR. In progress: dashboard cost by viewer, on branch `feat-dashboard-cost-by-viewer`.
+The Backlog is being closed one gap at a time (owner, 2026-10-20). Reconcile gap 1 (duplicated rows) is merged (PR #27). Reconcile gap 2 (the "as of" point) is merged (PR #28). The rest is grouped into four PRs (owner, 2026-10-22): reconcile 3 to 5, incidents detection and resolution (1, 3), incidents triage (4 to 7), and dashboard cost by viewer. Reconcile gaps 3 to 5 are merged (PR #29). Incidents gaps 1 and 3 are merged (PR #30). Dashboard cost by viewer was done before incidents 4 to 7 (owner, 2026-10-23), which is the larger PR. Dashboard cost by viewer is merged (PR #31). In progress: incidents triage (gaps 4 to 7, and the rest of gap 3), the last of the Backlog, on branch `fix-incidents-triage`.
+
+**Verification still owed (owner, 2026-10-24):** the last pair of clean scale 1.0 runs wrote byte-identical incident and reconciliation reports, but `cost.md` differed by a cent or two in a few shares between the two runs. The cause is found and fixed: ClickHouse's query condition cache (on by default since 25.3) let the `column_profile` test read 137 MB or 81 MB depending on whether `recent_volume`, on the same table and clock filter, ran first, and dbt runs them in parallel. Both tests now set `use_query_condition_cache = 0`, which made the read the same whatever the order when measured on the warehouse. The owner chose not to rerun the pair in this branch; the cost figures in the READMEs are from one run, and the next pair of clean runs is to confirm `cost.md` repeats byte for byte.
 
 ## Decisions made
 
@@ -456,11 +458,15 @@ How the desk works today: it reads each dbt invocation's results as soon as that
 
 1. **Closed (branch `fix-incidents-detect-resolve`): an incident resolves only at the next scheduled run.** Each fix now starts a rerun of the incident's root and everything below it, which resolves the incident when the fix lands (mean time to resolve 36.0 hours to 22.3). A failure the rerun finds below another open incident's root that it did not check joins that incident.
 2. **Dropped (owner, 2026-10-22): the project runs only inside its simulation.** No acknowledgement or escalation in real use. A page goes to one person, the owner: no on-call rotation, no backup, no escalation when nobody acknowledges, and no acknowledgement recorded from the chat. The time to acknowledge and to fix is simulated (`incidents/lifecycle.py`).
-3. **Closed (same branch): a stopped feed is found late.** A volume test on every continuous feed, run with the sources before the models, catches a stopped feed the first night (16 hours instead of 64). Wrong values in a column no test checks are still invisible; that part stays open.
-4. **Grouping stays within one run.** Two unrelated faults failing the same downstream node in one run attach it to one of the two roots, by tie-break.
-5. **The routing exception is narrow.** Only a staging model reading exactly one source pages the source's owner; when broken source data first shows in an intermediate model or a mart, the page goes to that model's owner.
-6. **Severity comes from lineage alone.** The score weighs what sits downstream by tier, not the moment (a finance month-end close) or how long the data has been broken.
-7. **The load is shown, not balanced.** 6 of the 8 pages went to the one person who owns most feeds; the desk measures that, but has no secondary owner or way to share the load.
+3. **Closed (same branch): a stopped feed is found late.** A volume test on every continuous feed, run with the sources before the models, catches a stopped feed the first night (16 hours instead of 64). Wrong values in a column no test checks: closed in `fix-incidents-triage` by the column profile, shown by fault F9.
+4. **Closed (branch `fix-incidents-triage`): grouping stays within one run.** A failure below two broken roots is now shared by both incidents.
+   Before: Two unrelated faults failing the same downstream node in one run attach it to one of the two roots, by tie-break.
+5. **Closed (same branch): the routing exception is narrow.** Column lineage now pages the source owner at any layer when the failing columns all come from one source.
+   Before: Only a staging model reading exactly one source pages the source's owner; when broken source data first shows in an intermediate model or a mart, the page goes to that model's owner.
+6. **Closed (same branch): severity comes from lineage alone.** Severity now rises by age and by a team's calendar window.
+   Before: The score weighs what sits downstream by tier, not the moment (a finance month-end close) or how long the data has been broken.
+7. **Closed (same branch): the load is shown, not balanced.** A backup owner takes the page when the owner is busy (2 of 9 pages in the demo).
+   Before: 6 of the 8 pages went to the one person who owns most feeds; the desk measures that, but has no secondary owner or way to share the load.
 
 ### Reconcile (owner, 2026-10-19)
 
@@ -482,4 +488,5 @@ None open.
 1. Check that the second `v2.0.0` release published: the image `2.0.0` on GHCR and the GitHub Release with the changelog's notes.
 2. If a release job failed again, fix it on a branch, then delete and push the tag again (a failed release publishes nothing); the `orchestrators` workflow can be run by hand to look at an orchestrator job.
 3. Pilot rollout of the ownership check on a company dbt repository, with the 2.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
-4. Incidents gaps 4 to 7 (triage) in one PR, a plan first: the last of the Backlog.
+4. Run a pair of clean scale 1.0 demos to confirm `cost.md` repeats byte for byte after the condition cache fix, and correct the cost figures in the READMEs from it.
+5. The Backlog is closed.

@@ -38,36 +38,36 @@ A self-managed cluster sends no bill per query. The company pays for machines an
 
 ## Results at scale 1.0
 
-From actual runs of `make docker-demo` over the 112-day window (Phase 14 added three production weeks), which ends with `cost report`. Two clean runs wrote byte-identical `cost.md` files. `make cost` on its own takes about 13 seconds in the container. <!-- readme-check: runtime --> The run priced 34,207 queries: 17,779 from dbt builds and tests (the production nights' freshness, run, snapshot and test included), 1,018 ingestion loads, 1,008 nightly merges, 1,014 reconciliation queries, 12,544 dashboard refreshes and 844 ad hoc queries.
+From actual runs of `make docker-demo` over the 112-day window (Phase 14 added three production weeks), which ends with `cost report`. The figures below are from one clean run. The pair of clean runs before the last fix differed by a cent or two in a few shares, because ClickHouse's query condition cache made two new dbt tests read more or less depending on which ran first (see the traps under "Adopting it"); the fix turns that cache off for them, and the next pair of runs is to confirm the two runs agree again ([PROGRESS](../../../docs/PROGRESS.md)). `make cost` on its own takes about 13 seconds in the container. <!-- readme-check: runtime --> The run priced 34,207 queries: 17,779 from dbt builds and tests (the production nights' freshness, run, snapshot and test included), 1,018 ingestion loads, 1,008 nightly merges, 1,014 reconciliation queries, 12,544 dashboard refreshes and 844 ad hoc queries.
 
 The cluster's stated cost over the window is $1,197.24 ($1,047.73 compute, $149.51 storage), and the shares add up to it exactly, month by month. A merge is an `OPTIMIZE`, which the query log does not measure like a read, so its bytes are the uncompressed size of the table it rewrote (`ops.raw_maintenance`).
 
 | Team | ClickHouse compute | ClickHouse storage | ClickHouse total | BigQuery on demand | Snowflake warehouses |
 |---|---:|---:|---:|---:|---:|
-| platform | $556.26 | $87.61 | $643.87 | $1.86 | $68.97 |
-| sales | $154.38 | $21.97 | $176.36 | $0.7018 | $88.58 |
-| finance | $132.62 | $15.08 | $147.70 | $0.6310 | $82.79 |
-| marketing | $117.98 | $13.95 | $131.93 | $0.6524 | $61.32 |
-| product | $86.49 | $10.89 | $97.38 | $0.5598 | $63.54 |
-| **total** | $1,047.73 | $149.51 | $1,197.24 | $4.40 | $365.21 |
+| platform | $606.45 | $87.61 | $694.06 | $2.20 | $69.66 |
+| sales | $138.60 | $21.97 | $160.57 | $0.7018 | $88.47 |
+| finance | $118.11 | $15.08 | $133.19 | $0.6311 | $82.68 |
+| marketing | $105.91 | $13.95 | $119.86 | $0.6598 | $61.28 |
+| product | $78.66 | $10.89 | $89.56 | $0.5619 | $63.48 |
+| **total** | 112 | $1,047.73 | $149.51 | $1,197.24 | $1,197.24 |
 
 | Workload | Queries | Read | ClickHouse compute | BigQuery on demand | Snowflake warehouses |
 |---|---:|---:|---:|---:|---:|
-| dbt builds and tests | 18,746 | 283.00 GB | $596.81 | $2.85 | $13.13 |
-| ingestion from Postgres | 1,019 | 1.29 GB | $6.30 | $0.1260 | $2.87 |
-| nightly merge of raw | 1,008 | 45.48 GB | $221.37 | $0.2830 | $6.20 |
-| parallel run reconciliation | 1,014 | 27.21 GB | $76.25 | $0.1933 | $0.8047 |
-| dashboards (Metabase) | 12,544 | 602.6 MB | $3.24 | $0.7477 | $206.64 |
-| ad hoc SQL | 844 | 30.58 GB | $143.76 | $0.2012 | $135.56 |
+| dbt builds and tests | 19,207 | 337.99 GB | $629.28 | $3.20 | $13.57 |
+| ingestion from Postgres | 1,020 | 1.53 GB | $6.21 | $0.1273 | $2.86 |
+| nightly merge of raw | 1,008 | 45.48 GB | $206.39 | $0.2830 | $6.16 |
+| parallel run reconciliation | 1,014 | 27.21 GB | $69.03 | $0.1933 | $0.7679 |
+| dashboards (Metabase) | 12,544 | 602.6 MB | $3.03 | $0.7477 | $206.64 |
+| ad hoc SQL | 844 | 30.58 GB | $133.79 | $0.2012 | $135.56 |
 
 What the numbers say:
 
-- **On a fixed cluster, a few careless queries cost more than all the dashboards.** 844 ad hoc queries read 30.58 GB and took $143.76 of the cluster; 12,544 dashboard refreshes read 602.6 MB and took $3.24. On Snowflake the picture flips: the dashboards cost $206.64, because every refresh wakes a warehouse for seconds of work and five minutes of idling. Which habit to change first depends on how the warehouse is billed, and the report shows both.
-- **The platform team carries more than half the bill, and most of it is honest.** It owns the shared layers dbt rebuilds every night, and the reruns after each incident fix ($643.87 of $1,197.24). Two lines in it are choices rather than necessities: the nightly merge of raw ($221.37, about a fifth of the compute), which buys repeatable reads and is the first thing to make cheaper (merge less often, or deduplicate in staging with `argMax` instead of `FINAL`), and the parallel run's reconciliation ($76.25), which ends with the parallel run.
+- **On a fixed cluster, a few careless queries cost more than all the dashboards.** 844 ad hoc queries read 30.58 GB and took $133.79 of the cluster; 12,544 dashboard refreshes read 602.6 MB and took $3.03. On Snowflake the picture flips: the dashboards cost $206.64, because every refresh wakes a warehouse for seconds of work and five minutes of idling. Which habit to change first depends on how the warehouse is billed, and the report shows both.
+- **The platform team carries more than half the bill, and most of it is honest.** It owns the shared layers dbt rebuilds every night, and the reruns after each incident fix ($694.06 of $1,197.24). Two lines in it are choices rather than necessities: the nightly merge of raw ($206.39, about a fifth of the compute), which buys repeatable reads and is the first thing to make cheaper (merge less often, or deduplicate in staging with `argMax` instead of `FINAL`), and the parallel run's reconciliation ($69.03), which ends with the parallel run.
 - **The migration pays for itself in 3.5 months.** The reporting replica costs $577.50 a month, ClickHouse $320.32, a saving of $257.18. Running ClickHouse alongside the replica until the cutover on 2026-03-30 cost $909.30, paid back in 3.5 months. The comparison is infrastructure only; the people who run a self-managed cluster are not in a list price, and the report says so.
-- **On Snowflake, the dashboard nobody opens is the second most expensive.** `sales_executive_dashboard` was opened by nobody in 112 days and would cost $28.12 in warehouse time, against $0.0217 of the cluster. Two others were never opened either. On the dashboards people do open, their owners pay about half: `finance_cash_reconciliation`, the most expensive, was opened 179 times, 86 of them by four other teams, so finance pays 51% of it. A view log turns "who uses this dashboard" from an opinion into a number, and "never opened" into a refresh to turn off.
-- **At this size, BigQuery on demand would cost $4.40.** The company's data is a few gigabytes, so a fixed cluster sized for growth is mostly idle. That is the cost argument for a serverless warehouse at small scale, and the one a platform lead should be ready to answer before the data grows into the cluster.
-- **The 12 abandoned models are exactly the unused list** at both 30 and 90 days; the largest, `marts.product_fct_sessions_v1`, takes $6.22 a month of the cluster.
+- **On Snowflake, the dashboard nobody opens is the second most expensive.** `sales_executive_dashboard` was opened by nobody in 112 days and would cost $28.12 in warehouse time, against $0.0203 of the cluster. Two others were never opened either. On the dashboards people do open, their owners pay about half: `finance_cash_reconciliation`, the most expensive, was opened 179 times, 86 of them by four other teams, so finance pays 51% of it. A view log turns "who uses this dashboard" from an opinion into a number, and "never opened" into a refresh to turn off.
+- **At this size, BigQuery on demand would cost $4.76.** The company's data is a few gigabytes, so a fixed cluster sized for growth is mostly idle. That is the cost argument for a serverless warehouse at small scale, and the one a platform lead should be ready to answer before the data grows into the cluster.
+- **The 12 abandoned models are exactly the unused list** at both 30 and 90 days; the largest, `marts.product_fct_sessions_v1`, takes $5.77 a month of the cluster.
 - **Two full-scan hotspots.** `marts.finance_fct_payments_reconciliation` is filtered on `order_date` 12 times and read in full, because it is sorted by `order_id`; the report suggests `(order_date, order_id)`. `raw.orders` is filtered on `_loaded_at` 10 times by the platform team, where the sort key is also what `ReplacingMergeTree` deduplicates on, so the report suggests a skip index instead of a new key.
 - **No incremental candidate.** The 15 most expensive full rebuilds all join customers or products, which the legacy database updates in place.
 - **Quotas** at twice the busiest days: from 12.0 MB a day for Metabase to 700.0 MB for sales.
@@ -112,6 +112,8 @@ On a real platform the pricing, the bill split and the attribution are the parts
   - **`read_bytes` repeats only if raw is merged:** a `FINAL` read depends on how far ClickHouse's background merges got, so the company merges raw every night (about a fifth of its compute).
   - **A `LIMIT` reads the same rows only on one thread**, so workload queries run with `max_threads = 1`.
   - **`written_bytes` changes with how ClickHouse cuts blocks**, so only rows written are kept.
+  - **ClickHouse's query condition cache makes reads depend on query order** (on by default since 25.3): it remembers which granules a filter let through, and a later query with the same filter skips them. Two dbt tests on the same table and the same clock filter, run in parallel, read 137 MB or 81 MB depending on which finished first, and the bill shifted by cents between two identical runs. Turn it off (`use_query_condition_cache = 0`) on queries whose reads you charge for and that share a filter.
+  - **An `IN (subquery)` is a set built as the query runs**, and what such a query reads can change between runs; count the same thing in one aggregation instead.
   - **Catalogue-only statements are dropped:** dbt sends a different number of `CREATE` and `DROP` statements from run to run.
   - **A dashboard refresh must never land on the BI tool's user,** or the bill tells every team that "metabase" is expensive. Share it by the view log; without one, charge the dashboard's owner.
   - **A view from the BI tool's cache sends no query,** so the warehouse's log cannot say who reads a dashboard. Only the BI tool's own view log can.
