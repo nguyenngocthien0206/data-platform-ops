@@ -2,7 +2,9 @@
 
 All notable changes to data-platform-ops. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The GitHub Release for each version uses its section below as the notes.
 
-## [Unreleased]
+## [3.0.0] - 2026-10-24
+
+The gaps noted after 2.0.0, closed. The reconciliation holds on a legacy system that keeps taking writes, and a difference is explained or labelled only on evidence. An incident is caught sooner, resolves when its fix lands, and pages the person who can fix it. A dashboard's cost is shared by the teams that read it. A major version because a settings file from 2.0.0 no longer loads: see "Upgrading from 2.0.0" below.
 
 ### Fixed
 
@@ -41,6 +43,16 @@ All notable changes to data-platform-ops. The format follows [Keep a Changelog](
 - **`query_attribution` has one row per query and paying team, with its `share`**; `workload.dashboard_views` (`own_team_percent`, `other_team_percent`) is required in the settings. A view runs no query, so the bill, the query log and ClickHouse do not change; the per-team showback does.
 - **The incident store is at version 2**: `incident_shared_nodes`, `incident_escalations` and `incidents.paged`, migrated on the first ingest. `incidents.paging` and `incidents.escalation` are required in the settings; `ownership.yaml` rules may name a `backup`.
 - **Nine faults in operation**, on five days (`incidents.fault_days: [2, 5, 9, 14, 17]`), and the incident numbers moved accordingly.
+
+### Upgrading from 2.0.0
+
+- **Add the settings that are now required** to `config/settings.yaml`; a file from 2.0.0 stops at load and names what is missing. The shipped file has each:
+  - `reconcile.thresholds.max_discrepancies.duplicate_key` (0) and `reconcile.thresholds.max_watermark_lag_hours` (26);
+  - `workload.dashboard_views` (`own_team_percent`, `other_team_percent`);
+  - `incidents.paging.max_open_per_person` (1) and `incidents.escalation.after_hours` (`SEV2: 24`, `SEV3: 48`).
+- **The rest is optional:** `reconcile.time_zones` (without it, no difference is labelled a time zone shift); `changed_at` on a pair in `reconcile.yaml` (without it, the table is compared as it is, as in 2.0.0); `company.writes_after_ingest_minutes` (0); a `backup` on an ownership rule; `config/incidents.yaml` (no calendar windows without it); a fifth day in `incidents.fault_days` for F9.
+- **Run `make docker-demo` again.** It rewrites the ops tables in their new shape: `query_attribution` has one row per query and paying team, so a reader that totals it per team weights each row by its `share`. The incident store migrates itself to version 2 on the first `incidents ingest`, so the Airflow and Dagster stores need nothing.
+- **The ownership check is unchanged:** a consuming repository moves to the 3.0.0 image by its tag, and a registry from 2.0.0 is still valid.
 
 ## [2.0.0] - 2026-10-15
 
@@ -134,6 +146,7 @@ The first release: a local-first toolkit for operating a multi-team data platfor
 - The 10-minute budget for `make demo` was lifted; measured times are recorded instead.
 - The pandas and pyarrow caps added for Windows Smart App Control were lifted (pandas 3, pyarrow 25), and mypy moved to its compiled 2.x wheels. Reports stayed byte-identical.
 
+[3.0.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v3.0.0
 [2.0.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v2.0.0
 [1.2.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v1.2.0
 [1.1.0]: https://github.com/nguyenngocthien0206/data-platform-ops/releases/tag/v1.1.0

@@ -2,13 +2,13 @@
 
 Handoff file between sessions. Read this first, then `docs/SPEC.md`.
 
-Last updated: 2026-10-15
+Last updated: 2026-10-24
 
 ## Current phase
 
-Version 2.0.0 is ready to release. Phase 15 (documentation and the release) is implemented and verified on branch `phase-15-documentation` (off `main` at `3b8b38d`): 15a and 15b committed, 15c uncommitted, waiting for the owner's review. The work was split into three sessions (15a, 15b, 15c), one branch and one pull request for the phase. Phases 11a to 14 are merged (PRs #15 to #23). No phase is planned after 15.
+Version 3.0.0 is ready to release, on branch `release-3.0.0` (off `main` at `c9dde5f`), uncommitted, waiting for the owner's review. It closes the Backlog noted after 2.0.0 (PRs #27 to #32). A major version because a settings file from 2.0.0 no longer loads (`CHANGELOG.md`, "Upgrading from 2.0.0"). No phase is planned after it.
 
-Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstrap as 1.2.0. Version 2.0 (Phases 11 to 15) rebuilt the simulated company on Postgres and ClickHouse. This file was closed out for 2.0.0 in Phase 15c: the per-phase implementation notes of Phases 11 to 15 are in the git history of this file; what follows is what stands.
+Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0, the registry bootstrap as 1.2.0 and the Backlog as 3.0.0. Version 2.0 (Phases 11 to 15) rebuilt the simulated company on Postgres and ClickHouse. This file was closed out for 2.0.0 in Phase 15c: the per-phase implementation notes of Phases 11 to 15 are in the git history of this file; what follows is what stands.
 
 ## Done
 
@@ -20,7 +20,13 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 - **incidents** (Phase 14a): faults in operation, every dbt invocation ingested into a Postgres store any run can feed, one incident per root across a run's invocations, routing to the feed's owner, resolution by a later healthy run, Slack and Telegram. **Orchestrators** (14b): Airflow 3 with Cosmos and Dagster with dagster-dbt in their own images and companies, calling the toolkit's CLI through standard-library hooks; the release waits for a fault to go through both.
 - **Documentation** (Phase 15): the README around version 2.0 with an architecture diagram generated from the project and screenshots from the release run, how each problem was solved, an "Adopting it" section in every module README, the ADRs retired and renumbered (0001 to 0017), the SPEC's final layout and Makefile tables, a link check over every Markdown file, `readme-check` for 2.0, `CHANGELOG.md` 2.0.0, version 2.0.0.
 
-### Phase 15c (uncommitted)
+### Release 3.0.0 (uncommitted, branch `release-3.0.0`)
+
+- **Before the release, on `fix-incidents-triage` (the code merged as PR #32), in the container on the development laptop:** `make docker-build`, then `make docker-test-orchestrators`: both passed, Airflow in 612 s and Dagster in 161 s (911 s with the stacks' start). Each time the faulted run failed on the `not_null` test, one incident opened at `stg_orders`, one page, and the run after the resync resolved it with one more message and no new incident. `make docker-metabase-check` on the last scale 1.0 run: 12 dashboards, 69 cards, 23,717 rows, the 12 screenshots, in 134 s.
+- **Version 3.0.0**: `pyproject.toml` and `uv.lock` (only the project's version line changed), `CHANGELOG.md` 3.0.0 (the Unreleased section with an introduction, and "Upgrading from 2.0.0": the settings now required, the optional ones, the ops tables rewritten and the incident store migrated, the ownership check unchanged), the Actions example on the 3.0.0 image.
+- Verification: `make lint` clean; `make docker-build`, then `make docker-test`: 511 passed, nothing skipped, 12 min 16 s; `make readme-check` passes (201 numbers across four READMEs, none missing); `scripts/release_notes.py 3.0.0` prints the section.
+
+### Phase 15c (committed for 2.0.0)
 
 - **The release run**, in the container on the development laptop, at scale 1.0:
   - `make docker-demo` twice from a clean state: 52 min 30 s and 51 min 57 s. Both seeded 3,507,804 rows, added 2,427,173 and changed 4,259 over 112 days, ingested 15,521,421 rows and ran 65 dbt builds; 141 datasets owned, 376 lineage edges.
@@ -48,7 +54,7 @@ Phases 0 to 9 were released as 1.0.0, Phase 10 as 1.1.0 and the registry bootstr
 
 Phase 15 is merged (PR #24), and the fix for the release (PR #25). `v2.0.0` was tagged again on `main` after the fix.
 
-The Backlog is being closed one gap at a time (owner, 2026-10-20). Reconcile gap 1 (duplicated rows) is merged (PR #27). Reconcile gap 2 (the "as of" point) is merged (PR #28). The rest is grouped into four PRs (owner, 2026-10-22): reconcile 3 to 5, incidents detection and resolution (1, 3), incidents triage (4 to 7), and dashboard cost by viewer. Reconcile gaps 3 to 5 are merged (PR #29). Incidents gaps 1 and 3 are merged (PR #30). Dashboard cost by viewer was done before incidents 4 to 7 (owner, 2026-10-23), which is the larger PR. Dashboard cost by viewer is merged (PR #31). In progress: incidents triage (gaps 4 to 7, and the rest of gap 3), the last of the Backlog, on branch `fix-incidents-triage`.
+The Backlog is being closed one gap at a time (owner, 2026-10-20). Reconcile gap 1 (duplicated rows) is merged (PR #27). Reconcile gap 2 (the "as of" point) is merged (PR #28). The rest is grouped into four PRs (owner, 2026-10-22): reconcile 3 to 5, incidents detection and resolution (1, 3), incidents triage (4 to 7), and dashboard cost by viewer. Reconcile gaps 3 to 5 are merged (PR #29). Incidents gaps 1 and 3 are merged (PR #30). Dashboard cost by viewer was done before incidents 4 to 7 (owner, 2026-10-23), which is the larger PR. Dashboard cost by viewer is merged (PR #31). Incidents triage (gaps 4 to 7, and the rest of gap 3), the last of the Backlog, is merged (PR #32). In progress: the release of 3.0.0, on branch `release-3.0.0`.
 
 **Verification still owed (owner, 2026-10-24):** the last pair of clean scale 1.0 runs wrote byte-identical incident and reconciliation reports, but `cost.md` differed by a cent or two in a few shares between the two runs. The cause is found and fixed: ClickHouse's query condition cache (on by default since 25.3) let the `column_profile` test read 137 MB or 81 MB depending on whether `recent_volume`, on the same table and clock filter, ran first, and dbt runs them in parallel. Both tests now set `use_query_condition_cache = 0`, which made the read the same whatever the order when measured on the warehouse. The owner chose not to rerun the pair in this branch; the cost figures in the READMEs are from one run, and the next pair of clean runs is to confirm `cost.md` repeats byte for byte.
 
@@ -429,15 +435,13 @@ Verified against dbt-core 1.12.5: `dbt build` skips everything downstream of a f
 
 ## Known issues
 
-For version 2.0.0 (design limits; the ADRs and module READMEs say where):
+For version 3.0.0 (design limits; the ADRs and module READMEs say where):
 
 - **The modules are an engine, not a product, outside the simulation.** `cost report`, `reconcile run`, `incidents run` and the Streamlit pages read the simulated company's tables; each module's "Adopting it" section says what runs on a real platform as it is (the ownership check, `incidents ingest` and the hooks) and what has to be wired.
 - **`Settings` requires every section**, the simulation's included, for every command but `metadata check --manifest`; the image's bundled config works for `incidents ingest`.
 - **The reports' ClickHouse database is named `marts`** in `reconcile.specs.load_specs`.
 - **At scale 1.0 an incremental build is not faster than a full refresh** (about 290 nodes of fixed overhead dominate), and the two incremental intermediate models read more with every build because raw is sorted by key, not date.
-- **The nightly merge of raw is about a fifth of the cluster's compute** ($228.57 of $1,047.73). It is what makes reads repeat; a real team would merge less often or deduplicate with `argMax` in staging.
-- **Grouping is per run.** Two unrelated faults failing the same downstream model in one run attach it to one of them by tie-break (ADR 0005).
-- **No incident closes in less than 24 hours**, because resolution waits for the next nightly run; a rerun after a fix would close it sooner.
+- **The nightly merge of raw is about a fifth of the cluster's compute** ($206.39 of $1,047.73). It is what makes reads repeat; a real team would merge less often or deduplicate with `argMax` in staging.
 - Filters written against a CTE or subquery column outside it are not traced to the base table for hotspot detection. The workload and dbt do not write filters that way.
 - Every Metabase line ends with a partial period, because the window ends at 02:00 on its last day; daily rollups chart only their last 91 days, under Metabase's 2,000-row limit.
 - **The orchestrator stacks are for one machine**: `airflow standalone` and `dagster dev`; Dagster's UI has no login and is published on 127.0.0.1 only. The Airflow image is 5.51 GB unpacked.
@@ -446,7 +450,7 @@ For version 2.0.0 (design limits; the ADRs and module READMEs say where):
 
 ## Backlog
 
-Improvements the owner asked to note after 2.0.0, not planned yet.
+Improvements the owner asked to note after 2.0.0. All are closed or dropped, and released as 3.0.0.
 
 ### Dashboard cost by viewer (owner, 2026-10-19)
 
@@ -485,8 +489,8 @@ None open.
 
 ## Next step
 
-1. Check that the second `v2.0.0` release published: the image `2.0.0` on GHCR and the GitHub Release with the changelog's notes.
-2. If a release job failed again, fix it on a branch, then delete and push the tag again (a failed release publishes nothing); the `orchestrators` workflow can be run by hand to look at an orchestrator job.
-3. Pilot rollout of the ownership check on a company dbt repository, with the 2.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
+1. Merge `release-3.0.0`, then push the tag `v3.0.0` on `main`. The release runs the checks, Metabase and both orchestrators, and publishes only if all pass.
+2. Check that it published: the image `3.0.0` on GHCR and the GitHub Release with the changelog's notes.
+3. If a release job fails, fix it on a branch, then delete and push the tag again (a failed release publishes nothing); the `orchestrators` workflow can be run by hand to look at an orchestrator job.
 4. Run a pair of clean scale 1.0 demos to confirm `cost.md` repeats byte for byte after the condition cache fix, and correct the cost figures in the READMEs from it.
-5. The Backlog is closed.
+5. Pilot rollout of the ownership check on a company dbt repository, with the 3.0.0 image: follow "Adopting it" in the metadata README and record the baseline here (numbers only).
